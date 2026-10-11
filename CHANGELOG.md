@@ -223,13 +223,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   what the code does.** Before a runtime switch, a rollback or a resume refreshes the
   supervisor's scripts, the guide now has you disable its scheduled task and enable it again
   only as the last step before the host starts, so it cannot start half-refreshed or before a
-  rolled-back gateway is in place; a restore disables it from the start; after a restore, the
-  paid gateway starts before any agent resumes; and a protected agent (the liaison or a lead)
-  is started by the protected restart request, because the supervisor never starts a stopped
-  one on its own. The roles page says what `--work-head` does on a review task (no stage
-  requires it) and that a published HOLD exits with code 3; the overview says the emergency
-  release comes from the liaison when there is one, and that a close can require captured
-  knowledge (#444).
+  rolled-back gateway is in place; a restore disables it, and the paid gateway's task, from
+  the start and enables each only just before it starts; after a restore, the paid gateway
+  starts before any agent resumes; and a protected agent (the liaison or a lead) is started by
+  the protected restart request, because the supervisor never starts a stopped one on its own.
+  The roles page says what `--work-head` does on a review task (no stage requires it) and that
+  a published HOLD exits with code 3; the overview says the emergency release comes from the
+  liaison when there is one, and that a close can require captured knowledge (#444).
 
 ### Changed
 

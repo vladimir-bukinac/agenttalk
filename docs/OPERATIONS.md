@@ -929,11 +929,14 @@ protection against later in-place changes.
 There is no restore command today. Do not run `init --force` to reconstruct a lost
 store or rotate signing keys as a substitute for recovering them.
 
-These steps use the supervisor's scheduled task name you chose in "Set up the host".
-In a new shell, set it again:
+These steps use the supervisor's scheduled task name you chose in "Set up the host"
+and, if the project has a gateway, the gateway task's name: copy the `task_name` that
+`gateway status` prints, as in "Move an existing gateway task to another runtime". In
+a new shell, set them again:
 
 ```powershell
 $SupervisorTask = '<your-task-name>'
+$GatewayTask = '<task_name-from-gateway-status>'
 ```
 
 1. Pause dispatch. Stop the supervisor, the wrappers and other bus writers. If the
@@ -945,8 +948,13 @@ $SupervisorTask = '<your-task-name>'
    kill switch and also disabling its scheduled task
    (`Disable-ScheduledTask -TaskName $SupervisorTask`): the swap in step 3 removes the
    kill switch until you put it back, and the task would still start at your next
-   logon. Preserve the damaged installation and any newer records in a separate
-   directory.
+   logon. If the project has a gateway, disable its task too
+   (`Disable-ScheduledTask -TaskName $GatewayTask`), for the same reason: its logon
+   trigger could start the gateway on the restored state while the swap has removed
+   `gateway.kill`, before step 3 has checked that state. On a Linux gateway host the
+   unit starts with your user session instead; disable it with
+   `systemctl --user disable <task_name>`. Preserve the damaged installation and any
+   newer records in a separate directory.
 2. Select a complete snapshot and verify it with the `manifest_hash` you saved when
    the backup was made. The manifest inside the snapshot cannot vouch for itself: a
    replaced snapshot can carry a matching manifest. Save this small script as
@@ -1041,9 +1049,15 @@ $SupervisorTask = '<your-task-name>'
 6. With automatic actions still disabled (the kill switch in place), inspect
    `status`, `doctor` and the supervisor report. Resolve holds and validate the
    task/runtime paths. If the project has a gateway, start it now, while the kill
-   switch is still in place, so that no paid worker starts before it: once you have
-   checked its restored state (step 3), run `gateway start` once and continue only
-   when `gateway status` shows both readiness fields true. Resume one agent first:
+   switch is still in place, so that no paid worker starts before it. Once you have
+   checked its restored state (step 3), enable its task as the last action before the
+   start (`Enable-ScheduledTask -TaskName $GatewayTask`; on Linux,
+   `systemctl --user enable <task_name>`), then run `gateway start` once, and continue
+   only when `gateway status` shows both readiness fields true. Enable it first:
+   `gateway start` removes `gateway.kill` before it asks Windows to run the task, and
+   Windows does not run a disabled task, so the start would fail ("gateway task start
+   failed") with `gateway.kill` already gone. If that happens, enable the task and run
+   `gateway start` again. Resume one agent first:
    set `auto_restart` to `false` on every agent's entry in the restored
    `supervisor.json` except that one (if its restored value is false, set it to true
    for the check and back afterwards; a protected agent needs the protected restart
