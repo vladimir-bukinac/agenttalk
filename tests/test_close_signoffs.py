@@ -281,7 +281,8 @@ def test_signoff_override_set_satisfies_unroutable() -> None:
     close.signoff_override(rec, set_id="security:sec", by="lead", at="t",
                            reason="no specialist available; lead accepts risk")
     assert close.compute_verdict(
-        rec, _gate_go(), _ev(rec, candidates={"security:sec": []}))["verdict"] == close.VERDICT_GO
+        rec, _gate_go(), _ev(rec, candidates={"security:sec": []},
+                             active=["lead", "alice"]))["verdict"] == close.VERDICT_GO
 
 
 def test_signoff_stale_route_on_revision_change() -> None:

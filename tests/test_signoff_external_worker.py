@@ -249,3 +249,66 @@ def test_a_malformed_ack_or_lens_list_holds_instead_of_crashing(tmp_path: Path, 
     capsys.readouterr()
     assert _run(["close", "check", "--id", "rel", "--json"], root) == 3
     assert close.HOLD_MALFORMED in {h["code"] for h in json.loads(capsys.readouterr().out)["holds"]}
+
+
+def _plain_store(tmp_path: Path, *, signer: bool) -> Path:
+    """Only trusted seats (no paid seat in the roster, so the roster commands can change roles freely)."""
+    store = Store(tmp_path)
+    store.init(["lead", "alice"])
+    store.set_role("lead", "lead")
+    if signer:
+        store.set_role("alice", "sec")
+    (store.dir / "signoffs.json").write_text(json.dumps(POLICY), encoding="utf-8")
+    return tmp_path
+
+
+
+def _demote(store: Store, who: str) -> None:
+    store.set_role(who, "worker")
+
+
+def _external(store: Store, who: str) -> None:
+    _demote(store, who)
+    store.set_trust_class(who, "external-worker")
+
+
+def _remove_and_readd(store: Store, who: str) -> None:
+    store.remove_agent(who)
+    store.add_agent(who)
+
+
+# change, what happens to a stored OVERRIDE by that author, what happens to a stored ACK by that author
+# (an override has no role re-check: a trusted active author keeps counting; an ack also needs a candidate role)
+STANDING_CHANGES = [
+    ("unchanged", lambda st, w: None, 0, 0),
+    ("demoted to worker", _demote, 0, 3),
+    ("reclassified external-worker", _external, 3, 3),
+    ("trust class removed", lambda st, w: st.set_trust_class(w, None), 0, 0),
+    ("retired", lambda st, w: st.retire_agent(w), 3, 3),
+    ("removed", lambda st, w: st.remove_agent(w), 3, 3),
+    ("renamed away", lambda st, w: st.rename_agent(w, w + "2"), 3, 3),
+    ("removed and re-added, same name", _remove_and_readd, 0, 3),
+]
+
+
+@pytest.mark.parametrize("label,change,override_verdict,ack_verdict", STANDING_CHANGES,
+                         ids=[c[0] for c in STANDING_CHANGES])
+def test_standing_change_of_a_stored_override_author(tmp_path: Path, capsys, label, change, override_verdict,
+                                                     ack_verdict) -> None:
+    root = _plain_store(tmp_path, signer=False)
+    _open(root)
+    assert _run(["close", "signoffs", "override", "--id", "rel", "--from", "lead", "--set", "security:sec",
+                 "--reason", "skip it"], root) == 0
+    change(Store(root), "lead")
+    assert _run(["close", "check", "--id", "rel"], root) == override_verdict, label
+
+
+@pytest.mark.parametrize("label,change,override_verdict,ack_verdict", STANDING_CHANGES,
+                         ids=[c[0] for c in STANDING_CHANGES])
+def test_standing_change_of_a_stored_ack_author(tmp_path: Path, capsys, label, change, override_verdict,
+                                                ack_verdict) -> None:
+    root = _plain_store(tmp_path, signer=True)
+    slot = _open(root)[0]
+    assert _sign(root, "alice", slot) == 0
+    change(Store(root), "alice")
+    assert _run(["close", "check", "--id", "rel"], root) == ack_verdict, label

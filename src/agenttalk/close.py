@@ -361,12 +361,14 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
         if sid in overrides:
             stored = overrides[sid]
             by = stored.get("by") if isinstance(stored, dict) else None
-            if by not in excluded_agents:
+            if by in active and by not in excluded_agents:
                 continue                # recorded close-lead escape (audited, not counted)
-            # The seat that recorded it runs through the paid gateway now: treat the escape as absent, so a
-            # trusted sign-off can still satisfy the set; the rejection is only named on a real hold below.
-            rejected = (f"; the override recorded by {by}, a paid gateway seat (external worker), is ignored "
-                        "(it cannot bypass a required sign-off)")
+            # Like a signature, an override counts only while its author is on the active roster and not a paid
+            # gateway seat. Otherwise treat the escape as absent, so a trusted sign-off can still satisfy the
+            # set; the rejection is only named on a real hold below.
+            why = ("a paid gateway seat (external worker) that cannot bypass a required sign-off"
+                   if by in excluded_agents else "no longer an active seat on the roster")
+            rejected = f"; the override recorded by {by}, {why}, is ignored"
         if required_count <= 0:
             continue
         candidates = set(resolved.get(sid) or [])
