@@ -191,7 +191,7 @@ sequenceDiagram
 
 ### Receiving by hand (a person-run listener)
 
-`recv` shows new messages without moving the cursor. `drain`, `recv --ack` and `wait` print the message and then move the cursor, so a crash *after printing but before the work is done* loses that message for the agent. That is why unattended work uses the wrapper.
+`recv` shows new messages without moving the cursor. `drain`, `recv --ack` and a plain `wait` (it acknowledges by default; `--no-ack` turns that off) print the message and then move the cursor, so a crash *after printing but before the work is done* loses that message for the agent. A `wait --to-request <id>` is different: it watches one thread and does not move the cursor; it only advances a per-thread "seen" marker, so unrelated messages stay unread for a later `drain`. That is why unattended work uses the wrapper.
 
 ### Receiving through the wrapper
 
@@ -208,7 +208,7 @@ The wrapper hands the agent **one message per turn** and keeps the bookkeeping i
 **Hold:** a published message is whole or absent; invalid, forged or wrongly-named files are never delivered; a wrapped turn is **at-least-once** (the cursor moves only after a clean turn or after the message is set aside in `dead-letter/`, and a crash leaves a durable attempt); replies carrying an operation nonce are not duplicated.
 
 **Do not hold:**
-- A manual `drain`/`wait` loop is closer to at-most-once from the agent's side (see above).
+- A manual `drain` or plain `wait` loop (one that moves the cursor) is closer to at-most-once from the agent's side (see above).
 - Delivery order is by message id, and the id is minted just before the publication lock. In theory a message with an *older* id could be published after the recipient's cursor has passed it and then be skipped. The publication-order sidecar exists to detect loss and tampering; it also sets the replay order of the wrapper's owed-work ledger, but it does not reorder delivery. This comes from reading the code and has not been reproduced.
 - Reading and writing a cursor or a thread-state file is not locked across processes. Two consumers for one agent can lose state, so run one.
 
@@ -394,7 +394,7 @@ Rules at init: soft stop < cutoff <= ceiling, and opening balance + cutoff + one
 
 - It is **not an authorisation boundary.** A process with write access to `.agenttalk/` (or the ledger and secrets) can change them.
 - Only **one consumer per mailbox** is safe. Cursors and thread state are written atomically but their read-modify-write is not locked across processes.
-- A manual `drain` or `wait` loop can lose a message if it crashes after printing.
+- A manual `drain` or plain `wait` loop (one that moves the cursor) can lose a message if it crashes after printing.
 - Message ordering is by id, not by publication time (see section 3).
 - The supervisor's process control is **Windows only**; the planner and the bus are cross-platform.
 - The wrapper's per-turn watchdog and the supervisor's restart are best effort: a process-id reuse window between check and kill remains, and tree termination is not atomic.
