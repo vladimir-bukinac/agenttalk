@@ -4393,6 +4393,67 @@ def test_check_epoch_json_shape(tmp_path: Path, capsys) -> None:
     assert "epoch" not in out2
 
 
+def _gate_red(root: Path, name: str = "connected-l1") -> None:
+    assert _run(["gate", "set", "--from", "alpha", "--name", name, "--status", "red",
+                 "--severity", "blocker", "--scope", "release", "--reason", "lane failed",
+                 "--required"], root) == 0
+
+
+def _write_unstamped_opener(root: Path, rid: str) -> None:
+    """A pre-0.16 opener has no epoch_at_send; send() always stamps one, so write it by hand."""
+    doc = {"id": "20200101-000000-000000-OLDx", "ts": "2020-01-01T00:00:00Z", "from": "alpha",
+           "to": "beta", "kind": "review-request", "subject": "old", "body": "old",
+           "meta": {"request_id": rid}}
+    (root / ".agenttalk" / "messages" / f"{doc['id']}.json").write_text(json.dumps(doc), encoding="utf-8")
+
+
+@pytest.mark.parametrize("request_epoch", ["no-barrier", "under-barrier", "previous", "pre-epoch"])
+@pytest.mark.parametrize("gate_hold", [False, True])
+def test_check_text_names_each_reason_that_blocks(
+    tmp_path: Path, capsys, request_epoch: str, gate_hold: bool,
+) -> None:
+    """#454 review 4241690944: a current request held only by a gate was printed as pre-epoch."""
+    root = _epoch_team(tmp_path)
+    if request_epoch == "pre-epoch":
+        _write_unstamped_opener(root, "r1")
+    elif request_epoch != "under-barrier":
+        _open_req(root, "r1")
+    if request_epoch != "no-barrier":
+        assert _run(["barrier", "bump", "--from", "alpha", "--scope", "global", "-m", "e1"], root) == 0
+    if request_epoch == "under-barrier":
+        _open_req(root, "r1")
+    if gate_hold:
+        _gate_red(root)
+    capsys.readouterr()
+    code = _run(["check", "--for", "beta", "--to-request", "r1", "--epoch", "--gates"], root)
+    out = capsys.readouterr().out
+    stale = request_epoch in {"previous", "pre-epoch"}
+    assert code == (3 if stale or gate_hold else 0)  # exit codes unchanged by the fix
+    header = {"previous": "previous-epoch", "pre-epoch": "pre-epoch"}.get(
+        request_epoch, "hold" if gate_hold else "current")
+    assert out.split()[0] == header
+    assert ("predates" in out) == stale
+    assert ("epoch: current" in out) == (not stale)
+    assert ("do NOT act until gate connected-l1 is GO (`agenttalk gate check`)." in out) == gate_hold
+    assert ("do not re-ask it" in out) == (gate_hold and not stale)
+    assert "(None)" not in out
+
+
+def test_check_gates_without_epoch_names_every_gate_and_claims_nothing_about_the_epoch(
+    tmp_path: Path, capsys,
+) -> None:
+    root = _epoch_team(tmp_path)
+    _open_req(root, "r1")
+    _gate_red(root, "connected-l1")
+    _gate_red(root, "release-notes")
+    capsys.readouterr()
+    assert _run(["check", "--for", "beta", "--to-request", "r1", "--gates"], root) == 3
+    out = capsys.readouterr().out
+    assert out.split()[0] == "hold"
+    assert "do NOT act until gates connected-l1, release-notes are GO" in out
+    assert "epoch" not in out and "re-ask" not in out
+
+
 def test_gate_check_empty_required_set_is_go(store_root: Path, capsys) -> None:
     assert _run(["gate", "check", "--release", "--json"], store_root) == 0
     out = json.loads(capsys.readouterr().out)
