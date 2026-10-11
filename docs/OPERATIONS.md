@@ -188,6 +188,13 @@ Changing a variable in your shell does not change an already-running wrapper.
 Your own launch scripts are local operating files, not scripts supplied by this
 repository.
 
+These steps use the supervisor's scheduled task name you chose in "Set up the host".
+In a new shell, set it again:
+
+```powershell
+$SupervisorTask = '<your-task-name>'
+```
+
 1. Let active turns finish. Save context for work that must resume. Pause new
    dispatch, put the supervisor kill switch in place, and stop its host as described
    in the next section. Stop each affected wrapper by its verified process identity;
@@ -211,11 +218,12 @@ repository.
    Start each protected agent, and the first one when every affected agent is
    protected, with the protected restart request in "Pause, stop and recover",
    step 4, while its `auto_restart` is true.
-4. With the supervisor host still stopped, disable its scheduled task first
-   (`$SupervisorTask`, as in "Pause, stop and recover"): a stopped task still starts
-   at the next logon or when Windows retries it after a failure, and it must not
-   start while the kill switch is gone and the scripts are only partly replaced.
-   Then remove the kill switch and regenerate scripts using the new interpreter:
+4. With the supervisor host still stopped, disable its scheduled task first. Its
+   logon trigger is what matters here: a stopped task still starts at your next
+   logon, and it must not start while the kill switch is gone and the scripts are
+   only partly replaced. (Windows' restart after a failure applies only to a run that
+   ended in failure.) Then remove the kill switch and regenerate scripts using the
+   new interpreter:
 
    ```powershell
    Disable-ScheduledTask -TaskName $SupervisorTask
@@ -226,9 +234,11 @@ repository.
    This preserves configuration and runtime state. Inspect the resulting Python
    pin and source-import behavior. Refresh can refuse a live supervisor. If it was
    interrupted, keep the host stopped and the task disabled, and repeat it; files are
-   replaced individually, not as one all-or-nothing group. Once the refresh has
-   succeeded, enable the task again (`Enable-ScheduledTask -TaskName $SupervisorTask`).
-5. Start that one agent through its normal host; if the host is the supervisor,
+   replaced individually, not as one all-or-nothing group. Keep the task disabled
+   until step 5.
+5. Enable the task again as the last action before the host starts
+   (`Enable-ScheduledTask -TaskName $SupervisorTask`), then start that one agent
+   through its normal host; if the host is the supervisor,
    then among the affected agents it now launches only the one whose `auto_restart`
    is true. Check the version and import path in that launch context, `status`,
    `doctor`, and a fresh wrapper heartbeat. Resume the rest only after the first agent can receive and answer a
@@ -239,6 +249,13 @@ The paid gateway's task has its own interpreter pin. Use the separate task-switc
 procedure below; a wrapper switch does not move that task.
 
 ### Roll a runtime or release back
+
+These steps use the supervisor's scheduled task name you chose in "Set up the host".
+In a new shell, set it again:
+
+```powershell
+$SupervisorTask = '<your-task-name>'
+```
 
 1. Stop dispatch, put the supervisor kill switch in place (see "Pause, stop and
    recover", step 1) and stop the affected hosts/wrappers. Preserve the failing
@@ -257,14 +274,16 @@ procedure below; a wrapper switch does not move that task.
    request instead, as in "Switch the team's tool runtime", step 3. Then, with the
    host stopped, disable its scheduled task, remove the kill switch and refresh
    supervisor scripts with the old release (refresh is refused while
-   `supervisor.kill` exists), and enable the task again once the refresh has
-   succeeded; the commands are in "Switch the team's tool runtime", step 4. If that
-   release cannot read current state, stop for a recovery plan instead.
-4. If the gateway is rolled back too, do that first, before any paid worker
-   restarts: stop and unregister the new task, then reinstall the old registration
-   as below. Restart and verify that one agent through its normal host; if the host
-   is the supervisor, then among the affected agents it now launches only the one
-   whose `auto_restart` is true. Then resume the others: set each agent's
+   `supervisor.kill` exists); the commands are in "Switch the team's tool runtime",
+   step 4. Keep the task disabled until step 4 enables it. If that release cannot
+   read current state, stop for a recovery plan instead.
+4. If the gateway is rolled back too, do that first, while the supervisor's task is
+   still disabled: stop and unregister the new gateway task, then reinstall the old
+   registration as below. Then enable the supervisor's task as the last action
+   before its host starts (`Enable-ScheduledTask -TaskName $SupervisorTask`), and
+   restart and verify that one agent through its normal host; if the host is the
+   supervisor, then among the affected agents it now launches only the one whose
+   `auto_restart` is true. Then resume the others: set each agent's
    `auto_restart` back to its recorded value, one agent at a time, verifying each the
    same way.
 5. If file restoration is necessary, use the manual restore procedure. Reconcile
@@ -450,10 +469,10 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
    `supervisor-state.json.bak`. A valid backup can be read as a fallback;
    both invalid means no automatic action. Do not delete both to obtain an empty
    state. Repair with the host stopped and ownership accounted for.
-7. To resume, keep the host stopped while removing `supervisor.kill`. If the
-   runtime changed, also disable the scheduled task before you remove it
-   (`Disable-ScheduledTask -TaskName $SupervisorTask`), refresh scripts after, and
-   enable the task again once the refresh has succeeded
+7. To resume, keep the host stopped and, in this order: disable the scheduled task
+   (`Disable-ScheduledTask -TaskName $SupervisorTask`; it may already be disabled),
+   remove `supervisor.kill`, refresh scripts if the runtime changed, and enable the
+   task again as the last action before the host starts
    (`Enable-ScheduledTask -TaskName $SupervisorTask`). Then start the one intended
    host and verify a fresh report. Refresh is itself refused while the kill switch
    is present.
@@ -910,13 +929,24 @@ protection against later in-place changes.
 There is no restore command today. Do not run `init --force` to reconstruct a lost
 store or rotate signing keys as a substitute for recovering them.
 
+These steps use the supervisor's scheduled task name you chose in "Set up the host".
+In a new shell, set it again:
+
+```powershell
+$SupervisorTask = '<your-task-name>'
+```
+
 1. Pause dispatch. Stop the supervisor, the wrappers and other bus writers. If the
    project has a gateway (a `.agenttalk/gateway` folder), stop it too, even when you
    will not restore its ledger: the snapshot holds that folder and step 3 replaces it,
    while a running gateway reads `gateway.kill` four times a second and writes
    `runtime.json` there. Use `gateway stop` with the runtime that owns its task.
-   Inhibit the automatic restarts of all of them. Preserve the damaged installation
-   and any newer records in a separate directory.
+   Inhibit the automatic restarts of all of them. For the supervisor that means its
+   kill switch and also disabling its scheduled task
+   (`Disable-ScheduledTask -TaskName $SupervisorTask`): the swap in step 3 removes the
+   kill switch until you put it back, and the task would still start at your next
+   logon. Preserve the damaged installation and any newer records in a separate
+   directory.
 2. Select a complete snapshot and verify it with the `manifest_hash` you saved when
    the backup was made. The manifest inside the snapshot cannot vouch for itself: a
    replaced snapshot can carry a matching manifest. Save this small script as
@@ -1018,10 +1048,9 @@ store or rotate signing keys as a substitute for recovering them.
    `supervisor.json` except that one (if its restored value is false, set it to true
    for the check and back afterwards; a protected agent needs the protected restart
    request, as in "Switch the team's tool runtime", step 3), then resume as in step 7
-   of "Pause, stop and recover" (with the host stopped, remove `supervisor.kill` and,
-   if the runtime changed, refresh scripts with the task disabled; then start the one
-   host). Then set the others back to their restored values one at a time. A file
-   restore does not promise exactly-once execution of external work.
+   of "Pause, stop and recover". Then set the others back to their restored values
+   one at a time. A file restore does not promise exactly-once execution of external
+   work.
 
 ## Find logs and scheduled tasks
 

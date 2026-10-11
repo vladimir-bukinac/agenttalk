@@ -253,7 +253,7 @@ The devkit is one set of skills for how to do the work itself. Each line names w
      -m "<goal, scope, how to check it, the reply you expect>"
    ```
    - **Keep one `work_item` slug** for the whole life of a piece of work. A slug is its short name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 64 characters.
-   - **Name the commit a review reads:** give a `read`, `delta` or `sweep` task `--work-head`, the exact commit to review; a reply that names a different commit is refused. On a `design`, `build` or `fix` task it is optional (it can name the commit the work starts from), and the builder's reply reports the new commit.
+   - **Name the commit a review reads:** `--work-head` is not required on any stage, but give it on a `read`, `delta` or `sweep` task: with it, a reply that names a different commit is refused; without it, whatever commit the reviewer names is recorded as given. On a `design`, `build` or `fix` task it can name the commit the work starts from, and the builder's reply reports the new commit.
    - **Name one lessons-lookup term:** the brief gives one subsystem or failure word for the lessons lookup (see [4.7](#47-the-lessons-lookup)).
    - **A replacement task** carries `--supersedes <old request id>`.
    - **A seat that has never run is refused:** agenttalk sends a task only to a seat whose health record shows an agenttalk version that understands tasks. A seat that has not started yet has no such record, so start it first; `--force` sends anyway.
