@@ -2,7 +2,7 @@
 
 **In plain words:** this page says who does what in a team of AI agents run with agenttalk, which shipped skill to use for which job, and the step lists the team follows. It is for the person who sets up or leads a team, and for the agents themselves. Each role has three short parts: what it does, what it must never do, and how it hands work on. The procedures cover handing out work, the review cycle, merging, releasing, the challenge, the acceptance pass, the lessons lookup, capturing lessons and cleaning up scratch work. Everything here was checked against agenttalk 0.100.0.
 
-This is a reference page: look up the part you need. Commands are shown as `agenttalk ...`; a Codex seat runs the same command as `python -m agenttalk ...`. Words in angle brackets, such as `<agent>` or `<checkout>`, stand for your own values. Long commands are split over lines with a backslash, as in bash; in PowerShell, end each line with a backtick instead, or write the command on one line.
+This is a reference page: look up the part you need. Commands are shown as `agenttalk ...`; a wrapped seat (Claude or Codex) runs the same command as `"$AGENTTALK_PY" -m agenttalk ...` (in PowerShell, `& $env:AGENTTALK_PY -m agenttalk ...`), because the wrapper sets `AGENTTALK_PY` to its own pinned Python and a bare `python` may find another copy or none. Words in angle brackets, such as `<agent>` or `<checkout>`, stand for your own values. Long commands are split over lines with a backslash, as in bash; in PowerShell, end each line with a backtick instead, or write the command on one line.
 
 ## Contents
 
@@ -38,7 +38,7 @@ flowchart LR
 - **The live roster is the truth.** Read it with `agenttalk roster` or `agenttalk whoami --for <agent>` when you act, not from memory or an old brief.
 - **Ask the liaison, not your own window.** When you need a person's decision, run `agenttalk escalate --from <agent> -m "<decision, options, your recommendation>"`. It goes to the liaison (or, with no liaison, to the one lead) and refuses with exit 2 when neither exists. The seat that talks to the operator (the liaison, or the lead when there is no liaison) escalates straight to the operator instead.
 - **Withdraw with a command.** To cancel a request you opened, run `agenttalk rescind --from <agent> --to-request <id>`. A prose "ignore that" moves no state.
-- **Check before anything you cannot undo.** Before a merge, release, deploy or deletion tied to a request, run `agenttalk check --for <agent> --to-request <id> --gates`. Exit 0 means go ahead; exit 3 means the request was rescinded or superseded, or a gate says HOLD; exit 4 means the request is unknown. Without `--gates` the check ignores the gates.
+- **Check before anything you cannot undo.** Before a merge, release, deploy or deletion tied to a request, run `agenttalk check --for <agent> --to-request <id> --epoch --gates`. Exit 0 means go ahead; exit 3 means the request was rescinded or superseded, it predates the last `agenttalk barrier bump`, or a gate says HOLD; exit 4 means the request is unknown. Without `--epoch` the check ignores barriers, and without `--gates` it ignores the gates.
 - **Only a marked release stands a seat down.** A seat stops listening only on a `release` or `end` message that carries the operator's authority mark. Idle means keep listening.
 - **Inside a wrapped turn, leave the inbox alone.** A seat run by the wrapper (`agenttalk wrap --loop`) never runs `sync`, `threads`, `drain`, `recv`, `wait` or `ack`; the wrapper owns them.
 - **Trying commands needs a throwaway store.** A seat's shell points at the live store. Run `agenttalk scratch store --for <agent>` first and put the line it prints before the commands you are trying.
@@ -110,7 +110,7 @@ Builds and fixes.
   - works in its own git worktree, never in the main checkout;
   - works in the lane, when the lead opened one. A lane is a piece of work the lead opens with `agenttalk lane assign`; it is tied to the paths it may change and, normally, to its own worktree. The developer finds the lane's worktree with `agenttalk lane workspace --id <lane-id>`, checks the work with `agenttalk lane check --id <lane-id>` and delivers it with `agenttalk lane deliver --id <lane-id> --from <agent> --gate-scope <scope>`;
   - for every bug fix, writes a test that fails on the old code first, and proves it by briefly breaking the fix (see [4.2](#42-the-review-cycle));
-  - pushes one commit per round and copies the commit's full ID from git after the push.
+  - pushes one commit per round and copies the commit's full ID from git after the push. A sandboxed developer that cannot push reports the full ID of its clean, committed work instead, and the lead pushes exactly that commit (see the lead skill's "Publishing a sandboxed worker's commit").
 - **Never:**
   - builds on the main branch;
   - shares implementation work with a peer without approval;
@@ -315,13 +315,13 @@ A GO counts only for the commit it names: a GO on an earlier commit does not cov
 
 This is the rule as the team practises it now. An ordinary change merges only when all of these hold:
 
-1. **One recorded GO for the exact head commit,** from a reviewer who did not build it, and from another vendor when one is available. "Recorded" means a typed reply whose verdict is GO. Earlier GOs and prose do not count.
+1. **One recorded GO for the exact head commit,** from a reviewer who did not build it, and from another vendor when one is available. "Recorded" means a typed reply whose verdict is GO and that finishes the review: a task reply with `status=done`, or an approved review result. A reply with `status=accepted` and a GO verdict leaves the review task open and does not count. Earlier GOs and prose do not count.
 2. **Every automated P0, P1 and P2 comment triaged.** This includes the code host's automated comments on changed lines. Each one has a disposition: fixed, already closed, or the premise is wrong (with the reason, from the code). The other review comments are read and answered.
-3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, the result is for the older merge.
+3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, that result is for the older merge and does not count: run CI again against the current target (for example by updating the branch) before merging.
    - **The full gate:** the test workflow runs the dev gate, agenttalk's own test run (`agenttalk dev-gate`), on Linux, macOS and Windows with Python 3.10 to 3.13: twelve legs and one aggregate. A single green leg is not a pass; only the full aggregate is.
    - **The lighter path:** a change runs only the documentation checks instead when every file it touches is a page under `docs/` or the README, changelog or security page, and no test names that file. README.md and CHANGELOG.md are named by tests, so a change to either runs the full gate.
    - **Also:** the security checks (CodeQL and the client-reference check) and the network-deny checks run as well.
-4. **The request is still current:** `agenttalk check --for <lead> --to-request <id> --gates` exits 0.
+4. **The request is still current:** `agenttalk check --for <lead> --to-request <id> --epoch --gates` exits 0.
 
 **Two other cases:**
 - **A release** also runs the full gate again on its version-bump commit (see [4.4](#44-the-release-ritual)).
@@ -386,12 +386,13 @@ A challenge asks an independent agent, before work starts, whether it should be 
    - **reshape:** make the changes, or give one line on why not.
    - **probe:** run the named small experiment first.
    - **replace, defer or stop:** only the operator can override. Accept it, appeal once to a challenger of another vendor with the same brief, or escalate to the operator.
-   - **A late, missing or malformed verdict** counts as `unassessed`, never as proceed.
+   - **A late, missing, malformed or contaminated verdict** counts as `unassessed`, never as proceed. Contaminated means `exposed=yes` (the challenger saw the plan, the pitch or earlier discussion of it) or a challenger who turns out to be involved.
+   - **unassessed:** if it names one missing fact, send that fact once, as `--meta round=2`; otherwise apply the availability rule below.
    - **No eligible challenger, or no valid verdict after 15 minutes (the availability rule):** money, security or irreversible work does not go ahead by default; it waits or escalates to the operator. Other required work may go ahead, recorded as `challenge_disposition=unavailable`.
 
 ### 4.6 The acceptance pass
 
-An acceptance pass is a final check by a reviewer who is not shown the plan, run through an assurance close. It is for teams that already use closes; each command's `--help` (for example `agenttalk close acceptance --help`) gives the exact fields.
+An acceptance pass is a final check by a reviewer who is not shown the plan, run through an assurance close. It is for teams that already use closes; each command's `--help` (for example `agenttalk close acceptance --help`) gives the exact flags. The help does not describe the plan's fields; step 1 lists the cold policy's.
 
 The words it uses:
 - **Assurance close:** a record, opened with `agenttalk close open`, that collects the evidence and sign-offs for one exact commit and ends in a published GO or HOLD.
@@ -402,21 +403,22 @@ The words it uses:
 - **Evidence bundle:** the file of results the lead attaches after the cold reviewer has committed.
 - **`cold_policy` and `change_base`:** the part of the plan that names the cold reviewer and every participant, and the full commit just before the change.
 
-1. **Freeze the plan:** write a schema-3 acceptance plan. Its `cold_policy` names:
-   - the cold reviewer;
+1. **Freeze the plan:** write a schema-3 acceptance plan. Its `cold_policy` has exactly four fields, and `close open` refuses a plan that lacks any of them:
+   - the cold reviewer (`reviewer`);
    - the full commit just before the change (`change_base`);
-   - every participant with their vendor.
+   - every participant with their vendor (`roster`, entries of `actor` and `vendor`);
+   - `absence_disclosure`, a text: it may be empty when the roster lists a second vendor, and must explain the absence when it lists only one.
 2. **Open the close:** `agenttalk close open --id <id> --scope <scope> --from <lead> --acceptance-plan <plan> --project-repo <checkout> --revision <commit>`, with lane evidence or `--non-lane-isolation-not-asserted`.
    - **If the project has a sign-off policy,** also ask for its sign-offs here (see [4.3](#43-the-merge-gate)); without a policy file `--derive-signoffs` is refused and no close is opened, so add it only when the file exists. Add `--derive-signoffs`, each risk class in play (`--risk-class <class>`, repeatable), each class that does not apply with its reason (`--risk-na <class>=<reason>`), and the changed paths (`--changed-path <path>`, repeatable; an acceptance close needs them spelled out). Without `--derive-signoffs` the close asks for no sign-offs at all. `agenttalk close signoffs plan --id <id>`, given the same risk and path flags, previews the result (on an acceptance close it refuses without `--changed-path`, and without `--risk-class` it lists no sign-offs), and `agenttalk close signoffs apply` adds them to a close that is already open.
 3. **The cold reviewer commits its observations first:** `agenttalk close acceptance cold --id <id> --phase commit --file <initial.json> --from <reviewer>`.
 4. **Only then the lead attaches the evidence bundle:** `agenttalk close acceptance attach --id <id> --file <bundle.json> --from <lead>`.
 5. **The reviewer reconciles** after the reveal: `agenttalk close acceptance cold --id <id> --phase reconcile --file <reconciliation.json> --from <reviewer>`.
-6. **The acceptance lenses accept,** each with typed evidence: every partition, each reproducer and the cold reviewer, using `agenttalk close ack --id <id> --lens <lens> --status accept --from <agent> --risk-class <class> --release-blocker <yes|no|unknown> --tests-referenced "<tests>" --tests-executed "<tests>" --residual-risk "<what is left>" --evidence <pointer>`. An accept without those fields is refused; a field given as `n/a` also needs `--na-reason`.
+6. **The acceptance lenses accept,** each with typed evidence: every partition, each reproducer and the cold reviewer, and, if sign-offs were derived in step 2, each generated sign-off lens (named like `so:<risk class>:<set>#<n>`; `close check` names any sign-off set still short of acknowledgements) by distinct eligible candidates. Each one uses `agenttalk close ack --id <id> --lens <lens> --status accept --from <agent> --risk-class <class> --release-blocker <yes|no|unknown> --tests-referenced "<tests>" --tests-executed "<tests>" --residual-risk "<what is left>" --evidence <pointer>`. An accept without those fields is refused; a field given as `n/a` also needs `--na-reason`.
 7. **Check and publish:** `agenttalk close check --id <id>`, then `agenttalk close publish --id <id> --verdict go --from <lead>`.
 8. **If it fails,** first publish the failed attempt as HOLD, since a successor needs a published parent: `agenttalk close publish --id <id> --verdict hold --from <lead>`.
 9. **Then start a successor attempt,** under a new id and with a fresh cold reviewer: `agenttalk close acceptance successor --id <new-id> --parent <id> --acceptance-plan <plan> --project-repo <checkout> --revision <commit> --reason "<why a new attempt>" --from <lead>`. The successor keeps the parent's derived sign-offs. If the commit, the risk list or the policy has changed since they were derived, `close check` holds them as out of date until the lead runs `agenttalk close signoffs apply` again.
 
-`agenttalk close acceptance preflight` checks a staged plan offline without running any tools.
+`agenttalk close acceptance preflight --plan <plan> --cache-root <cache>` checks a staged plan offline without running any tools. It is for schema-4 plans with a staged cache only, not for the schema-3 plan above.
 
 ### 4.7 The lessons lookup
 
@@ -456,7 +458,7 @@ What a seat learns that is not obvious from the code is lost at its next reset u
 Temporary work goes in one place per seat and task, and is cleaned up as part of finishing.
 
 1. **Use your own scratch folder.** `agenttalk scratch root --for <agent> --task <task-id>` makes and prints `<scratch_root>/<agent>/<task-id>/`. By default `<scratch_root>` is an `atk-scratch` folder next to the project; a wrapped seat finds its own root in `AGENTTALK_SCRATCH`. Put test base folders, review checkouts, service data and probe output there.
-2. **Never put scratch work** in the repository, the system's temporary folder, `.worktrees/` or another seat's folder.
+2. **Never put scratch work** in the repository, the system's temporary folder, `.worktrees/` or another seat's folder. The one exception is a lane's own worktree: `agenttalk lane assign` creates it under `<repo>/.worktrees` by default and refuses a worktree root outside the project.
 3. **Keep worktrees short-lived.** Use `git worktree add --detach <scratch>/wt-<commit> <commit>` for a review. Before closing a task, commit or stash what matters, then `git worktree remove <path>` and `git worktree prune`. Copy evidence out first.
 4. **Release a merged checkout.** After a merge (and `agenttalk board verify-merges`, if the project uses the work board), the lead reads `agenttalk janitor --release-report`; it removes nothing. Then, once the author has finished with that checkout, the lead runs `agenttalk janitor --release <checkout>` from the main repository.
    - **It keeps the branch and commits,** and refuses a checkout with changes, untracked files or a squash merge.
