@@ -767,8 +767,11 @@ def ack_binding(record):
 def _external_worker_acks(store, record, holds):
     """A paid gateway seat (external worker) is never an independent acceptance runner, reproducer or reviewer."""
     external = close.external_worker_agents(store.load_config())
+    required = {lens.get("id") for lens in record.get("required_lenses") or []
+                if isinstance(lens, dict) and lens.get("required", True)}
     for lens, ack in record["lens_acks"].items():
-        if lens.startswith("acceptance-") and ack.get("from") in external:
+        # Only the required acceptance evidence: an optional note stays neutral.
+        if lens in required and lens.startswith("acceptance-") and ack.get("from") in external:
             holds.append(("acceptance_lens_not_independent",
                           f"lens {lens} ack from {ack.get('from')} is ignored: a paid gateway seat cannot satisfy it"))
 

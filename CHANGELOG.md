@@ -147,12 +147,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     affected, because they feed no verdict.
   - An ack already stored on a required lens by such a seat (for example a hand-edited record) is ignored when
     the close is counted, and `close check` names the lens and says why. A trusted seat's ack still satisfies it.
-  - The acceptance checks name an acceptance lens ack from such a seat and do not accept it as independent.
-  - `close check` and `close publish` no longer read a malformed close record (for example `lens_acks` that is a
-    string) before reporting it: it gives the normal "malformed close record" HOLD instead of a crash.
+  - The acceptance checks name an acceptance lens ack from such a seat and do not accept it as independent. Only the
+    required acceptance lenses are checked; an optional note from such a seat is left alone.
+  - Retiring, removing or renaming a paid gateway seat no longer makes it forgettable: its retired entry now says it
+    was a paid seat (new entries; a rename also keeps the paid class on the new name), so an ack it left on a required
+    lens keeps being ignored. A trusted seat's ack keeps counting after it retires, as before.
+  - `close check` no longer reads a malformed close record (for example `lens_acks` that is a string) before
+    reporting it: it gives the normal "malformed close record" HOLD instead of a crash. `close publish` still
+    refuses a malformed record with its existing error (exit 2); it never publishes one.
 
   What you need to do: nothing. An older close that rested on a paid seat's ack of a required lens is now on HOLD
-  until a trusted seat acks that lens.
+  until a trusted seat acks that lens. A paid seat retired or removed before this change has no such note on its
+  retired entry, except one removed from the roster as a paid seat (which already said so in its reason).
 
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer

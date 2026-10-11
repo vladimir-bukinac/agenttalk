@@ -1378,10 +1378,19 @@ def external_worker_agents(cfg: dict) -> set[str]:
     from agenttalk.store import TRUST_CLASS_EXTERNAL_WORKER
 
     classes = cfg.get("trust_classes")
-    if not isinstance(classes, dict):
-        return set()
-    return {agent for agent, value in classes.items()
-            if isinstance(agent, str) and value == TRUST_CLASS_EXTERNAL_WORKER}
+    external: set[str] = set()
+    if isinstance(classes, dict):
+        external = {agent for agent, value in classes.items()
+                    if isinstance(agent, str) and value == TRUST_CLASS_EXTERNAL_WORKER}
+    # Retiring, removing or renaming a paid seat must not erase what it was: its tombstone remembers it, so an ack
+    # it left behind keeps being ignored (a rename also carries the class to the new name).
+    retired = cfg.get("retired")
+    for entry in retired if isinstance(retired, list) else []:
+        if isinstance(entry, dict) and isinstance(entry.get("name"), str) and (
+                entry.get("was_external_worker") is True
+                or entry.get("reason") == "removed external-worker identity"):
+            external.add(entry["name"])
+    return external
 
 
 def split_signoff_candidates(

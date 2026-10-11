@@ -139,8 +139,135 @@ def test_an_acceptance_lens_ack_from_a_paid_seat_is_named_and_ignored(tmp_path: 
     from agenttalk import acceptance
     store = Store(_init(tmp_path))
     record = {"lens_acks": {"acceptance-run-a": {"from": "gw"}, "acceptance-cold": {"from": "alice"},
-                            "sec": {"from": "gw"}}}
+                            "sec": {"from": "gw"}, "acceptance-notes": {"from": "gw"}},
+              "required_lenses": [{"id": "acceptance-run-a"}, {"id": "acceptance-cold"}, {"id": "sec"},
+                                  {"id": "acceptance-notes", "required": False}]}
     holds: list = []
     acceptance._external_worker_acks(store, record, holds)
     assert [code for code, _detail in holds] == ["acceptance_lens_not_independent"]
     assert "acceptance-run-a" in holds[0][1]
+
+
+def test_an_optional_acceptance_note_from_a_paid_seat_stays_neutral(tmp_path: Path) -> None:
+    from agenttalk import acceptance
+    store = Store(_init(tmp_path))
+    record = {"lens_acks": {"acceptance-notes": {"from": "gw"}},
+              "required_lenses": [{"id": "acceptance-notes", "required": False}]}
+    holds: list = []
+    acceptance._external_worker_acks(store, record, holds)
+    assert holds == []
+
+
+# ----------------------------------------------------- the paid seat is remembered after it leaves the roster
+
+POLICY = {
+    "schema_version": 1,
+    "risk_policies": {"security": [{"id": "sec", "required_count": 1, "candidates": {"roles": ["sec"]}}]},
+    "allow_unmapped": False,
+}
+
+LEAVING = [
+    ("retired", lambda st, who: st.retire_agent(who)),
+    ("removed", lambda st, who: st.remove_agent(who)),
+    ("renamed away", lambda st, who: st.rename_agent(who, who + "2")),
+]
+
+
+def _store_with_old_ack(tmp_path: Path, kind: str, author: str) -> Path:
+    """A close with a stored accepting ack on a required lens, made by `author`. The paid seat `gw` was external
+    when it acked; alice is a trusted reviewer."""
+    store = Store(tmp_path)
+    store.init(["lead", "gw", "alice"])
+    store.set_role("lead", "lead")
+    store.set_trust_class("gw", "external-worker")
+    store.set_role("alice", "sec")
+    if kind == "signoff-set":
+        store.set_role("gw", "sec")                     # allowed while no policy exists
+        (store.dir / "signoffs.json").write_text(json.dumps(POLICY), encoding="utf-8")
+        assert _run(["close", "open", "--id", "rel", "--from", "lead", "--scope", "release", "--revision", SHA,
+                     "--derive-signoffs", "--risk-class", "security", "--changed-path", "src/a.py",
+                     "--dirty-artifact", "d:1", "--non-lane-isolation-not-asserted"], tmp_path) == 0
+        lens = close.load_close(store, "rel")["required_signoffs"][0]["generated_lens_ids"][0]
+    else:
+        lens = "acceptance-run-x" if kind == "acceptance" else "sec"
+        assert _run(["close", "open", "--id", "rel", "--from", "lead", "--scope", "release", "--revision", SHA,
+                     "--non-lane-isolation-not-asserted", "--dirty-artifact", "d:1", "--lens", lens,
+                     "--allow", f"{lens}:gw", "--allow", f"{lens}:alice"], tmp_path) == 0
+    record = close.load_close(store, "rel")
+    close.apply_ack(record, lens_id=lens, status="accept", agent=author, from_role="sec", at="t",
+                    evidence={"risk_class": "none"})
+    close.close_path(store, "rel").write_text(json.dumps(record), encoding="utf-8")
+    return tmp_path
+
+
+@pytest.mark.parametrize("kind", ["hand-declared", "acceptance", "signoff-set"])
+@pytest.mark.parametrize("label,leave", LEAVING, ids=[x[0] for x in LEAVING])
+def test_a_paid_seats_old_ack_stays_ignored_after_it_leaves(tmp_path: Path, capsys, kind, label, leave) -> None:
+    root = _store_with_old_ack(tmp_path, kind, "gw")
+    code, _ = _verdict(root, capsys)
+    assert code == 3                                      # ignored while it is a paid seat
+    if kind == "signoff-set" and label == "renamed away":
+        # the roster guard refuses to move a paid seat that is a sign-off candidate; the close stays on HOLD
+        with pytest.raises(ValueError, match="signoff candidate"):
+            leave(Store(root), "gw")
+    else:
+        leave(Store(root), "gw")
+    code, result = _verdict(root, capsys)
+    assert code == 3, (kind, label)
+    if kind != "signoff-set":
+        assert any("paid gateway" in h["detail"] for h in result["holds"])
+    assert _run(["close", "publish", "--id", "rel", "--from", "lead", "--verdict", "go"], root) != 0
+
+
+@pytest.mark.parametrize("kind", ["hand-declared", "acceptance"])
+@pytest.mark.parametrize("label,leave", LEAVING[:2], ids=[x[0] for x in LEAVING[:2]])
+def test_a_trusted_seats_old_ack_keeps_counting_after_it_retires(tmp_path: Path, capsys, kind, label, leave) -> None:
+    root = _store_with_old_ack(tmp_path, kind, "alice")
+    leave(Store(root), "alice")
+    _code, result = _verdict(root, capsys)
+    assert close.HOLD_MISSING_LENS not in {h["code"] for h in result["holds"]}
+    assert not any("paid gateway" in h["detail"] for h in result["holds"])
+
+
+def test_the_remembered_paid_seat_survives_a_rename_for_both_names(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    store.init(["lead", "gw"])
+    store.set_trust_class("gw", "external-worker")
+    store.rename_agent("gw", "gw2")
+    assert close.external_worker_agents(store.load_config()) == {"gw", "gw2"}
+
+
+def test_a_removed_paid_seat_cannot_be_added_again_under_the_same_name(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    store.init(["lead", "gw"])
+    store.set_trust_class("gw", "external-worker")
+    store.remove_agent("gw")
+    with pytest.raises(ValueError, match="tombstone"):
+        store.add_agent("gw")
+    assert close.external_worker_agents(store.load_config()) == {"gw"}
+
+
+def test_a_trusted_seat_is_never_remembered_as_a_paid_seat(tmp_path: Path) -> None:
+    store = Store(tmp_path)
+    store.init(["lead", "alice"])
+    store.retire_agent("alice")
+    assert close.external_worker_agents(store.load_config()) == set()
+
+
+def test_publish_refuses_a_malformed_record_with_its_existing_error(tmp_path: Path, capsys) -> None:
+    """`close check` reports the malformed state as a HOLD; `close publish` stays fail-closed with its own error."""
+    root = _init(tmp_path)
+    _open(root, "sec:alice")
+    _edit(root, lambda r: r.update(lens_acks="x"))
+    capsys.readouterr()
+    assert _run(["close", "publish", "--id", "rel", "--from", "lead", "--verdict", "go"], root) == 2
+    assert "malformed" in capsys.readouterr().err
+
+
+def test_the_roster_refuses_to_clear_a_paid_seats_class(tmp_path: Path) -> None:
+    """The only way out of the paid class is to retire the identity, which the close remembers."""
+    store = Store(tmp_path)
+    store.init(["lead", "gw"])
+    store.set_trust_class("gw", "external-worker")
+    with pytest.raises(ValueError, match="cannot be cleared"):
+        store.set_trust_class("gw", None)
