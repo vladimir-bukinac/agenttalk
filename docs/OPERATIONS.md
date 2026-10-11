@@ -381,11 +381,19 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
    `--from` must be the configured liaison or, when no liaison is configured, the
    sole lead; any other name is refused with "requester is not authorized". An
    operator shell has no agent identity of its own, so without `--from` the command
-   stops with "no agent identity". If the agent is protected (the liaison or a
-   lead), also add `--force-protected`. If it is protected and still has a fresh
-   heartbeat, the restart ends a live seat, so also add
-   `--acknowledge-live-protected-kill`, which only the liaison can give. The
-   command refuses those two flags together with `--clear-restart-budget`. The
+   stops with "no agent identity". For a protected agent (the liaison or a lead)
+   use the protected form, asked by the liaison or, when none is configured, the
+   sole lead; the supervisor refuses a restart of a protected agent without it:
+
+   ```powershell
+   & $ToolPy -m agenttalk --root $Project request-restart --for '<protected-agent>' --from '<liaison-or-sole-lead>' --force-protected --reason 'operator repaired launch settings'
+   ```
+
+   If that agent still has a fresh heartbeat, restarting it ends a live seat, and
+   the supervisor also requires `--acknowledge-live-protected-kill` on the same
+   command. Only the liaison can give that acknowledgement; with no liaison
+   configured, stop the live seat yourself by its verified process identity first.
+   The command refuses either flag together with `--clear-restart-budget`. The
    request is handled by the supervisor when actions resume. Automatic
    relaunches have a restart budget (default four in one hour). A manual restart
    request re-arms that budget. `--clear-restart-budget` clears only the budget;
@@ -575,7 +583,8 @@ There is no shipped `gateway canary-send` command in this release.
    Python wrapper launch and real Claude executable tail; do not add an `env`
    object to those entries. This backend does not support `wrap --lead-loop`. Set
    `auto_restart` to `false` on each new worker entry except the one you will try
-   first.
+   first. If that first worker's intended value is false, set it to true for the
+   check and back afterwards, or the supervisor starts no worker.
 6. Remove the kill switch. The supervisor reads `supervisor.json` on each poll and
    starts, among the new workers, only the one whose `auto_restart` is true (agents
    you configured earlier behave as before). Confirm that worker can
@@ -877,6 +886,14 @@ store or rotate signing keys as a substitute for recovering them.
    root = snapshot.resolve()
 
 
+   def sha256_of(path):
+       digest = hashlib.sha256()
+       with path.open("rb") as handle:
+           for chunk in iter(lambda: handle.read(1 << 20), b""):
+               digest.update(chunk)
+       return digest.hexdigest()
+
+
    def inside(path):
        """True for a real entry that stays inside the snapshot (not a link out of it)."""
        try:
@@ -893,7 +910,13 @@ store or rotate signing keys as a substitute for recovering them.
    if hashlib.sha256(canonical).hexdigest() != saved_hash:
        problems.append("the file list does not match the manifest_hash you saved when the backup was made")
    present = set()
-   for folder, dirs, names in os.walk(snapshot):
+
+
+   def walk_failed(error):
+       problems.append(f"could not read {error.filename}: {error.strerror}")
+
+
+   for folder, dirs, names in os.walk(snapshot, onerror=walk_failed):
        for entry in dirs + names:
            path = pathlib.Path(folder) / entry
            if not inside(path):
@@ -901,8 +924,12 @@ store or rotate signing keys as a substitute for recovering them.
        present.update(pathlib.Path(folder, n).relative_to(snapshot).as_posix() for n in names)
    for name, wanted in files.items():
        path = snapshot / name
-       if not inside(path) or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != wanted:
-           problems.append(f"changed or missing: {name}")
+       try:
+           ok = inside(path) and path.is_file() and sha256_of(path) == wanted
+       except OSError:
+           ok = False
+       if not ok:
+           problems.append(f"changed, unreadable or missing: {name}")
    problems += [f"not in the manifest: {name}" for name in sorted(present - set(files) - {"manifest.json"})]
    print("\n".join(problems) if problems else "OK: every file matches the manifest you saved")
    sys.exit(1 if problems else 0)
