@@ -183,10 +183,10 @@ A wrapped Claude Code seat whose model calls go through the team's local paid ga
 - **Does:** works like a developer or reviewer, through the wrapper only. The wrapper starts it only when all of these hold:
   - its supervisor entry says `"cli": "claude"`, `"backend_profile": "ovh-qwen"`, `"trust_class": "external-worker"` and, as `"model"`, the gateway's model name. That name is the `model_name` in the gateway's generated settings file in `.agenttalk/gateway/`. If the entry names another model, the wrapper refuses to start the seat and its message says which name it expects;
   - the roster marks it the same way (`agenttalk roster add <agent> --trust-class external-worker`, or `roster set-trust-class`);
-  - the gateway reports ready.
+  - `agenttalk gateway status` shows both `operational_ready` and `worker_spend_ready` true. `ready` alone is not enough: the gateway can be ready while worker spending is still blocked, for example before its canary check is accepted.
 - **Never:**
   - is the lead or the liaison; the roster refuses both;
-  - is a sign-off candidate for an assurance close; the roster refuses a setup that would make it one;
+  - is meant to be a sign-off candidate for an assurance close. The roster refuses a roster change that would make it one, but agenttalk checks only at that moment: after a later hand edit of `.agenttalk/signoffs.json` or the domain list, a close would count its sign-off. So after such an edit, check that no external worker is among the candidates `agenttalk close signoffs plan` lists;
   - holds provider keys. The wrapper refuses to start it when provider keys are set in the supervisor's environment or the entry has its own `env` block. It also refuses for a managed lead loop.
 - **Hands work on:** like a developer or reviewer: a typed task reply.
 
@@ -317,7 +317,7 @@ This is the rule as the team practises it now. An ordinary change merges only wh
 
 1. **One recorded GO for the exact head commit,** from a reviewer who did not build it, and from another vendor when one is available. "Recorded" means a typed reply whose verdict is GO. Earlier GOs and prose do not count.
 2. **Every automated P0, P1 and P2 comment triaged.** This includes the code host's automated comments on changed lines. Each one has a disposition: fixed, already closed, or the premise is wrong (with the reason, from the code). The other review comments are read and answered.
-3. **CI green on the same commit.**
+3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, the result is for the older merge.
    - **The full gate:** the test workflow runs the dev gate, agenttalk's own test run (`agenttalk dev-gate`), on Linux, macOS and Windows with Python 3.10 to 3.13: twelve legs and one aggregate. A single green leg is not a pass; only the full aggregate is.
    - **The lighter path:** a change runs only the documentation checks instead when every file it touches is a page under `docs/` or the README, changelog or security page, and no test names that file. README.md and CHANGELOG.md are named by tests, so a change to either runs the full gate.
    - **Also:** the security checks (CodeQL and the client-reference check) and the network-deny checks run as well.
@@ -407,7 +407,7 @@ The words it uses:
    - the full commit just before the change (`change_base`);
    - every participant with their vendor.
 2. **Open the close:** `agenttalk close open --id <id> --scope <scope> --from <lead> --acceptance-plan <plan> --project-repo <checkout> --revision <commit>`, with lane evidence or `--non-lane-isolation-not-asserted`.
-   - **If the project has a sign-off policy,** also ask for its sign-offs here (see [4.3](#43-the-merge-gate)): add `--derive-signoffs`, each risk class in play (`--risk-class <class>`, repeatable), each class that does not apply with its reason (`--risk-na <class>=<reason>`), and the changed paths (`--changed-path <path>`, repeatable; an acceptance close needs them spelled out). Without `--derive-signoffs` the close asks for no sign-offs at all. `agenttalk close signoffs plan --id <id>`, given the same risk and path flags, previews the result (without them it previews nothing), and `agenttalk close signoffs apply` adds them to a close that is already open.
+   - **If the project has a sign-off policy,** also ask for its sign-offs here (see [4.3](#43-the-merge-gate)): add `--derive-signoffs`, each risk class in play (`--risk-class <class>`, repeatable), each class that does not apply with its reason (`--risk-na <class>=<reason>`), and the changed paths (`--changed-path <path>`, repeatable; an acceptance close needs them spelled out). Without `--derive-signoffs` the close asks for no sign-offs at all. `agenttalk close signoffs plan --id <id>`, given the same risk and path flags, previews the result (on an acceptance close it refuses without `--changed-path`, and without `--risk-class` it lists no sign-offs), and `agenttalk close signoffs apply` adds them to a close that is already open.
 3. **The cold reviewer commits its observations first:** `agenttalk close acceptance cold --id <id> --phase commit --file <initial.json> --from <reviewer>`.
 4. **Only then the lead attaches the evidence bundle:** `agenttalk close acceptance attach --id <id> --file <bundle.json> --from <lead>`.
 5. **The reviewer reconciles** after the reveal: `agenttalk close acceptance cold --id <id> --phase reconcile --file <reconciliation.json> --from <reviewer>`.
@@ -458,7 +458,7 @@ Temporary work goes in one place per seat and task, and is cleaned up as part of
 1. **Use your own scratch folder.** `agenttalk scratch root --for <agent> --task <task-id>` makes and prints `<scratch_root>/<agent>/<task-id>/`. By default `<scratch_root>` is an `atk-scratch` folder next to the project; a wrapped seat finds its own root in `AGENTTALK_SCRATCH`. Put test base folders, review checkouts, service data and probe output there.
 2. **Never put scratch work** in the repository, the system's temporary folder, `.worktrees/` or another seat's folder.
 3. **Keep worktrees short-lived.** Use `git worktree add --detach <scratch>/wt-<commit> <commit>` for a review. Before closing a task, commit or stash what matters, then `git worktree remove <path>` and `git worktree prune`. Copy evidence out first.
-4. **Release a merged checkout.** After a merge and `agenttalk board verify-merges`, the lead reads `agenttalk janitor --release-report`; it removes nothing. Then, once the author has finished with that checkout, the lead runs `agenttalk janitor --release <checkout>` from the main repository.
+4. **Release a merged checkout.** After a merge (and `agenttalk board verify-merges`, if the project uses the work board), the lead reads `agenttalk janitor --release-report`; it removes nothing. Then, once the author has finished with that checkout, the lead runs `agenttalk janitor --release <checkout>` from the main repository.
    - **It keeps the branch and commits,** and refuses a checkout with changes, untracked files or a squash merge.
    - **No in-use check on Linux or macOS:** confirm yourself that every user has stopped.
 5. **Clean up at every batch close.** `agenttalk janitor` reports only; read that report first. A batch is done only when the report is empty, or its leftovers are named in the close-out.
