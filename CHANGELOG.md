@@ -73,9 +73,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The command used to delete `gateway.kill` first and only then check the ports and ask the task to run. If a
   port was busy, or Windows or systemd refused to run the task (for example because it was disabled), the
   command failed but the stop file was already gone, so a later logon or restart-on-failure retry could start a
-  gateway you had stopped. The ports are now checked before anything is deleted, and if the task cannot be
-  started the stop file is put back exactly as it was. If you had no stop file, none is created. Once the task
-  has been started nothing changes, including when it then takes too long to become ready.
+  gateway you had stopped. Now the ports are checked before anything is deleted. The stop file is deleted only
+  while `gateway start` holds the gateway's startup lock, so a gateway launched at the same moment by another
+  trigger waits, and after a failed start finds the stop file back and refuses. If the task cannot be started
+  (or the command is interrupted), the stop file is put back exactly as it was; if you had none, none is
+  created. If putting it back fails (for example a permission error), the command says so plainly, shows both
+  errors and tells you to run `agenttalk gateway stop` to write it again; until you do, no stop file protects
+  the gateway. Once the task has been started nothing changes, including when it then takes too long to become
+  ready.
 
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer

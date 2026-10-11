@@ -1991,24 +1991,38 @@ def start_task(
         raise LedgerBlocked("front token cannot authorize child turn issuance")
     if current["ready"]:
         return {"started": False, "ready": True, "task_name": identity.task_name}
-    # Check the ports first: a busy port must leave the operator's stop file alone.
-    exclusive_bind_probe(PUBLIC_HOST, PUBLIC_PORT)
-    exclusive_bind_probe(INTERNAL_HOST, INTERNAL_PORT)
-    kill = kill_switch_path(root)
-    try:
-        stop_file = kill.read_bytes()
-    except FileNotFoundError:
-        stop_file = None
-    kill.unlink(missing_ok=True)
-    try:
-        commands.start(identity.task_name)
-    except BaseException:
-        # The task was not started, so put back the stop file the operator had (never create one they lacked);
-        # otherwise a logon trigger or a restart-on-failure retry could start the gateway they stopped.
-        if stop_file is not None:
-            kill.parent.mkdir(parents=True, exist_ok=True)
-            kill.write_bytes(stop_file)
-        raise
+    # A service launched by any other trigger (logon, restart on failure) waits on the lifecycle lock at startup and
+    # re-reads gateway.kill under it. Holding the lock from before the stop file is removed until the task start has
+    # returned (and, on failure, the file is back) means a refused start cannot let another launch slip through the
+    # opening. The hold is one task request (its own limit is 30 s; the service waits 10 s, then refuses and is
+    # retried): `schtasks /Run` returns once the task is launched, and the systemd unit is Type=simple, so
+    # `systemctl start` returns before the service asks for the lock. Readiness is polled after the lock is released.
+    with _gateway_lifecycle_lock(root, "start"):
+        # Check the ports first: a busy port must leave the operator's stop file alone.
+        exclusive_bind_probe(PUBLIC_HOST, PUBLIC_PORT)
+        exclusive_bind_probe(INTERNAL_HOST, INTERNAL_PORT)
+        kill = kill_switch_path(root)
+        try:
+            stop_file = kill.read_bytes()
+        except FileNotFoundError:
+            stop_file = None
+        try:
+            kill.unlink(missing_ok=True)
+            commands.start(identity.task_name)
+        except BaseException as exc:
+            # The task was not started, so put back the stop file the operator had (never create one they
+            # lacked). This covers an interrupt right after the removal as well as a refused start.
+            if stop_file is not None:
+                try:
+                    kill.parent.mkdir(parents=True, exist_ok=True)
+                    kill.write_bytes(stop_file)
+                except BaseException as restore_error:
+                    raise GatewayConfigError(
+                        f"gateway start failed ({exc!r}) and the stop file {kill} could NOT be put back "
+                        f"({restore_error!r}): the gateway is NOT protected by a stop file. Run "
+                        "`agenttalk gateway stop` now to write it again."
+                    ) from exc
+            raise
     deadline = time.monotonic() + max(0.0, readiness_timeout_seconds)
     last_errors: list[str] = []
     while time.monotonic() < deadline:
