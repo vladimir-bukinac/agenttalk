@@ -3077,6 +3077,7 @@ def test_no_service_can_start_while_the_stop_file_is_out(tmp_path, monkeypatch, 
     """A startup attempted by another trigger while `gateway start` holds the lock waits for it; after a failed start
     it then finds the stop file back and refuses, after a successful start it is free to go on."""
     monkeypatch.setattr(service, "GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(service, "GATEWAY_START_HOLD_ALLOWANCE_SECONDS", 0.0)
     attempts: list[str] = []
 
     class Racing(FakeCommands):
@@ -3107,3 +3108,47 @@ def test_no_service_can_start_while_the_stop_file_is_out(tmp_path, monkeypatch, 
         with service._gateway_lifecycle_lock(root, "probe"):             # the lock is free again afterwards
             pass
     assert attempts == ["waited for the lock"]
+
+
+@pytest.mark.parametrize("backend", [FakeCommands, FakeSystemdCommands])
+def test_a_slow_but_successful_start_does_not_make_the_service_give_up(tmp_path, monkeypatch, backend) -> None:
+    """The scheduler call succeeds, but later than the plain lock wait. The service launched by it waits at its
+    startup lock longer than the call can last, so it gets the lock once `gateway start` lets go."""
+    monkeypatch.setattr(service, "GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(service, "GATEWAY_START_HOLD_ALLOWANCE_SECONDS", 5.0, raising=False)
+    outcome: list[object] = []
+
+    def service_startup() -> None:
+        try:
+            with service._gateway_lifecycle_lock(root, "run-service-startup"):
+                outcome.append("got the lock")
+        except BaseException as exc:  # noqa: BLE001 - reported to the test thread
+            outcome.append(exc)
+
+    class Slow(backend):
+        def start(self, task_name: str) -> None:
+            thread = threading.Thread(target=service_startup)
+            thread.start()
+            time.sleep(0.6)                      # longer than the plain 0.2 s wait
+            super().start(task_name)
+            self.thread = thread
+
+    commands = Slow()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    with pytest.raises(service.GatewayConfigError, match="did not become ready"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+    commands.thread.join(timeout=10)
+
+    assert outcome == ["got the lock"]
+    assert commands.started
+
+
+def test_other_lifecycle_operations_keep_the_plain_lock_wait(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(service, "GATEWAY_START_HOLD_ALLOWANCE_SECONDS", 60.0)
+    started = time.monotonic()
+    with service._gateway_lifecycle_lock(tmp_path, "start"):
+        with pytest.raises(service.GatewayLifecycleContended):
+            with service._gateway_lifecycle_lock(tmp_path, "reconfigure"):
+                raise AssertionError("the lock was not held")
+    assert time.monotonic() - started < 10

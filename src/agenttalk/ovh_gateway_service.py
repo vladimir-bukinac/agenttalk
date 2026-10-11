@@ -82,6 +82,13 @@ LITELLM_READINESS_TIMEOUT_SECONDS = 120.0
 LITELLM_RUNTIME_PROBE_TIMEOUT_SECONDS = 120.0
 LITELLM_RUNTIME_PROBE_OUTPUT_MAX_BYTES = 512
 GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS = 10.0
+# Longest a scheduler (schtasks / systemctl) call may run.
+SCHEDULER_COMMAND_TIMEOUT_SECONDS = 30
+# `gateway start` holds the lifecycle lock while it asks the scheduler to run the task, so a service launched by that
+# request must wait at its startup lock for longer than the call can last (plus writing the stop file back), or a slow
+# but successful start would make the service give up. Only the service startup waits this long; a holder that
+# never lets go (a crash) still ends the wait at this bound, after which the service refuses and is retried.
+GATEWAY_START_HOLD_ALLOWANCE_SECONDS = SCHEDULER_COMMAND_TIMEOUT_SECONDS + 5.0
 LITELLM_LOG_MAX_BYTES = 1024 * 1024
 LITELLM_LOG_BACKUP_COUNT = 2
 LITELLM_LOG_RECORD_MAX_BYTES = 64 * 1024
@@ -524,7 +531,7 @@ class TaskCommands:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=30,
+                timeout=SCHEDULER_COMMAND_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise GatewayConfigError("gateway Task Scheduler command failed") from exc
@@ -608,7 +615,7 @@ class SystemdUserCommands:
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=30,
+                timeout=SCHEDULER_COMMAND_TIMEOUT_SECONDS,
             )
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise GatewayConfigError("gateway systemd command failed") from exc
@@ -990,10 +997,13 @@ def _install_task_linux(
 @contextlib.contextmanager
 def _gateway_lifecycle_lock(root: Path, operation: str):
     """Adapt the generic exact-owner lock to gateway refusal vocabulary."""
+    timeout = GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS
+    if operation == "run-service-startup":
+        timeout += GATEWAY_START_HOLD_ALLOWANCE_SECONDS
     lock = CrossProcessLifecycleLock(
         gateway_state_dir(root) / "lifecycle.lock",
         authority="agenttalk-gateway-lifecycle-v1",
-        timeout_seconds=GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS,
+        timeout_seconds=timeout,
     )
     try:
         with lock.hold(operation):
@@ -1994,9 +2004,10 @@ def start_task(
     # A service launched by any other trigger (logon, restart on failure) waits on the lifecycle lock at startup and
     # re-reads gateway.kill under it. Holding the lock from before the stop file is removed until the task start has
     # returned (and, on failure, the file is back) means a refused start cannot let another launch slip through the
-    # opening. The hold is one task request (its own limit is 30 s; the service waits 10 s, then refuses and is
-    # retried): `schtasks /Run` returns once the task is launched, and the systemd unit is Type=simple, so
-    # `systemctl start` returns before the service asks for the lock. Readiness is polled after the lock is released.
+    # opening. The hold is one scheduler request, limited to SCHEDULER_COMMAND_TIMEOUT_SECONDS; the service's startup
+    # wait is longer (GATEWAY_START_HOLD_ALLOWANCE_SECONDS), so a slow but successful start stays successful.
+    # `schtasks /Run` returns once the task is launched and the systemd unit is Type=simple, so `systemctl start`
+    # returns before the service asks for the lock. Readiness is polled after the lock is released.
     with _gateway_lifecycle_lock(root, "start"):
         # Check the ports first: a busy port must leave the operator's stop file alone.
         exclusive_bind_probe(PUBLIC_HOST, PUBLIC_PORT)
