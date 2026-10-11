@@ -219,6 +219,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The listen and lead skills, in the Claude and Codex copies, say how to try commands, and
     so do the new-user manual and the agent manual.
 
+- **The operations guide puts safeguards before the steps they protect, and three pages say
+  what the code does.** Before a runtime switch, a rollback or a resume refreshes the
+  supervisor's scripts, the guide now has you disable its scheduled task, so it cannot start
+  half-refreshed; after a restore, the paid gateway starts before any agent resumes; and a
+  protected agent (the liaison or a lead) is started by the protected restart request, because
+  the supervisor never starts a stopped one on its own. The roles page says `--work-head` is
+  needed on review tasks, not on every task, and that a published HOLD exits with code 3; the
+  overview says the emergency release comes from the liaison when there is one, and that a
+  close can require captured knowledge (#444).
+
 ### Changed
 
 - **The README no longer lists a fixed problem as a known gap.** It still said that the reply

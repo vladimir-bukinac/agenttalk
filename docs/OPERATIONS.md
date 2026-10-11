@@ -206,18 +206,28 @@ repository.
    relaunches stopped agents whose `auto_restart` is true, so otherwise step 5
    would start them all at once on the new, untried runtime. If that first agent's
    recorded value is false, set it to true for the check and back afterwards, or the
-   supervisor starts nothing.
-4. With the supervisor host still stopped, remove its kill switch and regenerate
-   scripts using the new interpreter:
+   supervisor starts nothing. The supervisor never starts a stopped protected agent
+   (the liaison or a lead) on its own, so start first an agent that is not protected.
+   Start each protected agent, and the first one when every affected agent is
+   protected, with the protected restart request in "Pause, stop and recover",
+   step 4, while its `auto_restart` is true.
+4. With the supervisor host still stopped, disable its scheduled task first
+   (`$SupervisorTask`, as in "Pause, stop and recover"): a stopped task still starts
+   at the next logon or when Windows retries it after a failure, and it must not
+   start while the kill switch is gone and the scripts are only partly replaced.
+   Then remove the kill switch and regenerate scripts using the new interpreter:
 
    ```powershell
+   Disable-ScheduledTask -TaskName $SupervisorTask
+   Remove-Item "$Project\.agenttalk\supervisor.kill"
    & $NewPy -m agenttalk --root $Project supervise --refresh-scripts
    ```
 
    This preserves configuration and runtime state. Inspect the resulting Python
    pin and source-import behavior. Refresh can refuse a live supervisor. If it was
-   interrupted, keep the host stopped and repeat it; files are replaced individually,
-   not as one all-or-nothing group.
+   interrupted, keep the host stopped and the task disabled, and repeat it; files are
+   replaced individually, not as one all-or-nothing group. Once the refresh has
+   succeeded, enable the task again (`Enable-ScheduledTask -TaskName $SupervisorTask`).
 5. Start that one agent through its normal host; if the host is the supervisor,
    then among the affected agents it now launches only the one whose `auto_restart`
    is true. Check the version and import path in that launch context, `status`,
@@ -243,16 +253,20 @@ procedure below; a wrapper switch does not move that task.
    supervisor relaunches stopped agents whose `auto_restart` is true, so otherwise
    step 4 would restart them all at once. If that first agent's recorded value is
    false, set it to true for the check and back afterwards, or the supervisor starts
-   nothing. Then refresh supervisor scripts with the
-   old release while the host is stopped and the kill switch is removed (refresh is
-   refused while `supervisor.kill` exists); if that release cannot read current
-   state, stop for a recovery plan instead.
-4. Restart and verify that one agent through its normal host; if the host is the
-   supervisor, then among the affected agents it now launches only the one whose
-   `auto_restart` is true. Then resume the others: set each agent's `auto_restart`
-   back to its recorded value, one agent at a time, verifying each the same way. For
-   the gateway, stop and unregister the new task before reinstalling the old
-   registration as below.
+   nothing. A protected agent (the liaison or a lead) needs the protected restart
+   request instead, as in "Switch the team's tool runtime", step 3. Then, with the
+   host stopped, disable its scheduled task, remove the kill switch and refresh
+   supervisor scripts with the old release (refresh is refused while
+   `supervisor.kill` exists), and enable the task again once the refresh has
+   succeeded; the commands are in "Switch the team's tool runtime", step 4. If that
+   release cannot read current state, stop for a recovery plan instead.
+4. If the gateway is rolled back too, do that first, before any paid worker
+   restarts: stop and unregister the new task, then reinstall the old registration
+   as below. Restart and verify that one agent through its normal host; if the host
+   is the supervisor, then among the affected agents it now launches only the one
+   whose `auto_restart` is true. Then resume the others: set each agent's
+   `auto_restart` back to its recorded value, one agent at a time, verifying each the
+   same way.
 5. If file restoration is necessary, use the manual restore procedure. Reconcile
    actions performed since the backup before resuming: a rollback cannot undo a
    sent message, a merged change or a provider charge.
@@ -436,9 +450,13 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
    `supervisor-state.json.bak`. A valid backup can be read as a fallback;
    both invalid means no automatic action. Do not delete both to obtain an empty
    state. Repair with the host stopped and ownership accounted for.
-7. To resume, keep the host stopped while removing `supervisor.kill`, refresh
-   scripts if the runtime changed, then start the one intended host and verify a
-   fresh report. Refresh is itself refused while the kill switch is present.
+7. To resume, keep the host stopped while removing `supervisor.kill`. If the
+   runtime changed, also disable the scheduled task before you remove it
+   (`Disable-ScheduledTask -TaskName $SupervisorTask`), refresh scripts after, and
+   enable the task again once the refresh has succeeded
+   (`Enable-ScheduledTask -TaskName $SupervisorTask`). Then start the one intended
+   host and verify a fresh report. Refresh is itself refused while the kill switch
+   is present.
 
 To change the scheduled PowerShell host: stop and prove the old host gone,
 uninstall that project's task, select the new PowerShell, refresh scripts,
@@ -992,16 +1010,18 @@ store or rotate signing keys as a substitute for recovering them.
    processes and use attended supervisor recovery where necessary.
 6. With automatic actions still disabled (the kill switch in place), inspect
    `status`, `doctor` and the supervisor report. Resolve holds and validate the
-   task/runtime paths. Resume one agent first: set `auto_restart` to `false` on every
-   agent's entry in the restored `supervisor.json` except that one (if its restored
-   value is false, set it to true for the check and back afterwards), then resume as
-   in step 7 of "Pause, stop and recover" (with the host stopped, remove
-   `supervisor.kill`, refresh scripts if the runtime changed, start the one host).
-   If the project has a gateway, start it before any paid worker resumes: once you
-   have checked its restored state (step 3), run `gateway start` once and continue
-   only when `gateway status` shows both readiness fields true. Then set the others
-   back to their restored values one at a time. A file restore does not promise
-   exactly-once execution of external work.
+   task/runtime paths. If the project has a gateway, start it now, while the kill
+   switch is still in place, so that no paid worker starts before it: once you have
+   checked its restored state (step 3), run `gateway start` once and continue only
+   when `gateway status` shows both readiness fields true. Resume one agent first:
+   set `auto_restart` to `false` on every agent's entry in the restored
+   `supervisor.json` except that one (if its restored value is false, set it to true
+   for the check and back afterwards; a protected agent needs the protected restart
+   request, as in "Switch the team's tool runtime", step 3), then resume as in step 7
+   of "Pause, stop and recover" (with the host stopped, remove `supervisor.kill` and,
+   if the runtime changed, refresh scripts with the task disabled; then start the one
+   host). Then set the others back to their restored values one at a time. A file
+   restore does not promise exactly-once execution of external work.
 
 ## Find logs and scheduled tasks
 
