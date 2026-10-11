@@ -188,7 +188,8 @@ def compute_verdict(record: dict, gate_check: dict,
                     signoff_eval: dict | None = None,
                     worktree_eval: dict | None = None,
                     dod_eval: dict | None = None,
-                    external_workers: frozenset[str] = frozenset()) -> dict[str, Any]:
+                    external_workers: frozenset[str] = frozenset(),
+                    active_agents: frozenset[str] | None = None) -> dict[str, Any]:
     """PURE: derive HOLD|GO + the stable hold codes from a close ``record`` and a
     ``gate_check`` result (:func:`gates.check_gates` output for the close's
     gate_scope). No I/O. GO requires, in order of the codes below: a well-formed
@@ -211,8 +212,10 @@ def compute_verdict(record: dict, gate_check: dict,
     ``assurance:<scope>`` gate's fields) and passes the already-resolved bundle in;
     :func:`evaluate_dod` only COUNTS. It is ``None`` when the close's scope has no
     DoD requirements, in which case the fold is a no-op (byte-identical to today).
-    ``external_workers`` are the seats that run through the paid gateway: whatever a hand-edited record says, an
-    ack from one of them never satisfies a required lens.
+    ``external_workers`` are the seats that run through the paid gateway and ``active_agents`` is the current roster
+    (None: not checked). Like a sign-off signature or a stored override, an ack on a required lens counts only
+    while its author is, at check time, on the active roster and not a paid gateway seat; a retired, removed,
+    renamed-away or unknown author's ack is ignored and named in the hold.
     Returns ``{"verdict", "holds": [{code, detail}], "ok"}``."""
     holds: list[dict] = []
 
@@ -265,10 +268,11 @@ def compute_verdict(record: dict, gate_check: dict,
         if not isinstance(ack, dict):
             hold(HOLD_MISSING_LENS, f"required lens {lid!r} has no ack")
             continue
-        if ack.get("from") in external_workers:
-            hold(HOLD_UNAUTHORIZED_ACK,
-                 f"lens {lid!r} ack from {ack.get('from')!r} is ignored: a paid gateway seat (external worker) "
-                 "cannot satisfy a required lens")
+        author = ack.get("from")
+        if author in external_workers or (active_agents is not None and author not in active_agents):
+            why = ("a paid gateway seat (external worker) cannot satisfy a required lens"
+                   if author in external_workers else "its author is no longer an active seat on the roster")
+            hold(HOLD_UNAUTHORIZED_ACK, f"lens {lid!r} ack from {author!r} is ignored: {why}")
             continue
         if not _ack_authorized(ack, lens):
             hold(HOLD_UNAUTHORIZED_ACK,
@@ -1378,19 +1382,10 @@ def external_worker_agents(cfg: dict) -> set[str]:
     from agenttalk.store import TRUST_CLASS_EXTERNAL_WORKER
 
     classes = cfg.get("trust_classes")
-    external: set[str] = set()
-    if isinstance(classes, dict):
-        external = {agent for agent, value in classes.items()
-                    if isinstance(agent, str) and value == TRUST_CLASS_EXTERNAL_WORKER}
-    # Retiring, removing or renaming a paid seat must not erase what it was: its tombstone remembers it, so an ack
-    # it left behind keeps being ignored (a rename also carries the class to the new name).
-    retired = cfg.get("retired")
-    for entry in retired if isinstance(retired, list) else []:
-        if isinstance(entry, dict) and isinstance(entry.get("name"), str) and (
-                entry.get("was_external_worker") is True
-                or entry.get("reason") == "removed external-worker identity"):
-            external.add(entry["name"])
-    return external
+    if not isinstance(classes, dict):
+        return set()
+    return {agent for agent, value in classes.items()
+            if isinstance(agent, str) and value == TRUST_CLASS_EXTERNAL_WORKER}
 
 
 def split_signoff_candidates(

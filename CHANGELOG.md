@@ -149,16 +149,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the close is counted, and `close check` names the lens and says why. A trusted seat's ack still satisfies it.
   - The acceptance checks name an acceptance lens ack from such a seat and do not accept it as independent. Only the
     required acceptance lenses are checked; an optional note from such a seat is left alone.
-  - Retiring, removing or renaming a paid gateway seat no longer makes it forgettable: its retired entry now says it
-    was a paid seat (new entries; a rename also keeps the paid class on the new name), so an ack it left on a required
-    lens keeps being ignored. A trusted seat's ack keeps counting after it retires, as before.
+  - An ack stored on a required lens now counts only while its author is, at check time, on the active roster and is
+    not a paid gateway seat: the same rule a sign-off signature and a stored override already follow. An ack from a
+    retired, removed, renamed-away or unknown author is ignored and `close check` names it. This deliberately turns
+    an older GO that rested on a since-retired trusted reviewer's ack into a HOLD, until a current trusted seat acks
+    the lens (or a current trusted lead records an override ack). Nothing about a seat's past is looked up, so a
+    damaged or older roster cannot bring a paid seat's ack back.
   - `close check` no longer reads a malformed close record (for example `lens_acks` that is a string) before
     reporting it: it gives the normal "malformed close record" HOLD instead of a crash. `close publish` still
     refuses a malformed record with its existing error (exit 2); it never publishes one.
 
-  What you need to do: nothing. An older close that rested on a paid seat's ack of a required lens is now on HOLD
-  until a trusted seat acks that lens. A paid seat retired or removed before this change has no such note on its
-  retired entry, except one removed from the roster as a paid seat (which already said so in its reason).
+  What you need to do: nothing, except that an older close that rested on a paid seat's ack, or on the ack of a
+  seat that has since left the roster, is now on HOLD until a current trusted seat acks that lens.
 
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer

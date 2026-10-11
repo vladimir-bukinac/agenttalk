@@ -215,43 +215,26 @@ def test_a_paid_seats_old_ack_stays_ignored_after_it_leaves(tmp_path: Path, caps
     code, result = _verdict(root, capsys)
     assert code == 3, (kind, label)
     if kind != "signoff-set":
-        assert any("paid gateway" in h["detail"] for h in result["holds"])
+        assert any("no longer an active seat" in h["detail"] and "'gw'" in h["detail"] for h in result["holds"])
     assert _run(["close", "publish", "--id", "rel", "--from", "lead", "--verdict", "go"], root) != 0
 
 
 @pytest.mark.parametrize("kind", ["hand-declared", "acceptance"])
-@pytest.mark.parametrize("label,leave", LEAVING[:2], ids=[x[0] for x in LEAVING[:2]])
-def test_a_trusted_seats_old_ack_keeps_counting_after_it_retires(tmp_path: Path, capsys, kind, label, leave) -> None:
+@pytest.mark.parametrize("label,leave", LEAVING, ids=[x[0] for x in LEAVING])
+def test_a_retired_trusted_seats_old_ack_no_longer_counts_and_a_current_seat_recovers_it(
+        tmp_path: Path, capsys, kind, label, leave) -> None:
+    """Deliberate: a GO that rested on a since-retired reviewer's ack is a HOLD until a current seat acks."""
     root = _store_with_old_ack(tmp_path, kind, "alice")
+    assert close.HOLD_MISSING_LENS not in {h["code"] for h in _verdict(root, capsys)[1]["holds"]}
     leave(Store(root), "alice")
+    code, result = _verdict(root, capsys)
+    assert code == 3
+    assert any("no longer an active seat" in h["detail"] and "'alice'" in h["detail"] for h in result["holds"])
+    lens = "acceptance-run-x" if kind == "acceptance" else "sec"
+    # recovery: a fresh override ack by the current trusted lead counts
+    assert _ack(root, "lead", lens, "accept", "--override") == 0
     _code, result = _verdict(root, capsys)
-    assert close.HOLD_MISSING_LENS not in {h["code"] for h in result["holds"]}
-    assert not any("paid gateway" in h["detail"] for h in result["holds"])
-
-
-def test_the_remembered_paid_seat_survives_a_rename_for_both_names(tmp_path: Path) -> None:
-    store = Store(tmp_path)
-    store.init(["lead", "gw"])
-    store.set_trust_class("gw", "external-worker")
-    store.rename_agent("gw", "gw2")
-    assert close.external_worker_agents(store.load_config()) == {"gw", "gw2"}
-
-
-def test_a_removed_paid_seat_cannot_be_added_again_under_the_same_name(tmp_path: Path) -> None:
-    store = Store(tmp_path)
-    store.init(["lead", "gw"])
-    store.set_trust_class("gw", "external-worker")
-    store.remove_agent("gw")
-    with pytest.raises(ValueError, match="tombstone"):
-        store.add_agent("gw")
-    assert close.external_worker_agents(store.load_config()) == {"gw"}
-
-
-def test_a_trusted_seat_is_never_remembered_as_a_paid_seat(tmp_path: Path) -> None:
-    store = Store(tmp_path)
-    store.init(["lead", "alice"])
-    store.retire_agent("alice")
-    assert close.external_worker_agents(store.load_config()) == set()
+    assert not any(f"lens {lens!r}" in h["detail"] for h in result["holds"])
 
 
 def test_publish_refuses_a_malformed_record_with_its_existing_error(tmp_path: Path, capsys) -> None:
@@ -271,3 +254,38 @@ def test_the_roster_refuses_to_clear_a_paid_seats_class(tmp_path: Path) -> None:
     store.set_trust_class("gw", "external-worker")
     with pytest.raises(ValueError, match="cannot be cleared"):
         store.set_trust_class("gw", None)
+
+
+def test_an_author_the_roster_never_heard_of_does_not_count(tmp_path: Path, capsys) -> None:
+    """No history is needed: an ack from a name that is not on the active roster (for example a paid seat dropped
+    by an older forced re-init, or a hand-edited record) is ignored."""
+    root = _store_with_old_ack(tmp_path, "hand-declared", "ghost")
+    code, result = _verdict(root, capsys)
+    assert code == 3
+    assert any("no longer an active seat" in h["detail"] and "'ghost'" in h["detail"] for h in result["holds"])
+
+
+def test_junk_in_the_retired_entries_cannot_revive_a_paid_acks(tmp_path: Path, capsys) -> None:
+    root = _store_with_old_ack(tmp_path, "hand-declared", "gw")
+    Store(root).remove_agent("gw")
+    path = Store(root).config_path
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    for entry in cfg.get("retired", []):
+        entry["was_external_worker"] = ["not", "a", "bool"]
+        entry["reason"] = "free text"
+    cfg["retired"] = []                       # and a forced re-init that merged the records away
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    code, _result = _verdict(root, capsys)
+    assert code == 3
+    assert _run(["close", "publish", "--id", "rel", "--from", "lead", "--verdict", "go"], root) != 0
+
+
+def test_an_optional_lens_ack_from_a_departed_author_stays_neutral(tmp_path: Path, capsys) -> None:
+    root = _init(tmp_path)
+    assert _run(["close", "open", "--id", "rel", "--from", "lead", "--scope", "release", "--revision", SHA,
+                 "--non-lane-isolation-not-asserted", "--dirty-artifact", "d:1", "--lens", "sec",
+                 "--allow", "sec:alice", "--optional-lens", "note", "--allow", "note:alice"], root) == 0
+    assert _ack(root, "alice", "note") == 0
+    Store(root).retire_agent("alice")
+    _code, result = _verdict(root, capsys)
+    assert not any("'note'" in h["detail"] for h in result["holds"])

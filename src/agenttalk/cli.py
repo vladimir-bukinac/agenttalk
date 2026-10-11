@@ -4130,7 +4130,8 @@ def cmd_close(args: argparse.Namespace) -> int:
                     if wellformed else None)
         result = close_mod.compute_verdict(
             rec, gate_check, signoff_eval, worktree_eval, dod_eval,
-            external_workers=frozenset(close_mod.external_worker_agents(store.load_config())))
+            external_workers=frozenset(close_mod.external_worker_agents(store.load_config())),
+            active_agents=frozenset(store.active_agents()))
         left_out = (signoff_eval or {}).get("excluded_candidates") or {}
         if left_out:
             result["signoff_exclusions"] = left_out
@@ -4201,7 +4202,8 @@ def cmd_close(args: argparse.Namespace) -> int:
                     record["worktree_isolation"] = worktree_eval
                     result = close_mod.compute_verdict(
                         record, gate_check, signoff_eval, worktree_eval, dod_eval,
-                        external_workers=frozenset(close_mod.external_worker_agents(store.load_config())))
+                        external_workers=frozenset(close_mod.external_worker_agents(store.load_config())),
+            active_agents=frozenset(store.active_agents()))
                     if args.verdict == "go" and result["verdict"] != close_mod.VERDICT_GO:
                         sys.stderr.write(
                             "agenttalk close publish: refusing GO - close check is HOLD:\n")

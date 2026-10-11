@@ -1387,7 +1387,6 @@ class Store:
                         "renamed_to": rn,
                         "reason": (e.get("reason")
                                    if isinstance(e.get("reason"), str) else None),
-                        **({"was_external_worker": True} if e.get("was_external_worker") is True else {}),
                     })
             raw_trust = raw.get("trust_classes") if isinstance(raw, dict) else None
             if isinstance(raw_trust, dict):
@@ -1423,7 +1422,6 @@ class Store:
                     "retired_at": _now_iso(),
                     "renamed_to": None,
                     "reason": "external-worker omitted by force init",
-                    "was_external_worker": True,
                 })
                 retired_keys.add(historical_name.casefold())
         if retired_carry:
@@ -2800,7 +2798,6 @@ class Store:
                     "retired_at": _now_iso(),
                     "renamed_to": None,
                     "reason": "removed external-worker identity",
-                    "was_external_worker": True,
                 })
                 cfg["retired"] = retired
                 validate_retired(retired, roster)
@@ -3337,20 +3334,16 @@ class Store:
                 raise ValueError(
                     f"cannot retire {name!r}: not in the active roster {sorted(active)}"
                 )
-            was_external = (cfg.get("trust_classes") or {}).get(name) == TRUST_CLASS_EXTERNAL_WORKER
             self._strip_identity(cfg, name)
             retired = cfg.get("retired")
             if not isinstance(retired, list):
                 retired = []
-            entry = {
+            retired.append({
                 "name": name,
                 "retired_at": _now_iso(),
                 "renamed_to": renamed_to,
                 "reason": reason,
-            }
-            if was_external:
-                entry["was_external_worker"] = True     # durable: a retired paid seat stays one
-            retired.append(entry)
+            })
             cfg["retired"] = retired
             validate_retired(retired, cfg.get("agents", []) or [])  # fail before write
             self._write_config(cfg)
@@ -3396,15 +3389,12 @@ class Store:
             retired = cfg.get("retired")
             if not isinstance(retired, list):
                 retired = []
-            entry = {
+            retired.append({
                 "name": old,
                 "retired_at": _now_iso(),
                 "renamed_to": new,
                 "reason": reason,
-            }
-            if old_trust_class == TRUST_CLASS_EXTERNAL_WORKER:
-                entry["was_external_worker"] = True     # durable: the old name stays a paid seat's name
-            retired.append(entry)
+            })
             cfg["retired"] = retired
             roster = list(cfg.get("agents", []) or [])
             roster.append(new)
