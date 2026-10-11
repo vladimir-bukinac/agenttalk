@@ -2010,23 +2010,24 @@ def start_task(
     # returns before the service asks for the lock. Readiness is polled after the lock is released.
     kill = kill_switch_path(root)
     stop_file: bytes | None = None
-    pending_restore = False        # the stop file was taken away and has not been put back yet
+    started = False                           # the task start request has succeeded
+    not_protected: GatewayConfigError | None = None
 
     def put_back(exc: BaseException) -> None:
         """Put back the stop file the operator had (never create one they lacked)."""
-        nonlocal pending_restore
-        pending_restore = False
+        nonlocal not_protected
         if stop_file is None:
             return
         try:
             kill.parent.mkdir(parents=True, exist_ok=True)
             kill.write_bytes(stop_file)
         except BaseException as restore_error:
-            raise GatewayConfigError(
+            not_protected = GatewayConfigError(
                 f"gateway start failed ({exc!r}) and the stop file {kill} could NOT be put back "
                 f"({restore_error!r}): the gateway is NOT protected by a stop file. Run "
                 "`agenttalk gateway stop` now to write it again."
-            ) from exc
+            )
+            raise not_protected from exc
 
     try:
         with _gateway_lifecycle_lock(root, "start"):
@@ -2038,19 +2039,28 @@ def start_task(
             except FileNotFoundError:
                 stop_file = None
             try:
-                pending_restore = True
                 kill.unlink(missing_ok=True)
                 commands.start(identity.task_name)
+                started = True
             except BaseException as exc:
                 # The task was not started: this covers an interrupt right after the removal as well as a
-                # refused start, and is done while the lock is still held.
+                # refused start. The stop file goes back while the lock is still held.
                 put_back(exc)
                 raise
     except BaseException as exc:
-        # Anything that escapes before the readiness wait begins (for example the lock failing to let go after
-        # a successful start) also leaves the stop file in place.
-        if pending_restore:
-            put_back(exc)
+        if not_protected is not None and exc is not not_protected:
+            # The write-back failed and then the lock failed to let go: keep the warning that matters most.
+            raise GatewayConfigError(
+                f"{not_protected} Also the lifecycle lock could not be released cleanly: {exc!r}"
+            ) from exc
+        if started:
+            # Only the lock's exit can fail once the start request succeeded. The stop file stays removed
+            # (it is not restored after the lock is released: the waiting service may already be starting).
+            raise GatewayConfigError(
+                "gateway start was requested and the gateway may be starting, but the lifecycle lock could not "
+                f"be released cleanly ({exc!r}). Run `agenttalk gateway status`, then `agenttalk gateway stop` "
+                "if it should not run."
+            ) from exc
         raise
     deadline = time.monotonic() + max(0.0, readiness_timeout_seconds)
     last_errors: list[str] = []

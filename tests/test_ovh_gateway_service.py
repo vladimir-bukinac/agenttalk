@@ -3154,29 +3154,41 @@ def test_other_lifecycle_operations_keep_the_plain_lock_wait(tmp_path, monkeypat
     assert time.monotonic() - started < 10
 
 
-def _lock_that_fails_on_exit(monkeypatch) -> None:
+def _lock_that_fails_on_exit(monkeypatch, seen=None) -> None:
     import contextlib
 
     @contextlib.contextmanager
     def failing_exit(_root, _operation):
-        yield
-        raise OSError("could not release the lifecycle lock")
+        try:
+            yield
+        finally:                      # the lock lets go, and then fails (also while another error passes through)
+            if seen is not None:
+                seen.append("released")
+            raise OSError("could not release the lifecycle lock")  # noqa: B012
 
     monkeypatch.setattr(service, "_gateway_lifecycle_lock", failing_exit)
 
 
 @pytest.mark.parametrize("backend", [FakeCommands, FakeSystemdCommands])
-def test_a_lock_exit_error_after_a_successful_start_keeps_the_stop_file(tmp_path, monkeypatch, backend) -> None:
+def test_a_lock_exit_error_after_a_successful_start_does_not_restore_after_the_release(
+        tmp_path, monkeypatch, backend) -> None:
+    """Once the start request succeeded the stop file stays removed: the service just launched may already hold the
+    lock, so putting the file back after the release would come too late to protect anything and would lie."""
     commands = backend()
     root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
-    _put_stop_file(root, "stopped by the operator\n")
-    _lock_that_fails_on_exit(monkeypatch)
+    _put_stop_file(root, "stopped by the operator" + chr(10))
+    seen: list[str] = []
+    _lock_that_fails_on_exit(monkeypatch, seen)
 
-    with pytest.raises(OSError, match="release the lifecycle lock"):
+    with pytest.raises(service.GatewayConfigError) as caught:
         start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
 
-    assert commands.started                                   # the task had been asked to run
-    assert service.kill_switch_path(root).read_text(encoding="ascii") == "stopped by the operator\n"
+    text = str(caught.value)
+    assert "was requested and the gateway may be starting" in text
+    assert "could not be released cleanly" in text and "could not release the lifecycle lock" in text
+    assert "agenttalk gateway status" in text and "agenttalk gateway stop" in text
+    assert seen == ["released"] and commands.started
+    assert not service.kill_switch_path(root).exists()         # not written back after the release
 
 
 def test_a_lock_exit_error_does_not_create_a_stop_file_the_operator_never_had(tmp_path, monkeypatch) -> None:
@@ -3184,7 +3196,30 @@ def test_a_lock_exit_error_does_not_create_a_stop_file_the_operator_never_had(tm
     root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
     _lock_that_fails_on_exit(monkeypatch)
 
-    with pytest.raises(OSError, match="release the lifecycle lock"):
+    with pytest.raises(service.GatewayConfigError, match="may be starting"):
         start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
 
     assert not service.kill_switch_path(root).exists()
+
+
+def test_a_refused_start_a_denied_write_back_and_a_lock_exit_error_keep_the_not_protected_warning(
+        tmp_path, monkeypatch, capsys) -> None:
+    from agenttalk import cli
+    commands = _RefusingStartCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root)
+    flaky = _stop_file_path_class(refuse_write=True)
+    monkeypatch.setattr(service, "kill_switch_path", lambda r: flaky(service.gateway_state_dir(r) / "gateway.kill"))
+    _lock_that_fails_on_exit(monkeypatch)
+    real_start = service.start_task
+    monkeypatch.setattr(service, "start_task", lambda r: real_start(
+        r, commands=commands, ledger=ledger, readiness_timeout_seconds=0))
+    from agenttalk.store import Store
+    Store(root).init(["lead"])
+    capsys.readouterr()
+
+    assert cli.main(["--root", str(root), "gateway", "start"]) == 2
+    text = capsys.readouterr().err                              # what the operator sees
+    assert "NOT protected by a stop file" in text and "agenttalk gateway stop" in text
+    assert "disabled" in text and "denied" in text             # the start error and the write error
+    assert "could not be released cleanly" in text and "could not release the lifecycle lock" in text

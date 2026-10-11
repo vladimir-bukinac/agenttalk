@@ -1058,7 +1058,10 @@ $GatewayTask = '<task_name-from-gateway-status>'
    failed"). A failed `gateway start` puts `gateway.kill` back as it was, so the
    gateway stays protected; if it cannot put the file back it says so and tells you to
    run `gateway stop`, and you do that before anything else. If the start failed,
-   enable the task and run `gateway start` again. Resume one agent first:
+   enable the task and run `gateway start` again. If instead it says the start was
+   requested and the gateway may be starting (the command's lock could not be released
+   cleanly), the stop file is already gone: check `gateway status`, and run
+   `gateway stop` if the gateway should not be running. Resume one agent first:
    set `auto_restart` to `false` on every agent's entry in the restored
    `supervisor.json` except that one (if its restored value is false, set it to true
    for the check and back afterwards; a protected agent needs the protected restart
