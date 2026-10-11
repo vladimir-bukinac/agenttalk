@@ -684,11 +684,14 @@ Then pick the cheapest way to be told, in this order:
    vanish without a signal and without its timeout. At each check-in confirm it
    still runs and re-arm it if not, but only before its expiry and while wakes are
    left: at or after the expiry the watch is over, so close its line in the
-   handover note. When the wait ends with exit 0, read the message. If it is the
-   agreed signal, close the watch line, or agree the next decision point and
-   start a new watch. If it is only an acknowledgement (for example that a task
-   was accepted), re-arm the wait while the expiry has not come and wakes are
-   left. The check-in timer stays your backstop, so
+   handover note. When the wait ends with exit 0, read the message; that wake uses
+   one wake from the budget on the watch line. If it is the agreed signal, close
+   the watch line, or agree the next decision point and start a new watch, and
+   read the message once through your normal inbox (`agenttalk drain --for $SELF`): the scoped wait
+   does not mark it read, so it would otherwise turn up again as new at the next
+   check-in. If it is only an acknowledgement (for example that a task was
+   accepted), re-arm the wait while the expiry has not come and wakes are left.
+   The check-in timer stays your backstop, so
    never leave risky work watched by one wait alone. A lead runs one background
    wait at a time (with `--refuse-stacked-wait`, a second one is refused with exit 6):
    for a second watch, rely
@@ -697,8 +700,10 @@ Then pick the cheapest way to be told, in this order:
 3. **A short repeating timer, only when there is nothing to wait for** (for
    example you are watching a file or a machine that sends no message). Make
    it temporary and focused: its prompt checks that one piece of work and says
-   when to cancel it. Cancel it when the work ends or its wake budget is used
-   up. Every wake re-sends your whole conversation, so a timer every 3 minutes
+   when to cancel it. Its interval is no longer than the longest delay you
+   accepted, and its wake budget must last until the expiry at that interval; if
+   it cannot, shorten the watch or pick another way to be told. Cancel it when
+   the work ends or its wake budget is used up. Every wake re-sends your whole conversation, so a timer every 3 minutes
    is about 20 wakes an hour; near a usage limit, use any watch only for
    urgent work.
 

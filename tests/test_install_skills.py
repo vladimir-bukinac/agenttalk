@@ -964,8 +964,11 @@ def test_lead_routine_claims_only_what_the_commands_do() -> None:
     assert "re-arm it only if the expiry has not come and wakes are left" in routine
     assert "at or after the expiry the watch is over, so close its line in the handover note" in routine
     assert "except progress and composing notes" in routine
-    assert "When the wait ends with exit 0, read the message. If it is the agreed signal" in routine
+    assert "When the wait ends with exit 0, read the message; that wake uses one wake from the budget" in routine
+    assert "If it is the agreed signal, close the watch line, or agree the next decision point" in routine
     assert "If it is only an acknowledgement (for example that a task was accepted), re-arm the wait" in routine
+    assert "the scoped wait does not mark it read" in routine and "agenttalk drain --for $SELF" in routine
+    assert "Its interval is no longer than the longest delay you accepted" in routine
     assert "still shows in `agenttalk threads --for $SELF` as owed to you" in routine
     assert "--heartbeat-interval 0" in routine
     assert "--composing-extend 0 --refuse-stacked-wait" in routine
