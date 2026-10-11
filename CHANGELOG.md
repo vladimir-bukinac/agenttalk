@@ -69,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The source package now holds the documents its own tests read.** The tests shipped in the
+  source package read the new roles page, two pages under `docs/ops/` and the staging example
+  under `docs/examples/`, but the package left those files out, so those tests failed when run
+  from it. The files are now included, with the new overview page, and a new test
+  (`tests/test_sdist_docs.py`) fails when a test names a file under `docs/` that the package
+  leaves out.
+
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer
   who meant to try three setup commands in a throwaway store ran them against the live one;
