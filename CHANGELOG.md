@@ -148,9 +148,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   errors and tells you to run `agenttalk gateway stop` to write it again; until you do, no stop file protects
   the gateway. A gateway launched by that start waits for the startup lock up to 45 s (it used to wait 10 s), so a
   slow but successful start request still succeeds. Once the task start request has succeeded, the stop file stays
-  removed: when the gateway then takes too long to become ready, and also when the startup lock then fails to let
-  go (the command exits with an error saying the start was requested and the gateway may be starting, and to run
-  `agenttalk gateway status` and then `agenttalk gateway stop` if it should not run). If a failed start could not
+  removed: when the gateway then takes too long to become ready, when the command is interrupted, and when the
+  startup lock then fails to let go (the command exits with an error saying the start was requested and the
+  gateway may be starting, and to run `agenttalk gateway status` and then `agenttalk gateway stop` if it should
+  not run). If a failed start could not
   put the stop file back and the lock also failed to let go, you still see that the gateway is not protected and
   that `agenttalk gateway stop` writes the file again.
 
