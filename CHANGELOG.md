@@ -10,6 +10,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The repository now carries its license.** agenttalk has always been offered under the
+  MIT license (the package says so), but the repository had no license file, so GitHub
+  showed "no license", which by default means nobody may reuse the code.
+
+  What you will notice: a `LICENSE` file with the MIT text and the line "Copyright (c) 2026
+  the agenttalk authors". GitHub now shows the MIT license, and the installed package
+  carries the same file. Nothing to do.
+
+- **A technical overview of how agenttalk is built (`docs/OVERVIEW.md`).** One new page
+  that explains how agenttalk is put together, for someone who will run or extend it.
+
+  What you will notice: a new page, `docs/OVERVIEW.md`. It shows the parts and how they talk
+  to each other, where the data lives under `.agenttalk/` (and what a reset keeps), a
+  message's life from send to reply, how the supervisor, wrapper and agent processes relate,
+  how the console and the paid gateway work, and which promises hold and which do not. It has
+  five diagrams, a short list of the words it uses, and an appendix of interfaces. Nothing in
+  the program changed, and no other page was changed.
+
+  What you need to do: nothing.
+
+  Technical details: the page was checked against the code of release 0.100.0. It states the
+  Python versions the project's tests run on (3.10 to 3.13 on Linux, Windows and macOS). Where
+  an older page and the code disagreed, the page follows the code.
+
+- **One page says who does what in a team, which skill to use, and the steps the team follows.**
+  This information was spread over several older pages, some of them out of date. It is
+  the first page of the smaller documentation set the operator asked for on 2026-10-10.
+
+  What you will notice: `docs/ROLES-SKILLS-PROCEDURES.md` describes each role, with what it
+  does, what it must never do and how it hands work on:
+  - the operator and the liaison;
+  - the lead, developer, reviewer, tester, architect and challenger;
+  - a seat that works through the paid gateway.
+
+  It has one entry for every shipped skill, saying when to use it. It also gives current
+  step lists for handing out work, the review cycle, the merge gate, the release ritual, the
+  challenge, the acceptance pass, the lessons lookup, capturing lessons and scratch hygiene.
+  It states the merge rule the team now follows: one recorded GO on the exact head commit, from
+  a reviewer who did not build the change, with green CI and every automated P0, P1 and P2
+  comment triaged. It retires the older rule of two reviewers both re-approving the final commit. Its
+  facts were checked against the code of this version.
+
+  What you need to do: nothing. The older pages stay until a later change moves them to an
+  archive.
+
+  Technical details: `tests/test_roles_skills_doc.py` fails when a shipped skill has no
+  entry on the page, or the page names a skill that does not ship. A shipped skill is a
+  Claude Code file in `src/agenttalk/skills/claude/` or a folder with a `SKILL.md` in
+  `src/agenttalk/skills/codex/` or `src/agenttalk/skills/devkit/`.
+
+- An operations guide brings runtime upgrades and rollback, supervisor hosting,
+  paid-gateway setup and spending limits, backups, recovery, logs and attended
+  cleanup together in `docs/OPERATIONS.md`. It distinguishes shipped commands
+  from steps that still need an operator or maintainer.
+
 ### Fixed
 
 - **The check before an irreversible step now also stops on an outdated request (#448).**
@@ -200,6 +257,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missing completion record (#178) is still listed. The roadmap's rows for the lessons
   look-up, the windowless gateway task, the worktree release, the domain-registry fix and the
   dependency batch now say they are done. No behavior changed.
+
+- **Lead skills: renew timers before they expire, and watch named work without a fast timer.**
+  The lead skills already told a lead to set a check-in timer (about every 30 minutes) and a
+  handover-note timer (about every 2 hours), but only to recreate them after a restart. In
+  Claude Code these timers belong to the session and lapse after some days, and nothing says so.
+
+  What you will notice in both lead skills (Claude and Codex):
+  - The handover note now has one line per standing timer: its name, when it is next due, when
+    it expires (`unverified` if that cannot be read), the latest time to renew it and when it
+    last ran for certain. At each check-in and each restart the lead compares those lines with
+    what is really scheduled and renews a timer before it expires, by replacing it, never by
+    adding a second one. The text does not promise that a timer never lapses; a lead that was
+    paused for long should assume the timers are gone and rebuild them from the note.
+  - A new short section, "Watching named work", for work that needs close attention. The lead
+    first agrees the next decision point, the signal that needs action, the longest acceptable
+    delay, and the watch's expiry and wake budget. It prefers the seat's own message, then a
+    background wait that ends when a message about that work arrives (best effort: the host
+    can end it, so the check-in stays the backstop), and uses a short
+    repeating timer only when there is nothing to wait for, as a temporary one that is
+    cancelled when the work ends or the budget is used up. A wrapped lead keeps its turns short,
+    never starts a second reader of its mailbox and never keeps a turn alive with a background
+    wait. A watch lets the lead notice sooner; it cannot steer a seat in the middle of a turn,
+    because a wrapped seat reads new messages between turns.
+
+  What you need to do: a copy of the skill that was installed earlier is not replaced by
+  `agenttalk install-skills` alone; it reports such a file as `skipped`. There is no option
+  for a single skill, so the narrowest update is every agenttalk skill of one agent, without
+  the development skills. For Claude Code: `agenttalk install-skills --claude-only --no-devkit
+  --dry-run` lists the files that differ (marked `would-skip`), then the same command with
+  `--force` replaces them. For Codex use `--codex-only` instead of `--claude-only`. `--force`
+  replaces every listed file with the bundled one, including a skill you edited yourself (not
+  only the lead skill), so copy any edit you want to keep first. Without `--no-devkit`, a
+  forced run also replaces the edited development skills, and it writes them for both Claude
+  Code and Codex even with `--claude-only` (the run uses the default skill folders unless you
+  name others). Then restart or re-open the lead so it reads the new text.
 
 ## [0.100.0] - 2026-10-10
 
