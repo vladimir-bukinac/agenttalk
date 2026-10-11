@@ -717,6 +717,7 @@ def resolve(store, record, *, live=False, preflight_scan=None, decision_at=None)
             snapshot["trust_checked"] = True
             snapshot["reproductions"] = _reproduce(store, record, plan, bundle, rows, artifacts, holds)
             _ack_bindings(record, plan, holds)
+            _external_worker_acks(store, record, holds)
             acceptance_history.evaluate(store, record, plan, snapshot)
             if schema(route["schema_version"]).cold:
                 from agenttalk import acceptance_cold, acceptance_hygiene
@@ -761,6 +762,15 @@ def ack_binding(record):
     if schema(route.get("schema_version")).preflight:
         keys.extend(["environment_hash", "preflight_open_hash", "preflight_attach_hash"])
     return {key: route.get(key) for key in keys}
+
+
+def _external_worker_acks(store, record, holds):
+    """A paid gateway seat (external worker) is never an independent acceptance runner, reproducer or reviewer."""
+    external = close.external_worker_agents(store.load_config())
+    for lens, ack in record["lens_acks"].items():
+        if lens.startswith("acceptance-") and ack.get("from") in external:
+            holds.append(("acceptance_lens_not_independent",
+                          f"lens {lens} ack from {ack.get('from')} is ignored: a paid gateway seat cannot satisfy it"))
 
 
 def _ack_bindings(record, plan, holds):

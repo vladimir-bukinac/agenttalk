@@ -187,7 +187,8 @@ def empty_close(close_id: str, *, scope: str, revision: str, revision_kind: str,
 def compute_verdict(record: dict, gate_check: dict,
                     signoff_eval: dict | None = None,
                     worktree_eval: dict | None = None,
-                    dod_eval: dict | None = None) -> dict[str, Any]:
+                    dod_eval: dict | None = None,
+                    external_workers: frozenset[str] = frozenset()) -> dict[str, Any]:
     """PURE: derive HOLD|GO + the stable hold codes from a close ``record`` and a
     ``gate_check`` result (:func:`gates.check_gates` output for the close's
     gate_scope). No I/O. GO requires, in order of the codes below: a well-formed
@@ -210,6 +211,8 @@ def compute_verdict(record: dict, gate_check: dict,
     ``assurance:<scope>`` gate's fields) and passes the already-resolved bundle in;
     :func:`evaluate_dod` only COUNTS. It is ``None`` when the close's scope has no
     DoD requirements, in which case the fold is a no-op (byte-identical to today).
+    ``external_workers`` are the seats that run through the paid gateway: whatever a hand-edited record says, an
+    ack from one of them never satisfies a required lens.
     Returns ``{"verdict", "holds": [{code, detail}], "ok"}``."""
     holds: list[dict] = []
 
@@ -261,6 +264,11 @@ def compute_verdict(record: dict, gate_check: dict,
         ack = acks.get(lid)
         if not isinstance(ack, dict):
             hold(HOLD_MISSING_LENS, f"required lens {lid!r} has no ack")
+            continue
+        if ack.get("from") in external_workers:
+            hold(HOLD_UNAUTHORIZED_ACK,
+                 f"lens {lid!r} ack from {ack.get('from')!r} is ignored: a paid gateway seat (external worker) "
+                 "cannot satisfy a required lens")
             continue
         if not _ack_authorized(ack, lens):
             hold(HOLD_UNAUTHORIZED_ACK,
