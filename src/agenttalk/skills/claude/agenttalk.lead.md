@@ -228,12 +228,13 @@ for those.
 - **Check before irreversible actions (0.14.0).** Immediately before any
   irreversible action tied to a tracked request (merge, release, deploy,
   delete, fire-type actions), run
-  `agenttalk check --for $SELF --to-request <RID> --gates`. Exit 3 = the
-  request was RESCINDED, or a gate says HOLD: hard stop — do not act, and
-  reply on the thread that you aborted. Exit 4 = unknown id: treat as
-  stale and re-confirm with the counterparty. Only exit 0 (current)
-  clears you to act. Without `--gates` the check looks only at rescind
-  and does not consult the gates at all.
+  `agenttalk check --for $SELF --to-request <RID> --epoch --gates`. Exit
+  3 = the request was RESCINDED, it was sent before the latest epoch
+  barrier, or a gate says HOLD: hard stop — do not act, and reply on the
+  thread that you aborted. Exit 4 = unknown id: treat as stale and
+  re-confirm with the counterparty. Only exit 0 (current) clears you to
+  act. Without `--epoch` the check ignores barriers, and without
+  `--gates` it does not consult the gates at all.
 
 - **Role audiences + delivery accounting (0.15.0).** Prefer
   `broadcast --to-role <role>` over hand-curated groups when roles
