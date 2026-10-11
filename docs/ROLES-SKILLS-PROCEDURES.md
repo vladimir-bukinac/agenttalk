@@ -249,11 +249,11 @@ The devkit is one set of skills for how to do the work itself. Each line names w
 3. **Send a typed task.** Its `--stage` is one of `design`, `build`, `read`, `fix`, `delta` or `sweep`; agenttalk refuses any other.
    ```
    agenttalk task --from <lead> --to <agent> --subject "<what>" \
-     --work-item <slug> --stage <stage> --work-round <n> --work-head <full commit id> \
+     --work-item <slug> --stage <stage> --work-round <n> [--work-head <full commit id>] \
      -m "<goal, scope, how to check it, the reply you expect>"
    ```
    - **Keep one `work_item` slug** for the whole life of a piece of work. A slug is its short name: lower-case letters, digits and hyphens, starting with a letter or digit, at most 64 characters.
-   - **Name the commit:** `--work-head` names the exact commit a review reads.
+   - **Name the commit a review reads:** `--work-head` is not required on any stage, but give it on a `read`, `delta` or `sweep` task: with it, a reply that names a different commit is refused; without it, whatever commit the reviewer names is recorded as given. On a `design`, `build` or `fix` task it can name the commit the work starts from, and the builder's reply reports the new commit.
    - **Name one lessons-lookup term:** the brief gives one subsystem or failure word for the lessons lookup (see [4.7](#47-the-lessons-lookup)).
    - **A replacement task** carries `--supersedes <old request id>`.
    - **A seat that has never run is refused:** agenttalk sends a task only to a seat whose health record shows an agenttalk version that understands tasks. A seat that has not started yet has no such record, so start it first; `--force` sends anyway.
@@ -415,7 +415,7 @@ The words it uses:
 5. **The reviewer reconciles** after the reveal: `agenttalk close acceptance cold --id <id> --phase reconcile --file <reconciliation.json> --from <reviewer>`.
 6. **The acceptance lenses accept,** each with typed evidence: every partition, each reproducer and the cold reviewer, and, if sign-offs were derived in step 2, each generated sign-off lens (named like `so:<risk class>:<set>#<n>`; `close check` names any sign-off set still short of acknowledgements) by distinct eligible candidates. Each one uses `agenttalk close ack --id <id> --lens <lens> --status accept --from <agent> --risk-class <class> --release-blocker <yes|no|unknown> --tests-referenced "<tests>" --tests-executed "<tests>" --residual-risk "<what is left>" --evidence <pointer>`. An accept without those fields is refused; a field given as `n/a` also needs `--na-reason`.
 7. **Check and publish:** `agenttalk close check --id <id>`, then `agenttalk close publish --id <id> --verdict go --from <lead>`.
-8. **If it fails,** first publish the failed attempt as HOLD, since a successor needs a published parent: `agenttalk close publish --id <id> --verdict hold --from <lead>`.
+8. **If it fails,** first publish the failed attempt as HOLD, since a successor needs a published parent: `agenttalk close publish --id <id> --verdict hold --from <lead>`. A published HOLD exits with code 3, not 0, and prints `published close <id>: HOLD by <lead>`; look for that line before step 9, and do not run the command again (a second publish is refused as already published).
 9. **Then start a successor attempt,** under a new id and with a fresh cold reviewer: `agenttalk close acceptance successor --id <new-id> --parent <id> --acceptance-plan <plan> --project-repo <checkout> --revision <commit> --reason "<why a new attempt>" --from <lead>`. The successor keeps the parent's derived sign-offs. If the commit, the risk list or the policy has changed since they were derived, `close check` holds them as out of date until the lead runs `agenttalk close signoffs apply` again.
 
 `agenttalk close acceptance preflight --plan <plan> --cache-root <cache>` checks a staged plan offline without running any tools. It is for schema-4 plans with a staged cache only, not for the schema-3 plan above.
