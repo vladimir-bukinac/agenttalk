@@ -1991,10 +1991,24 @@ def start_task(
         raise LedgerBlocked("front token cannot authorize child turn issuance")
     if current["ready"]:
         return {"started": False, "ready": True, "task_name": identity.task_name}
-    kill_switch_path(root).unlink(missing_ok=True)
+    # Check the ports first: a busy port must leave the operator's stop file alone.
     exclusive_bind_probe(PUBLIC_HOST, PUBLIC_PORT)
     exclusive_bind_probe(INTERNAL_HOST, INTERNAL_PORT)
-    commands.start(identity.task_name)
+    kill = kill_switch_path(root)
+    try:
+        stop_file = kill.read_bytes()
+    except FileNotFoundError:
+        stop_file = None
+    kill.unlink(missing_ok=True)
+    try:
+        commands.start(identity.task_name)
+    except BaseException:
+        # The task was not started, so put back the stop file the operator had (never create one they lacked);
+        # otherwise a logon trigger or a restart-on-failure retry could start the gateway they stopped.
+        if stop_file is not None:
+            kill.parent.mkdir(parents=True, exist_ok=True)
+            kill.write_bytes(stop_file)
+        raise
     deadline = time.monotonic() + max(0.0, readiness_timeout_seconds)
     last_errors: list[str] = []
     while time.monotonic() < deadline:

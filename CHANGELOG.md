@@ -69,6 +69,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A failed `agenttalk gateway start` no longer leaves the gateway without its stop file (#456).**
+  The command used to delete `gateway.kill` first and only then check the ports and ask the task to run. If a
+  port was busy, or Windows or systemd refused to run the task (for example because it was disabled), the
+  command failed but the stop file was already gone, so a later logon or restart-on-failure retry could start a
+  gateway you had stopped. The ports are now checked before anything is deleted, and if the task cannot be
+  started the stop file is put back exactly as it was. If you had no stop file, none is created. Once the task
+  has been started nothing changes, including when it then takes too long to become ready.
+
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer
   who meant to try three setup commands in a throwaway store ran them against the live one;
