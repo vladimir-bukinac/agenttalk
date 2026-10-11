@@ -78,7 +78,7 @@ When you need operator input and an operator-facing liaison exists, **escalate**
 To withdraw one of your own tracked requests/proposals, use `rescind --from $SELF --to-request <id>` (thread becomes closed-superseded). Never "retract" in prose.
 
 ### Check before irreversible actions
-Before an irreversible action gated on a request, run `check --for $SELF --to-request <id> --gates` (exit 0 = current, 3 = superseded, rescinded or a gate at HOLD -> HOLD, 4 = unknown). Without `--gates` the check does not consult assurance gates, so always include it.
+Before an irreversible action gated on a request, run `check --for $SELF --to-request <id> --epoch --gates` (exit 0 = current, 3 = superseded, rescinded, sent before the latest epoch barrier, or a gate at HOLD -> HOLD, 4 = unknown). Without `--epoch` the check ignores epoch barriers, and without `--gates` it does not consult assurance gates, so always include both.
 
 ### Capacity hints
 Publish your own headroom with `capacity refresh --for $SELF` (5h/weekly rate-limit budget + context-window fill); a lead reads `capacity` (or `capacity show`) to plan work. Advisory only.
@@ -137,7 +137,7 @@ repair it.
 **Your commands.**
 - Setup/roster: `roster set-operator-facing <name>`; `roster add <name> --unique`; `roster set-role` / `set-group` / `forward` / `retire`.
 - Coordination: `send --from --to --kind question --meta assignment=...`; `broadcast --to-group/--to-role/--all --kind question` (`--resume <bid>` on exit 5); `threads --for $SELF`; `sync --for $SELF`; `status`.
-- Round-trips: `wait --for $SELF --to-request <id>`; `reply --to-request` (use `--dry-run` to preview); `rescind`; `check --for --to-request`; `ack --to-request`.
+- Round-trips: `wait --for $SELF --to-request <id>`; `reply --to-request` (use `--dry-run` to preview); `rescind`; `check --for --to-request --epoch --gates`; `ack --to-request`.
 - Operator relay (v0.42.0, see Section 6): `relay operator-answer --to-request <rid> -m "..."`; `relay operator-command [--to <agent>] [--kind ...] [--override --reason ...] -m "..."`.
 - Stand-down: `release --relay-human --reason "..."` (relay a human's stand-down) or `release --emergency --reason "..."` (narrow override - **must report to operator**).
 - Maintenance: `prune --invalid --dry-run`; `capacity` (team headroom for planning).
@@ -190,7 +190,7 @@ repair it.
 **Your commands.**
 - Hand off for review: generate `$reqId = rq-<guid>`, then `send --from $SELF --to <reviewer> --kind review-request --meta request_id=$reqId --meta base_sha=.. --meta head_sha=.. --meta branch/scope=.. -m "<body>"`, then `wait --for $SELF --to-request $reqId --kind review-result --timeout 600` (or 1800/0).
 - Lane work: `lane assign` (lead, provisions `lane/<id>` worktree by default) -> developer `lane workspace --id <id>` and `cd` there -> `lane check --id --json` (exit 0=GO/3=HOLD) -> `lane deliver --id <id> --from $SELF --gate-scope <scope>`. Do **not** create or reuse your own checkout. `--no-worktree` is only for an explicitly `--advisory` lane with a recorded reason and can never satisfy release isolation.
-- Pre-action gate: `check --for $SELF --to-request <id> --gates` (exit 3 = rescinded, or a gate says HOLD).
+- Pre-action gate: `check --for $SELF --to-request <id> --epoch --gates` (exit 3 = rescinded, sent before the latest epoch barrier, or a gate says HOLD).
 - Operator input: `escalate --from $SELF`.
 
 **Your cadence.**
@@ -220,7 +220,7 @@ the pending transaction with force/abandon/reassign.
 
 **Your commands.**
 - Receive: `wait --for $SELF --timeout 1800` (scoped: `--to-request <id>`).
-- Verify currentness: `check --for $SELF --to-request <id> --gates`.
+- Verify currentness: `check --for $SELF --to-request <id> --epoch --gates`.
 - Reply with typed evidence: `send --kind review-result --meta status=approved|rejected|needs-info` plus typed evidence meta - `risk_class`, `release_blocker`, `tests_referenced`, `tests_executed`, `evidence`, `residual_risk`, `na_reason`. Only approved/rejected are terminal; `needs-info` gives the obligation back to the requester. (NA shape: `status=approved` + `risk_class=none` + `release_blocker=no` + `na_reason`.) Use `reply --na` for broadcast questions outside your role. A `proposal-response` status is exactly `accepted|rejected|countered`, all terminal.
 - Sign off into a close: `agenttalk close ack --id --lens --status accept|counter|na --from` (+ typed evidence).
 - One-shot ephemeral review: launched via `wrap --loop --one-shot` (evidence-only, never counted as a sign-off).
@@ -290,7 +290,7 @@ Assurance closes (`agenttalk close`) aggregate gates + review lenses + remediati
 | `recv [-n N]` / `drain --for $SELF [-n N]` | Read inbox (`drain` = `recv --ack`); bound consuming output with `-n`, never a downstream truncator |
 | `wait --for $SELF [--to-request <id>] [--kind ...]` | Block for messages (listen primitive) |
 | `send` / `reply` / `ack` | Core point-to-point + cursor/thread control |
-| `check --for --to-request <id> [--gates]` | Currentness gate before irreversible action |
+| `check --for --to-request <id> [--epoch] [--gates]` | Currentness gate before irreversible action (use both flags) |
 | `rescind --from --to-request <id>` | Withdraw your own tracked request |
 | `escalate --from $SELF -m ...` | Route a question to the operator-facing liaison |
 | `capacity refresh --for $SELF` | Publish your headroom |

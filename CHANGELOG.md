@@ -69,6 +69,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The source package now holds the documents its own tests read.** The tests shipped in the
+  source package read the new roles page, two pages under `docs/ops/` and the staging example
+  under `docs/examples/`, but the package left those files out, so those tests failed when run
+  from it. The files are now included, with the new overview page, and a new test
+  (`tests/test_sdist_docs.py`) fails when a test names a file under `docs/` that the package
+  leaves out.
+
+- **The check before an irreversible step now also stops on an outdated request (#448).**
+  Before a merge, release, deploy or deletion, every seat is told to run `agenttalk check` on
+  the request it is acting on. That check looked only for a withdrawn request and for gates on
+  HOLD. When the team had since moved to a new epoch (someone ran `agenttalk barrier bump`),
+  a request sent before that still passed, so a seat could act on instructions the team had
+  already set aside.
+
+  What you will notice: the wrapped-turn prompt, the lead, listen and handoff skills (Claude
+  and Codex copies), the README and the agent, user and new-user manuals now give the check
+  with `--epoch`. A request sent before the latest epoch
+  barrier now makes the check exit 3, and the seat stops instead of going ahead. The seat needs
+  no epoch value of its own: the check compares the epoch stamped on the request when it was
+  sent with the current one.
+
+  What you need to do: wrapped seats get the new prompt once their wrapper runs this version.
+  A seat run by hand keeps its older installed skill files, because the installer leaves a
+  changed file alone: preview with `agenttalk install-skills --no-devkit --dry-run`, back up
+  local edits, refresh on purpose with `agenttalk install-skills --no-devkit --force`, then
+  start a new session.
+
+  Technical details: `src/agenttalk/wrapper/prompt.py` (`_DEFAULT_RULES`, the "Before any
+  IRREVERSIBLE action" line), the six skill files, `README.md`, `docs/AGENT-MANUAL.md`,
+  `docs/USER-MANUAL.md` and `docs/AGENTTALK-NEW-USER-MANUAL.md`; `check --epoch` is evaluated
+  by `_epoch_verdict` in `src/agenttalk/cli.py`. The new `tests/test_irreversible_check_text.py`
+  pins the full command in the prompt (both shells) and in every skill, that each Claude and
+  Codex pair says the same thing, and that every check example on those four pages names
+  `--epoch`; `tests/test_skill_lint.py` now pins `--epoch --gates` for the lead skills.
+
+- **A seat that runs through the paid gateway can no longer give a required sign-off (#447).**
+  Such a seat (an "external worker", a cheaper outside model with a narrower level of trust) was
+  kept out of sign-off lists only at the moment the roster changed. If the sign-off policy or the
+  domain lists were edited by hand afterwards, a close could list that seat as a candidate and
+  count its sign-off.
+
+  What you will notice:
+  - A close now leaves a paid gateway seat out when it works out who may sign, so its sign-off
+    is refused when given (`close ack` says why and records nothing, even with `--override`, and
+    `close signoffs override` is refused for such a seat too) and is never counted, even if the
+    record was edited to contain one.
+  - An override recorded earlier now counts only while the seat that recorded it is still on the active
+    roster and is not a paid gateway seat, the same test a signature already passes. If that seat was
+    since reclassified as a paid gateway seat, retired, removed or renamed, the override is ignored as if
+    it had not been recorded: the close goes back to HOLD (and says so) until a trusted seat signs, which
+    then lets it through, or a current trusted lead records the override again. This deliberately turns
+    an older GO that rested on such an override (for example one by a lead who later retired) into a HOLD.
+  - Other candidates are not affected: a trusted seat in the same role or group still satisfies
+    the sign-off. If the paid seat was the only candidate, the close stays on HOLD with the plain
+    reason "its only candidate(s) run through the paid gateway (external workers), which cannot
+    give a sign-off; add a trusted seat to the candidates (or override to escape)".
+  - `close check` (text and `--json`) and `close signoffs plan` name the seats that were left out
+    (`signoff_exclusions` and `excluded_external_workers` in the JSON); they show seat names only.
+  - A close record whose stored sign-off state has the wrong shape (an override list that is not a table,
+    a sign-off set without a text id, an ack whose author is not text) now gives the normal "malformed
+    close record" HOLD instead of a crash.
+  - The roster still refuses to name a paid seat as a candidate when you change it; that check
+    is kept.
+
+  What you need to do: nothing. To let the close pass, name a trusted seat as a candidate, or use
+  the existing `close signoffs override`.
+
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer
   who meant to try three setup commands in a throwaway store ran them against the live one;

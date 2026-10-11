@@ -348,6 +348,8 @@ def validate_manifest(data: Any) -> dict[str, Any]:
                 "dev-gate.json",
                 "dev-gate-requirements.txt",
                 "docs/AGENTTALK-NEW-USER-MANUAL.md",
+                "docs/OVERVIEW.md",
+                "docs/ROLES-SKILLS-PROCEDURES.md",
                 "src/agenttalk/web_static/console.js",
             ],
         },

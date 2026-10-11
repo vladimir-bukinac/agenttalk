@@ -349,37 +349,62 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
     revision = record.get("revision")
     active = set(ev.get("active_agents") or [])
     resolved = ev.get("resolved_candidates") or {}
+    excluded_agents = frozenset(ev.get("excluded_agents") or [])
+    excluded_candidates = ev.get("excluded_candidates") or {}
     overrides = record.get("signoff_overrides", {}) or {}
     for s in req:
         if not isinstance(s, dict):
             continue
         sid = s.get("id")
-        if sid in overrides:
-            continue                    # recorded close-lead escape (audited, not counted)
         required_count = int(s.get("required_count") or 0)
+        rejected = ""
+        if sid in overrides:
+            stored = overrides[sid]
+            by = stored.get("by") if isinstance(stored, dict) else None
+            if by in active and by not in excluded_agents:
+                continue                # recorded close-lead escape (audited, not counted)
+            # Like a signature, an override counts only while its author is on the active roster and not a paid
+            # gateway seat. Otherwise treat the escape as absent, so a trusted sign-off can still satisfy the
+            # set; the rejection is only named on a real hold below.
+            why = ("a paid gateway seat (external worker) that cannot bypass a required sign-off"
+                   if by in excluded_agents else "no longer an active seat on the roster")
+            rejected = f"; the override recorded by {by}, {why}, is ignored"
         if required_count <= 0:
             continue
         candidates = set(resolved.get(sid) or [])
         if not candidates:
+            skipped = sorted(excluded_candidates.get(sid) or [])
+            if skipped:
+                out.append((HOLD_UNROUTABLE_SIGNOFF,
+                            f"signoff {sid!r} requires {required_count} but its only candidate(s) "
+                            f"{', '.join(skipped)} run through the paid gateway (external workers), which "
+                            "cannot give a sign-off; add a trusted seat to the candidates (or override to escape)"
+                            + rejected))
+                continue
             out.append((HOLD_UNROUTABLE_SIGNOFF,
                         f"signoff {sid!r} requires {required_count} but no candidate "
-                        "agents resolve from its refsets (override to escape)"))
+                        "agents resolve from its refsets (override to escape)" + rejected))
             continue
         countable = set(s.get("countable_statuses") or [ACCEPT])
         allow_na = bool(s.get("allow_na"))
         override_counts = bool(s.get("override_counts"))
         signers = _signoff_signers(
             record, s.get("generated_lens_ids") or [], acks, revision, candidates,
-            active, countable, allow_na, override_counts)
+            active, countable, allow_na, override_counts, excluded_agents)
         if len(signers) < required_count:
+            ignored = sorted({
+                a.get("from") for lid in (s.get("generated_lens_ids") or [])
+                for a in [acks.get(lid)] if isinstance(a, dict) and a.get("from") in excluded_agents})
+            note = (f"; ignored the sign-off of {', '.join(ignored)}, a paid gateway seat (external worker) "
+                    "that cannot give one" if ignored else "")
             out.append((HOLD_MISSING_SIGNOFF,
                         f"signoff {sid!r} needs {required_count} distinct qualifying "
-                        f"acks, has {len(signers)}"))
+                        f"acks, has {len(signers)}{note}{rejected}"))
     return out
 
 
 def _signoff_signers(record, lens_ids, acks, revision, candidates, active,
-                     countable, allow_na, override_counts) -> set[str]:
+                     countable, allow_na, override_counts, excluded=frozenset()) -> set[str]:
     """The set of DISTINCT agents who satisfy a signoff set: a qualifying
     (candidate AND active) agent with a non-stale countable ack on any of the set's
     generated lenses. na counts only with allow_na + a reason; an undecided counter
@@ -391,6 +416,8 @@ def _signoff_signers(record, lens_ids, acks, revision, candidates, active,
         if not isinstance(ack, dict):
             continue
         agent = ack.get("from")
+        if agent in excluded:                      # a paid gateway seat never counts, whatever the lists say
+            continue
         if agent not in candidates or agent not in active:
             continue
         if ack.get("revision") != revision:        # stale ack (reviewed other code)
@@ -480,6 +507,28 @@ def _is_wellformed(record: object) -> bool:
             return False
     for key in ("lens_acks", "counters", "remediation_items"):
         if not isinstance(record.get(key), dict):
+            return False
+    return _signoff_state_is_wellformed(record)
+
+
+def _signoff_state_is_wellformed(record: dict) -> bool:
+    """The stored sign-off state is read by indexing and hashing (sets, overrides, acks), so a hand-edited or
+    corrupt record must fail here, as a malformed-state HOLD, rather than raise later."""
+    for ack in record["lens_acks"].values():
+        if not isinstance(ack, dict) or not isinstance(ack.get("from", ""), str):
+            return False
+    overrides = record.get("signoff_overrides", {})
+    if not isinstance(overrides, dict) or not all(
+            isinstance(v, dict) and isinstance(v.get("by"), str) for v in overrides.values()):
+        return False
+    required = record.get("required_signoffs", [])
+    if not isinstance(required, list):
+        return False
+    for item in required:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return False
+        lens_ids = item.get("generated_lens_ids", [])
+        if not isinstance(lens_ids, list) or not all(isinstance(lid, str) for lid in lens_ids):
             return False
     return True
 
@@ -1315,6 +1364,41 @@ def signoff_domain_refset(
     )
 
 
+def external_worker_agents(cfg: dict) -> set[str]:
+    """The seats that run through the paid gateway (trust class external worker). They can never give a
+    sign-off, however a role, group or domain list is edited."""
+    from agenttalk.store import TRUST_CLASS_EXTERNAL_WORKER
+
+    classes = cfg.get("trust_classes")
+    if not isinstance(classes, dict):
+        return set()
+    return {agent for agent, value in classes.items()
+            if isinstance(agent, str) and value == TRUST_CLASS_EXTERNAL_WORKER}
+
+
+def split_signoff_candidates(
+    cfg: dict,
+    *,
+    candidate_refset: dict,
+    default_reviewers: dict,
+    use_default_reviewers: bool,
+    domain_refset: dict,
+    include_domain_reviewers: bool,
+) -> tuple[list[str], list[str]]:
+    """The single candidate merge+resolution contract used by close and roster, split in two: the seats that
+    may give the sign-off, and the paid gateway seats the lists resolved to but that must not."""
+    from agenttalk import domains as domain_mod
+
+    merged = merge_candidate_refsets(
+        candidate_refset,
+        default_reviewers if use_default_reviewers else {},
+        domain_refset if include_domain_reviewers else {},
+    )
+    resolved = domain_mod.resolve_refset(merged, cfg)
+    external = external_worker_agents(cfg)
+    return ([a for a in resolved if a not in external], [a for a in resolved if a in external])
+
+
 def resolve_signoff_candidates(
     cfg: dict,
     *,
@@ -1323,16 +1407,19 @@ def resolve_signoff_candidates(
     use_default_reviewers: bool,
     domain_refset: dict,
     include_domain_reviewers: bool,
+    exclude_external_workers: bool = True,
 ) -> list[str]:
-    """The single candidate merge+resolution contract used by close and roster."""
-    from agenttalk import domains as domain_mod
-
-    merged = merge_candidate_refsets(
-        candidate_refset,
-        default_reviewers if use_default_reviewers else {},
-        domain_refset if include_domain_reviewers else {},
+    """Who may give this sign-off. A paid gateway seat (external worker) is left out unless the caller asks for
+    the raw list; only the roster-time guard does, to see who the lists name."""
+    eligible, excluded = split_signoff_candidates(
+        cfg,
+        candidate_refset=candidate_refset,
+        default_reviewers=default_reviewers,
+        use_default_reviewers=use_default_reviewers,
+        domain_refset=domain_refset,
+        include_domain_reviewers=include_domain_reviewers,
     )
-    return domain_mod.resolve_refset(merged, cfg)
+    return eligible if exclude_external_workers else eligible + excluded
 
 
 def closes_dir(store):
