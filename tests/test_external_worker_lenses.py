@@ -189,7 +189,7 @@ def _store_with_old_ack(tmp_path: Path, kind: str, author: str) -> Path:
                      "--dirty-artifact", "d:1", "--non-lane-isolation-not-asserted"], tmp_path) == 0
         lens = close.load_close(store, "rel")["required_signoffs"][0]["generated_lens_ids"][0]
     else:
-        lens = "acceptance-run-x" if kind == "acceptance" else "sec"
+        lens = "acceptance-run-x" if kind == "acceptance-named" else "sec"
         assert _run(["close", "open", "--id", "rel", "--from", "lead", "--scope", "release", "--revision", SHA,
                      "--non-lane-isolation-not-asserted", "--dirty-artifact", "d:1", "--lens", lens,
                      "--allow", f"{lens}:gw", "--allow", f"{lens}:alice"], tmp_path) == 0
@@ -200,7 +200,7 @@ def _store_with_old_ack(tmp_path: Path, kind: str, author: str) -> Path:
     return tmp_path
 
 
-@pytest.mark.parametrize("kind", ["hand-declared", "acceptance", "signoff-set"])
+@pytest.mark.parametrize("kind", ["hand-declared", "acceptance-named", "signoff-set"])
 @pytest.mark.parametrize("label,leave", LEAVING, ids=[x[0] for x in LEAVING])
 def test_a_paid_seats_old_ack_stays_ignored_after_it_leaves(tmp_path: Path, capsys, kind, label, leave) -> None:
     root = _store_with_old_ack(tmp_path, kind, "gw")
@@ -216,21 +216,29 @@ def test_a_paid_seats_old_ack_stays_ignored_after_it_leaves(tmp_path: Path, caps
     assert code == 3, (kind, label)
     if kind != "signoff-set":
         assert any("no longer an active seat" in h["detail"] and "'gw'" in h["detail"] for h in result["holds"])
+    elif not (label == "renamed away"):
+        # a sign-off set names the departed author whose signature was ignored
+        assert any("ignored the sign-off of gw" in h["detail"] for h in result["holds"]), result["holds"]
     assert _run(["close", "publish", "--id", "rel", "--from", "lead", "--verdict", "go"], root) != 0
 
 
-@pytest.mark.parametrize("kind", ["hand-declared", "acceptance"])
+@pytest.mark.parametrize("kind", ["hand-declared", "acceptance-named", "signoff-set"])
 @pytest.mark.parametrize("label,leave", LEAVING, ids=[x[0] for x in LEAVING])
 def test_a_retired_trusted_seats_old_ack_no_longer_counts_and_a_current_seat_recovers_it(
         tmp_path: Path, capsys, kind, label, leave) -> None:
     """Deliberate: a GO that rested on a since-retired reviewer's ack is a HOLD until a current seat acks."""
     root = _store_with_old_ack(tmp_path, kind, "alice")
     assert close.HOLD_MISSING_LENS not in {h["code"] for h in _verdict(root, capsys)[1]["holds"]}
+    if kind == "signoff-set" and label == "renamed away":
+        pytest.skip("this sign-off fixture also lists a paid seat as a candidate, so the roster refuses a rename")
     leave(Store(root), "alice")
     code, result = _verdict(root, capsys)
     assert code == 3
+    if kind == "signoff-set":
+        assert any("ignored the sign-off of alice" in h["detail"] for h in result["holds"]), result["holds"]
+        return
     assert any("no longer an active seat" in h["detail"] and "'alice'" in h["detail"] for h in result["holds"])
-    lens = "acceptance-run-x" if kind == "acceptance" else "sec"
+    lens = "acceptance-run-x" if kind == "acceptance-named" else "sec"
     # recovery: a fresh override ack by the current trusted lead counts
     assert _ack(root, "lead", lens, "accept", "--override") == 0
     _code, result = _verdict(root, capsys)

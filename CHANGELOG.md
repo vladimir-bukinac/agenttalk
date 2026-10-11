@@ -153,8 +153,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     not a paid gateway seat: the same rule a sign-off signature and a stored override already follow. An ack from a
     retired, removed, renamed-away or unknown author is ignored and `close check` names it. This deliberately turns
     an older GO that rested on a since-retired trusted reviewer's ack into a HOLD, until a current trusted seat acks
-    the lens (or a current trusted lead records an override ack). Nothing about a seat's past is looked up, so a
-    damaged or older roster cannot bring a paid seat's ack back.
+    the lens (or a current trusted lead records an override ack). A sign-off set's HOLD names the author whose
+    signature was ignored. Nothing about a seat's past is looked up, so a damaged or older roster cannot bring a paid
+    seat's ack back.
+  - An acceptance close is the exception to that recovery: its frozen runner must give the accept, so if that runner
+    leaves the team before publication the close stays on HOLD, a lead's override ack does not help, and the close
+    needs a new attempt (a new close id with a plan that names a current runner; a published one continues with
+    `close reopen --successor`). A recovery command is tracked in issue #463.
   - `close check` no longer reads a malformed close record (for example `lens_acks` that is a string) before
     reporting it: it gives the normal "malformed close record" HOLD instead of a crash. `close publish` still
     refuses a malformed record with its existing error (exit 2); it never publishes one.

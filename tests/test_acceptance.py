@@ -1740,6 +1740,30 @@ def test_acceptance_complete_supported_fixture_go(case_v3, capsys):
     assert saved["close_result"]["verdict"] == "GO"
 
 
+def test_acceptance_runner_leaving_holds_and_only_a_new_attempt_recovers(case_v3, capsys):
+    """A real acceptance close: the frozen partition's runner retires after its accept. The close goes to HOLD,
+    naming why; a current lead's override ack is stored but cannot stand in for the frozen runner, so the supported
+    recovery is a new attempt (a new close id, with a plan that names a current runner)."""
+    case = case_v3
+    assert open_attempt(case, "--lens", "acceptance-run-bar", "--allow", "acceptance-run-bar:runner-a",
+                        "--lens", "acceptance-cold", "--allow", "acceptance-cold:cold") == 0
+    complete_v3(case)
+    capsys.readouterr()
+    assert command(case, "check", "--id", "attempt", "--json") == 0               # GO while the runner is on the roster
+    case["store"].retire_agent("runner-a")
+    capsys.readouterr()
+    assert command(case, "check", "--id", "attempt", "--json") == 3
+    holds = json.loads(capsys.readouterr().out)["holds"]
+    assert any(h["code"] == "unauthorized_lens_ack" and "'runner-a'" in h["detail"]
+               and "no longer an active seat" in h["detail"] for h in holds)
+    assert command(case, "ack", "--id", "attempt", "--lens", "acceptance-run-bar", "--from", "lead",
+                   "--override", "--status", "accept", "--risk-class", "quality", "--release-blocker", "no",
+                   "--tests-referenced", "synthetic", "--tests-executed", "synthetic",
+                   "--residual-risk", "increment incomplete", "--evidence", "lead-override") == 0
+    assert "acceptance_lens_not_independent" in check(case, capsys)               # the documented limit
+    assert command(case, "publish", "--id", "attempt", "--from", "lead", "--verdict", "go") != 0
+
+
 @pytest.mark.parametrize("field", ["claims_exposed", "authored_in_scope", "prior_exposure"])
 def test_acceptance_final_cold_rejects_author_or_claims_exposure(case_v3, field):
     assert open_attempt(case_v3) == 0

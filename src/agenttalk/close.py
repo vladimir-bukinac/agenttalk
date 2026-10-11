@@ -391,11 +391,12 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
                             f"signoff {sid!r} requires {required_count} but its only candidate(s) "
                             f"{', '.join(skipped)} run through the paid gateway (external workers), which "
                             "cannot give a sign-off; add a trusted seat to the candidates (or override to escape)"
-                            + rejected))
+                            + _ignored_signers_note(s, acks, active, excluded_agents) + rejected))
                 continue
             out.append((HOLD_UNROUTABLE_SIGNOFF,
                         f"signoff {sid!r} requires {required_count} but no candidate "
-                        "agents resolve from its refsets (override to escape)" + rejected))
+                        "agents resolve from its refsets (override to escape)"
+                        + _ignored_signers_note(s, acks, active, excluded_agents) + rejected))
             continue
         countable = set(s.get("countable_statuses") or [ACCEPT])
         allow_na = bool(s.get("allow_na"))
@@ -404,15 +405,34 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
             record, s.get("generated_lens_ids") or [], acks, revision, candidates,
             active, countable, allow_na, override_counts, excluded_agents)
         if len(signers) < required_count:
-            ignored = sorted({
-                a.get("from") for lid in (s.get("generated_lens_ids") or [])
-                for a in [acks.get(lid)] if isinstance(a, dict) and a.get("from") in excluded_agents})
-            note = (f"; ignored the sign-off of {', '.join(ignored)}, a paid gateway seat (external worker) "
-                    "that cannot give one" if ignored else "")
+            note = _ignored_signers_note(s, acks, active, excluded_agents)
             out.append((HOLD_MISSING_SIGNOFF,
                         f"signoff {sid!r} needs {required_count} distinct qualifying "
                         f"acks, has {len(signers)}{note}{rejected}"))
     return out
+
+
+def _ignored_signers_note(signoff_set: dict, acks: dict, active: set, excluded_agents) -> str:
+    """Name the authors of stored sign-offs that are ignored because they are a paid gateway seat or no longer on
+    the active roster, so a HOLD says why a signature on file does not count."""
+    paid: set[str] = set()
+    gone: set[str] = set()
+    for lid in signoff_set.get("generated_lens_ids") or []:
+        ack = acks.get(lid)
+        author = ack.get("from") if isinstance(ack, dict) else None
+        if not isinstance(author, str):
+            continue
+        if author in excluded_agents:
+            paid.add(author)
+        elif author not in active:
+            gone.add(author)
+    parts = []
+    if paid:
+        parts.append(f"ignored the sign-off of {', '.join(sorted(paid))}, a paid gateway seat (external worker) "
+                     "that cannot give one")
+    if gone:
+        parts.append(f"ignored the sign-off of {', '.join(sorted(gone))}, no longer an active seat on the roster")
+    return "; " + "; ".join(parts) if parts else ""
 
 
 def _signoff_signers(record, lens_ids, acks, revision, candidates, active,
