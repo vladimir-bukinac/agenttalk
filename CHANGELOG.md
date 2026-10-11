@@ -20,8 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   What you will notice:
   - A close now leaves a paid gateway seat out when it works out who may sign, so its sign-off
-    is refused when given (`close ack` says why and records nothing) and is never counted, even if
-    the record was edited to contain one.
+    is refused when given (`close ack` says why and records nothing, even with `--override`, and
+    `close signoffs override` is refused for such a seat too) and is never counted, even if the
+    record was edited to contain one.
   - Other candidates are not affected: a trusted seat in the same role or group still satisfies
     the sign-off. If the paid seat was the only candidate, the close stays on HOLD with the plain
     reason "its only candidate(s) run through the paid gateway (external workers), which cannot

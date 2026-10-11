@@ -130,3 +130,44 @@ def test_the_candidate_contract_excludes_by_default_and_the_roster_guard_can_sti
     assert sorted(close.resolve_signoff_candidates(cfg, exclude_external_workers=False, **args)) == ["alice", "gw"]
     assert close.split_signoff_candidates(cfg, **args) == (["alice"], ["gw"])
     assert close.external_worker_agents(cfg) == {"gw"}
+
+
+def _make_gw_a_lead(root: Path) -> None:
+    """The reviewer's reproduction: a hand edit of the roster (the roster commands refuse this) makes the paid
+    seat a close lead, which is what unlocks `--override`."""
+    path = Store(root).config_path
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    cfg["roles"]["lead"] = "worker"          # a lead only counts when it is the sole one
+    cfg["roles"]["gw"] = "lead"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+
+
+def test_an_overriding_sign_off_from_the_paid_seat_is_refused_and_keeps_the_trusted_one(
+        tmp_path: Path, capsys) -> None:
+    root = _store(tmp_path, normal_signer=True)
+    slot = _open(root)[0]
+    assert _sign(root, "alice", slot) == 0
+    assert _run(["close", "check", "--id", "rel"], root) == 0                # GO on alice's sign-off
+    before = close.load_close(Store(root), "rel")["lens_acks"][slot]
+    _make_gw_a_lead(root)
+    capsys.readouterr()
+    assert _run(["close", "ack", "--id", "rel", "--lens", slot, "--status", "accept", "--from", "gw",
+                 "--override", "--risk-class", "none", "--release-blocker", "no", "--tests-referenced", "n/a",
+                 "--tests-executed", "n/a", "--residual-risk", "n/a", "--na-reason", "lw", "--evidence", "p"],
+                root) == 2
+    assert "not even as an override" in capsys.readouterr().err
+    after = close.load_close(Store(root), "rel")["lens_acks"][slot]
+    assert after == before and after["from"] == "alice"                      # the trusted ack is untouched
+    assert _run(["close", "check", "--id", "rel"], root) == 0                # still GO
+
+
+def test_the_paid_seat_cannot_record_the_set_level_override_either(tmp_path: Path, capsys) -> None:
+    root = _store(tmp_path, normal_signer=False)
+    _open(root)
+    _make_gw_a_lead(root)
+    capsys.readouterr()
+    assert _run(["close", "signoffs", "override", "--id", "rel", "--set", "security:sec", "--from", "gw",
+                 "--reason", "skip it"], root) == 2
+    assert "cannot bypass a required sign-off" in capsys.readouterr().err
+    assert not close.load_close(Store(root), "rel").get("signoff_overrides")
+    assert _run(["close", "check", "--id", "rel"], root) == 3                # still HOLD

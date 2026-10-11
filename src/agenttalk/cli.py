@@ -3671,6 +3671,11 @@ def _cmd_close_signoffs(args, store, roster) -> int:
                 f"{sorted(leads)}; the override escape is a close-lead privilege. "
                 "Refusing.\n")
             return 2
+        if actor in close_mod.external_worker_agents(store.load_config()):
+            sys.stderr.write(
+                f"agenttalk close signoffs override: {actor!r} runs through the paid gateway (an external "
+                "worker) and cannot bypass a required sign-off; ask a trusted lead. Nothing was recorded.\n")
+            return 2
         try:
             with close_mod.close_transaction(store, args.id) as transaction:
                 record = transaction.record
@@ -4010,15 +4015,18 @@ def cmd_close(args: argparse.Namespace) -> int:
                 # Signoff candidacy is state-dependent, so resolve it from the
                 # latest record while the same lock protects the eventual ack.
                 sid = _signoff_set_for_lens(record, args.lens)
+                # A paid gateway seat (external worker) can never give a sign-off. This comes first and does
+                # not depend on --override: a hand-edited roster that makes such a seat a lead must not let
+                # it record an overriding sign-off in place of a trusted one.
+                if sid is not None and agent in close_mod.external_worker_agents(store.load_config()):
+                    sys.stderr.write(
+                        f"agenttalk close ack: {agent!r} runs through the paid gateway (an external "
+                        f"worker) and cannot give signoff {sid!r}, not even as an override; ask a "
+                        "trusted seat. Nothing was recorded.\n")
+                    return 2
                 if sid is not None and not override:
                     ev = _build_signoff_eval(store, record) or {}
                     candidates = set((ev.get("resolved_candidates") or {}).get(sid, []))
-                    if agent in set(ev.get("excluded_agents") or []):
-                        sys.stderr.write(
-                            f"agenttalk close ack: {agent!r} runs through the paid gateway (an external "
-                            f"worker) and cannot give signoff {sid!r}; ask a trusted seat. "
-                            "Nothing was recorded.\n")
-                        return 2
                     if agent not in candidates:
                         sys.stderr.write(
                             f"agenttalk close ack: {agent!r} is not a current candidate for "
