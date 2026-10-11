@@ -312,7 +312,16 @@ until their launch settings and permitted workspace have been reviewed.
    ```powershell
    & $ToolPy -m agenttalk --root $Project supervise --report
    & $ToolPy -m agenttalk --root $Project supervise --plan
+   & $ToolPy -m agenttalk --root $Project supervise --bootstrap-check
    ```
+
+   The bootstrap check reads the whole setup, not only what the plan would launch
+   now. It reports each configured entry that still holds scaffold placeholders,
+   breaks the wrapped-launch rules or is missing from the roster, and a team with no
+   operator-facing liaison (the fix it names is `roster set-operator-facing
+   <lead-agent>`). Resolve every item marked `error` before step 5; items marked
+   `warn`, such as an identity that is not live yet, are expected before the agents
+   have started.
 
    Resolve configuration and identity errors before starting automatic recovery.
    A bare `--plan` has no executor process snapshot, so it can report unknown
@@ -414,7 +423,13 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
      --acknowledge-owned-processes-stopped --reason 'operator verified the recorded processes are gone'
    ```
 
-   Copy the current hash and nonce from the reported evidence. This records a
+   Take the current hash and nonce from the attention queue: run
+   `agenttalk attention --json` (with your full-form prefix) and find the
+   process-tree item for that agent. Its `source_hash` is the hash. When the item
+   carries an `operator_argv`, that is the whole command with the hash and nonce
+   filled in; run it only after you have verified the processes are gone. The hash
+   changes when the hold changes, so read the queue again if the command reports it
+   as stale. This records a
    recovery boundary; it never stops processes for you. Missing or ambiguous
    evidence needs manual investigation, not fabricated acknowledgements.
 6. If supervisor state is corrupt, preserve `supervisor-state.json` and
@@ -590,6 +605,16 @@ There is no shipped `gateway canary-send` command in this release.
    `auto_restart` to `false` on each new worker entry except the one you will try
    first. If that first worker's intended value is false, set it to true for the
    check and back afterwards, or the supervisor starts no worker.
+
+   If the project signs its messages (someone ran `hmac-init` for it), also set
+   `AGENTTALK_HMAC_KEY_FILE` to the key file's absolute path in the environment the
+   supervisor host starts with. A paid worker runs with its own home folders, so
+   without that variable it cannot find the key and its replies go out unsigned,
+   and the other seats skip them without a message (checked in a scratch project: the
+   unsigned reply never arrived; with the variable set it did). The worker receives
+   `AGENTTALK_*` variables from its wrapper; the per-agent `env` entry stays
+   forbidden. The variable lets the worker sign for the project, so decide whether
+   that is acceptable before you add paid workers to a signed project.
 6. Remove the kill switch. The supervisor reads `supervisor.json` on each poll and
    starts, among the new workers, only the one whose `auto_restart` is true (agents
    you configured earlier behave as before). Confirm that worker can
