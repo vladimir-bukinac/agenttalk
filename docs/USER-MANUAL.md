@@ -977,8 +977,11 @@ reason and expiration.
 Before irreversible actions tied to a request:
 
 ```powershell
-agenttalk check --for claude-lead --to-request <request-id> --gates
+agenttalk check --for claude-lead --to-request <request-id> --epoch --gates
 ```
+
+Exit `3` means stop: the request was withdrawn, it was sent before the latest
+epoch barrier, or a gate says HOLD.
 
 Close records aggregate gates and review evidence for a frozen revision:
 

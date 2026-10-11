@@ -97,7 +97,7 @@ SKILL_INVARIANTS = [
         "AGENTTALK_SELF",                  # identity preamble
         "Always resolve inside your current shell",
         "Never spawn",                     # never supervise/launch processes
-        "check --for $SELF --to-request <RID> --gates",  # pre-action check consults the gates (#362)
+        "check --for $SELF --to-request <RID> --epoch --gates",  # pre-action check: gates (#362), epoch (#448)
         "Honour the project's chosen planning authority",  # no competing assignment machine
         "No second task-state machine",    # threads + human are the state
         "state the ownership boundaries",  # ownership stated within already-approved delegation
