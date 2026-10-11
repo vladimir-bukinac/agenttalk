@@ -392,7 +392,12 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
    If that agent still has a fresh heartbeat, restarting it ends a live seat, and
    the supervisor also requires `--acknowledge-live-protected-kill` on the same
    command. Only the liaison can give that acknowledgement; with no liaison
-   configured, stop the live seat yourself by its verified process identity first.
+   configured, stop the live seat yourself by its verified process identity first,
+   then wait until `supervise --report` shows that agent's heartbeat as stale (its
+   heartbeat age passes the agent's stuck-after setting: 120 seconds by default,
+   longer for some wrapped agents) before you resume the supervisor. Stopping the
+   process does not make the heartbeat stale at once, and the supervisor refuses
+   while it is fresh.
    The command refuses either flag together with `--clear-restart-budget`. The
    request is handled by the supervisor when actions resume. Automatic
    relaunches have a restart budget (default four in one hour). A manual restart
@@ -588,7 +593,7 @@ There is no shipped `gateway canary-send` command in this release.
 6. Remove the kill switch. The supervisor reads `supervisor.json` on each poll and
    starts, among the new workers, only the one whose `auto_restart` is true (agents
    you configured earlier behave as before). Confirm that worker can
-   complete a bounded task. Then set `auto_restart` to `true` for the next worker,
+   complete a bounded task. Then set the next worker's `auto_restart` to its intended value,
    one at a time. External workers cannot be leads, operator-facing identities or
    counted approval/signoff authorities. Keep provider and publication credentials
    out of their workspace.
@@ -1035,7 +1040,9 @@ background “free space” job.
    keep the work. Protected bus/secret contents and unknown ignored files cause
    keeps. Known cache directories are disposable, so never store evidence there.
 5. Inspect every result. Failed removals are retained, not force-deleted by changing
-   ownership or permissions. Rerun report mode and record why any remaining item
+   ownership or permissions. A failed removal can be partial: files removed before
+   the failure stay removed, so check the work-in-progress commit or your backup
+   before relying on what remains. Rerun report mode and record why any remaining item
    is kept. Do not use a broad recursive delete to bypass a refusal.
 
 For a merged checkout, `janitor --release-report` is a separate preview.
