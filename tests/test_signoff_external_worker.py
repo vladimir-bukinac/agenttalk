@@ -171,3 +171,20 @@ def test_the_paid_seat_cannot_record_the_set_level_override_either(tmp_path: Pat
     assert "cannot bypass a required sign-off" in capsys.readouterr().err
     assert not close.load_close(Store(root), "rel").get("signoff_overrides")
     assert _run(["close", "check", "--id", "rel"], root) == 3                # still HOLD
+
+
+def test_a_stored_set_override_from_a_seat_that_is_a_paid_seat_now_does_not_hold(tmp_path: Path, capsys) -> None:
+    """A trusted lead records the set-level override; later the same seat becomes a paid gateway seat."""
+    root = _store(tmp_path, normal_signer=False)
+    _open(root)
+    assert _run(["close", "signoffs", "override", "--id", "rel", "--set", "security:sec", "--from", "lead",
+                 "--reason", "skip it"], root) == 0
+    assert _run(["close", "check", "--id", "rel"], root) == 0                # GO while the lead is trusted
+    path = Store(root).config_path                  # the roster commands refuse this, so edit it by hand
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    cfg.setdefault("trust_classes", {})["lead"] = "external-worker"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    capsys.readouterr()
+    assert _run(["close", "check", "--id", "rel", "--json"], root) == 3     # HOLD: the override no longer counts
+    holds = json.loads(capsys.readouterr().out)["holds"]
+    assert any("override" in h["detail"] and "lead" in h["detail"] and "ignored" in h["detail"] for h in holds)

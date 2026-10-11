@@ -356,9 +356,17 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
         if not isinstance(s, dict):
             continue
         sid = s.get("id")
-        if sid in overrides:
-            continue                    # recorded close-lead escape (audited, not counted)
         required_count = int(s.get("required_count") or 0)
+        if sid in overrides:
+            stored = overrides[sid]
+            by = stored.get("by") if isinstance(stored, dict) else None
+            if by not in excluded_agents:
+                continue                # recorded close-lead escape (audited, not counted)
+            # The seat that recorded it runs through the paid gateway now: the escape no longer holds.
+            out.append((HOLD_UNROUTABLE_SIGNOFF,
+                        f"the override of signoff {sid!r} was recorded by {by}, a paid gateway seat "
+                        "(external worker) that cannot bypass a required sign-off; it is ignored. A trusted "
+                        "lead must record it again, or a trusted seat must sign"))
         if required_count <= 0:
             continue
         candidates = set(resolved.get(sid) or [])
