@@ -357,16 +357,16 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
             continue
         sid = s.get("id")
         required_count = int(s.get("required_count") or 0)
+        rejected = ""
         if sid in overrides:
             stored = overrides[sid]
             by = stored.get("by") if isinstance(stored, dict) else None
             if by not in excluded_agents:
                 continue                # recorded close-lead escape (audited, not counted)
-            # The seat that recorded it runs through the paid gateway now: the escape no longer holds.
-            out.append((HOLD_UNROUTABLE_SIGNOFF,
-                        f"the override of signoff {sid!r} was recorded by {by}, a paid gateway seat "
-                        "(external worker) that cannot bypass a required sign-off; it is ignored. A trusted "
-                        "lead must record it again, or a trusted seat must sign"))
+            # The seat that recorded it runs through the paid gateway now: treat the escape as absent, so a
+            # trusted sign-off can still satisfy the set; the rejection is only named on a real hold below.
+            rejected = (f"; the override recorded by {by}, a paid gateway seat (external worker), is ignored "
+                        "(it cannot bypass a required sign-off)")
         if required_count <= 0:
             continue
         candidates = set(resolved.get(sid) or [])
@@ -376,11 +376,12 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
                 out.append((HOLD_UNROUTABLE_SIGNOFF,
                             f"signoff {sid!r} requires {required_count} but its only candidate(s) "
                             f"{', '.join(skipped)} run through the paid gateway (external workers), which "
-                            "cannot give a sign-off; add a trusted seat to the candidates (or override to escape)"))
+                            "cannot give a sign-off; add a trusted seat to the candidates (or override to escape)"
+                            + rejected))
                 continue
             out.append((HOLD_UNROUTABLE_SIGNOFF,
                         f"signoff {sid!r} requires {required_count} but no candidate "
-                        "agents resolve from its refsets (override to escape)"))
+                        "agents resolve from its refsets (override to escape)" + rejected))
             continue
         countable = set(s.get("countable_statuses") or [ACCEPT])
         allow_na = bool(s.get("allow_na"))
@@ -396,7 +397,7 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
                     "that cannot give one" if ignored else "")
             out.append((HOLD_MISSING_SIGNOFF,
                         f"signoff {sid!r} needs {required_count} distinct qualifying "
-                        f"acks, has {len(signers)}{note}"))
+                        f"acks, has {len(signers)}{note}{rejected}"))
     return out
 
 

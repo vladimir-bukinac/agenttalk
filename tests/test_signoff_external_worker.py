@@ -188,3 +188,26 @@ def test_a_stored_set_override_from_a_seat_that_is_a_paid_seat_now_does_not_hold
     assert _run(["close", "check", "--id", "rel", "--json"], root) == 3     # HOLD: the override no longer counts
     holds = json.loads(capsys.readouterr().out)["holds"]
     assert any("override" in h["detail"] and "lead" in h["detail"] and "ignored" in h["detail"] for h in holds)
+
+
+def test_a_trusted_signature_replaces_a_rejected_stored_override(tmp_path: Path, capsys) -> None:
+    """The whole recovery: the override is rejected, and a trusted seat's accept then satisfies the set while the
+    historical override stays stored."""
+    root = _store(tmp_path, normal_signer=True)
+    slot = _open(root)[0]
+    assert _run(["close", "signoffs", "override", "--id", "rel", "--from", "lead", "--set", "security:sec",
+                 "--reason", "skip it"], root) == 0
+    path = Store(root).config_path
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    cfg["roles"]["lead"] = "worker"
+    cfg.setdefault("trust_classes", {})["lead"] = "external-worker"
+    cfg["roles"]["alice"] = "sec"
+    path.write_text(json.dumps(cfg), encoding="utf-8")
+    capsys.readouterr()
+    assert _run(["close", "check", "--id", "rel", "--json"], root) == 3
+    holds = json.loads(capsys.readouterr().out)["holds"]
+    assert any("ignored" in h["detail"] and "lead" in h["detail"] for h in holds)      # the rejection is visible
+    assert _sign(root, "alice", slot) == 0
+    assert "security:sec" in close.load_close(Store(root), "rel")["signoff_overrides"]  # still stored
+    capsys.readouterr()
+    assert _run(["close", "check", "--id", "rel"], root) == 0                          # GO on alice's sign-off
