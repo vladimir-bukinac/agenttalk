@@ -351,7 +351,7 @@ A release is its own small change, not a side effect of a green gate.
 
 When the team uses an assurance close for a release, publish its GO with `agenttalk close publish --id <id> --verdict go --from <lead>`. Never publish GO while `agenttalk close check --id <id>` says HOLD.
 
-The per-release entry in the old assurance ledger (`docs/ASSURANCE.md`) is no longer part of the ritual. Its last entry is for v0.79.1, in July 2026. Older descriptions of the ritual that still list it are out of date.
+The per-release entry in the old assurance ledger (`docs/ASSURANCE.md`) is no longer part of the ritual, and nothing in the code, tests or CI requires it. Its last entry is for v0.79.1, in July 2026; v0.80.0 (31 July 2026) was the first release without one, and none since has added one. Older descriptions of the ritual that still list it are out of date.
 
 ### 4.5 The challenge
 
@@ -407,7 +407,7 @@ The words it uses:
    - the full commit just before the change (`change_base`);
    - every participant with their vendor.
 2. **Open the close:** `agenttalk close open --id <id> --scope <scope> --from <lead> --acceptance-plan <plan> --project-repo <checkout> --revision <commit>`, with lane evidence or `--non-lane-isolation-not-asserted`.
-   - **If the project has a sign-off policy,** also ask for its sign-offs here (see [4.3](#43-the-merge-gate)): add `--derive-signoffs`, each risk class in play (`--risk-class <class>`, repeatable), each class that does not apply with its reason (`--risk-na <class>=<reason>`), and the changed paths (`--changed-path <path>`, repeatable; an acceptance close needs them spelled out). Without `--derive-signoffs` the close asks for no sign-offs at all. `agenttalk close signoffs plan --id <id>`, given the same risk and path flags, previews the result (on an acceptance close it refuses without `--changed-path`, and without `--risk-class` it lists no sign-offs), and `agenttalk close signoffs apply` adds them to a close that is already open.
+   - **If the project has a sign-off policy,** also ask for its sign-offs here (see [4.3](#43-the-merge-gate)); without a policy file `--derive-signoffs` is refused and no close is opened, so add it only when the file exists. Add `--derive-signoffs`, each risk class in play (`--risk-class <class>`, repeatable), each class that does not apply with its reason (`--risk-na <class>=<reason>`), and the changed paths (`--changed-path <path>`, repeatable; an acceptance close needs them spelled out). Without `--derive-signoffs` the close asks for no sign-offs at all. `agenttalk close signoffs plan --id <id>`, given the same risk and path flags, previews the result (on an acceptance close it refuses without `--changed-path`, and without `--risk-class` it lists no sign-offs), and `agenttalk close signoffs apply` adds them to a close that is already open.
 3. **The cold reviewer commits its observations first:** `agenttalk close acceptance cold --id <id> --phase commit --file <initial.json> --from <reviewer>`.
 4. **Only then the lead attaches the evidence bundle:** `agenttalk close acceptance attach --id <id> --file <bundle.json> --from <lead>`.
 5. **The reviewer reconciles** after the reveal: `agenttalk close acceptance cold --id <id> --phase reconcile --file <reconciliation.json> --from <reviewer>`.
