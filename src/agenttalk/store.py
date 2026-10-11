@@ -2640,8 +2640,10 @@ class Store:
     def _assert_external_worker_authority_safe(self, cfg: dict) -> None:
         """Prevent accidental authority assignment at roster mutation time.
 
-        This is deliberately the narrow watched-trial guard. Broader hostile-
-        model enforcement at close/release time remains a production follow-up.
+        This guard stops the mistake at the moment the roster changes. It is not the only
+        line: a close never counts a paid gateway seat as a sign-off candidate (see
+        ``close.resolve_signoff_candidates``), so a hand edit made after this check cannot
+        satisfy a required sign-off either.
         """
         external = {
             agent
@@ -2681,6 +2683,7 @@ class Store:
                 use_default_reviewers=False,
                 domain_refset={},
                 include_domain_reviewers=False,
+                exclude_external_workers=False,       # the roster guard must SEE who the lists name
             )
         ]
         for sets in policy["risk_policies"].values():
@@ -2693,6 +2696,7 @@ class Store:
                         use_default_reviewers=signoff_set["use_default_reviewers"],
                         domain_refset=all_domain_reviewers,
                         include_domain_reviewers=signoff_set["include_domain_reviewers"],
+                        exclude_external_workers=False,
                     )
                 )
         for agent in sorted(external):

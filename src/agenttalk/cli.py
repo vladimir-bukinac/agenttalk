@@ -3177,6 +3177,8 @@ def _build_signoff_eval(store, record: dict):
     from agenttalk import close as close_mod
     if not record.get("signoff_route"):   # P3 in play iff `apply` has run
         return None
+    if not close_mod._is_wellformed(record):   # the verdict reports the malformed state itself
+        return None
     cfg = store.load_config()
     active = store.active_agents()
     policy, err = close_mod.load_signoff_policy(store)
@@ -3196,8 +3198,9 @@ def _build_signoff_eval(store, record: dict):
     )
     default_reviewers = ((policy or {}).get("defaults", {}) or {}).get("reviewers") or {}
     resolved: dict[str, list[str]] = {}
+    excluded: dict[str, list[str]] = {}
     for s in record["required_signoffs"]:
-        resolved[s["id"]] = close_mod.resolve_signoff_candidates(
+        resolved[s["id"]], skipped = close_mod.split_signoff_candidates(
             cfg,
             candidate_refset=s.get("candidate_refset") or {},
             default_reviewers=default_reviewers,
@@ -3205,10 +3208,14 @@ def _build_signoff_eval(store, record: dict):
             domain_refset=domain_refset,
             include_domain_reviewers=bool(s.get("include_domain_reviewers")),
         )
+        if skipped:
+            excluded[s["id"]] = skipped
     return {"policy_present": policy is not None, "policy_error": None,
             "current_policy_hash": cur_policy_hash,
             "current_risk_inventory_hash": cur_inv_hash,
             "unmapped_risks": unmapped, "resolved_candidates": resolved,
+            "excluded_candidates": excluded,
+            "excluded_agents": sorted(close_mod.external_worker_agents(cfg)),
             "active_agents": active}
 
 
@@ -3560,9 +3567,10 @@ def _close_derive_signoffs(args, store, record: dict, actor: str) -> int:
     return 0
 
 
-def _resolve_signoff_audit(store, policy, inv, record) -> dict:
+def _resolve_signoff_audit(store, policy, inv, record, excluded_out: dict | None = None) -> dict:
     """AUDIT-ONLY snapshot of who currently resolves for each derived set (concrete
-    agents at apply time). NOT the authority - check re-resolves the refsets."""
+    agents at apply time). NOT the authority - check re-resolves the refsets. Paid gateway
+    seats are left out; ``excluded_out`` (when given) receives who was left out, per set."""
     from agenttalk import close as close_mod
     cfg = store.load_config()
     derived = close_mod.derive_required_signoffs(policy, inv)["signoffs"]
@@ -3572,7 +3580,7 @@ def _resolve_signoff_audit(store, policy, inv, record) -> dict:
     default_reviewers = ((policy or {}).get("defaults", {}) or {}).get("reviewers") or {}
     audit = {}
     for s in derived:
-        audit[s["id"]] = close_mod.resolve_signoff_candidates(
+        audit[s["id"]], skipped = close_mod.split_signoff_candidates(
             cfg,
             candidate_refset=s.get("candidate_refset") or {},
             default_reviewers=default_reviewers,
@@ -3580,6 +3588,8 @@ def _resolve_signoff_audit(store, policy, inv, record) -> dict:
             domain_refset=domain_refset,
             include_domain_reviewers=bool(s.get("include_domain_reviewers")),
         )
+        if skipped and excluded_out is not None:
+            excluded_out[s["id"]] = skipped
     return audit
 
 
@@ -3604,9 +3614,12 @@ def _cmd_close_signoffs(args, store, roster) -> int:
             sys.stderr.write(f"agenttalk close signoffs plan: {e}\n")
             return 2
         derived = close_mod.derive_required_signoffs(policy, inv)
-        audit = _resolve_signoff_audit(store, policy, inv, record)
+        skipped: dict[str, list[str]] = {}
+        audit = _resolve_signoff_audit(store, policy, inv, record, skipped)
         out = {"would_require": derived["signoffs"], "unmapped_risks": derived["unmapped"],
                "resolved_candidates": audit, "risk_inventory": inv}
+        if skipped:
+            out["excluded_external_workers"] = skipped
         if getattr(args, "json", False):
             print(json.dumps(out, indent=2))
         else:
@@ -3618,6 +3631,9 @@ def _cmd_close_signoffs(args, store, roster) -> int:
             for s in derived["signoffs"]:
                 cands = ", ".join(audit.get(s["id"], [])) or "(none - would be unroutable)"
                 print(f"  {s['id']}: need {s['required_count']} of [{cands}]")
+                if skipped.get(s["id"]):
+                    print(f"    not eligible, paid gateway seat(s) cannot give a sign-off: "
+                          f"{', '.join(skipped[s['id']])}")
         return 0
 
     if sub == "apply":
@@ -3656,6 +3672,11 @@ def _cmd_close_signoffs(args, store, roster) -> int:
                 f"agenttalk close signoffs override: {actor!r} is not a close lead "
                 f"{sorted(leads)}; the override escape is a close-lead privilege. "
                 "Refusing.\n")
+            return 2
+        if actor in close_mod.external_worker_agents(store.load_config()):
+            sys.stderr.write(
+                f"agenttalk close signoffs override: {actor!r} runs through the paid gateway (an external "
+                "worker) and cannot bypass a required sign-off; ask a trusted lead. Nothing was recorded.\n")
             return 2
         try:
             with close_mod.close_transaction(store, args.id) as transaction:
@@ -3996,6 +4017,15 @@ def cmd_close(args: argparse.Namespace) -> int:
                 # Signoff candidacy is state-dependent, so resolve it from the
                 # latest record while the same lock protects the eventual ack.
                 sid = _signoff_set_for_lens(record, args.lens)
+                # A paid gateway seat (external worker) can never give a sign-off. This comes first and does
+                # not depend on --override: a hand-edited roster that makes such a seat a lead must not let
+                # it record an overriding sign-off in place of a trusted one.
+                if sid is not None and agent in close_mod.external_worker_agents(store.load_config()):
+                    sys.stderr.write(
+                        f"agenttalk close ack: {agent!r} runs through the paid gateway (an external "
+                        f"worker) and cannot give signoff {sid!r}, not even as an override; ask a "
+                        "trusted seat. Nothing was recorded.\n")
+                    return 2
                 if sid is not None and not override:
                     ev = _build_signoff_eval(store, record) or {}
                     candidates = set((ev.get("resolved_candidates") or {}).get(sid, []))
@@ -4092,6 +4122,9 @@ def cmd_close(args: argparse.Namespace) -> int:
         dod_eval = (_build_dod_eval(store, rec, acceptance_live=rec.get("status") != close_mod.PUBLISHED)
                     if isinstance(record, dict) else None)
         result = close_mod.compute_verdict(rec, gate_check, signoff_eval, worktree_eval, dod_eval)
+        left_out = (signoff_eval or {}).get("excluded_candidates") or {}
+        if left_out:
+            result["signoff_exclusions"] = left_out
         preflight = ((dod_eval or {}).get("acceptance") or {}).get("preflight")
         if preflight is not None:
             result["preflight"] = preflight
@@ -4106,6 +4139,9 @@ def cmd_close(args: argparse.Namespace) -> int:
                               "worktree_isolation": worktree_eval}, indent=2))
         else:
             _print_verdict(args.id, result)
+            for set_id, names in sorted((result.get("signoff_exclusions") or {}).items()):
+                print(f"signoff {set_id}: paid gateway seat(s) {', '.join(names)} cannot give a sign-off "
+                      "and are not counted")
             if "acceptance_evaluation" in result:
                 print("acceptance evaluation: " + result["acceptance_evaluation"])
             for item in (preflight or {}).get("historical", []):
