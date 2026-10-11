@@ -407,10 +407,12 @@ agenttalk sync --for codex-lead
 Before irreversible work tied to a request:
 
 ```powershell
-agenttalk check --for codex-dev --to-request <request-id>
+agenttalk check --for codex-dev --to-request <request-id> --epoch --gates
 ```
 
-Exit `0` means current. Exit `3` means superseded. Exit `4` means unknown.
+Exit `0` means current. Exit `3` means stop: the request was withdrawn, it was
+sent before the latest epoch barrier, or a gate says HOLD. Exit `4` means
+unknown.
 
 ## 6. First workflow: two agents
 
@@ -975,7 +977,7 @@ agenttalk threads --for <agent> --all
 | --- | --- | --- |
 | Command sees the wrong team | Wrong root | Use `agenttalk --root <project> ...`; check `whoami` |
 | Agent has unread replies | Cursor not advanced | `drain --for <agent>` or scoped `wait --to-request` |
-| You are waiting on a stale request | Request was superseded or unknown | `check --for <agent> --to-request <id>` |
+| You are waiting on a stale request | Request was superseded, sent before the latest epoch barrier, or unknown | `check --for <agent> --to-request <id> --epoch` |
 | Dashboard reply box needs more context | Attention card shows a bounded excerpt, not the whole transcript | Open Conversations or Sessions for the full thread; use typed escalation fields |
 | Lead chat unavailable | Liaison heartbeat stale or missing | Start `wait`, run wrapped, or install activity hook |
 | Duplicate wrappers/windows | Same mailbox consumed twice | Stop duplicate; use `wait --refuse-stacked-wait`; inspect supervisor. Exit 6 can also mean an older scoped wait was superseded by a newer same-thread waiter; it did not consume the reply. |

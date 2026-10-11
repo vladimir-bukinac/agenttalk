@@ -92,11 +92,13 @@ assistant that talks to you.
    does not merge code or make releases. A person does, or a lead that person has
    allowed to, and the lead's own instructions say to merge only on a GO for that exact
    commit. Before such a step, the assistant should run agenttalk's pre-action check
-   with the gates option:
-   `agenttalk check --for <seat> --to-request <request-id> --gates`. It says stop if
-   the request was withdrawn, or if a gate still says HOLD; a gate is a named check the
-   team records as HOLD (not yet) or GO. Without `--gates` the check does not look at
-   the gates. Sending a newer request
+   with the epoch and gates options:
+   `agenttalk check --for <seat> --to-request <request-id> --epoch --gates`. It says
+   stop if the request was withdrawn, if it was sent before the team's latest epoch
+   barrier (set with `agenttalk barrier bump`, which starts a new epoch), or if a
+   gate still says HOLD; a gate is a named check the team records as HOLD (not
+   yet) or GO. Without `--epoch` the check does not look at the barrier, and without
+   `--gates` it does not look at the gates. Sending a newer request
    in place of an old one does not stop the old one: to stop it, withdraw it
    (`agenttalk rescind`). A question only a person can answer goes to them with
    `agenttalk escalate`.
@@ -1034,8 +1036,9 @@ a team or runs unattended:
   and `broadcast` fan-out to a role or group.
 - **Operator safety** — `rescind` so a stale request can't quietly get
   actioned (sending a newer request in its place does not do this by
-  itself), a pre-action `check` that stops on a rescinded request and, with
-  `--gates`, on a gate at HOLD, and epoch barriers.
+  itself), epoch barriers, and a pre-action `check` that stops on a
+  rescinded request and, with `--epoch` and `--gates`, on a request sent
+  before the latest barrier or a gate at HOLD.
 - **24/7 supervision** — a background monitor that restarts agents
   across provider outages or stuck turns (the generated monitor is
   Windows-only today, see [#356](https://github.com/zoolok17/agenttalk/issues/356)), and a progress wrapper (`agenttalk wrap`) that
@@ -1104,7 +1107,7 @@ command for the full set.
 | `gate {set,list,check,waive}` | Lightweight `HOLD`/`GO` assurance state; `check` exits 3 on an unwaived blocker. |
 | `close {open,ack,draft,counter,check,publish,reopen,acceptance attach,acceptance cold,acceptance successor,list,show}` | Aggregates gates + typed review evidence into one milestone/release verdict. Acceptance open adds `--acceptance-plan PLAN --project-repo PROJECT`; attach takes `--file BUNDLE --from ACTOR`; cold phases commit observations before attachment and reconcile after reveal. Schema-3 cooperative GO requires bound reproducer/independent reviewer accepts and execution/offline/close-out hygiene evidence. `show` lists successor alternatives. Per-attempt operator amendments preserve original failures; recovery roots retain related-change obligations. See the [acceptance guide](docs/ACCEPTANCE.md) and [implementation contract](docs/STEP-ACCEPTANCE-INC1.md). |
 | `close signoffs {plan,apply,override}` | Derives specialist sign-off routing by risk class. |
-| `check` | Pre-action HOLD/GO check for one request: `agenttalk check --for <seat> --to-request <request-id> --gates`. It says stop (exit 3) for a rescinded request; `--gates` adds a stop for any gate at HOLD (without it the gates are not checked), and `--epoch` adds one for a request older than the current epoch barrier. A newer request sent in place of an old one does not stop the old one: rescind it. |
+| `check` | Pre-action HOLD/GO check for one request: `agenttalk check --for <seat> --to-request <request-id> --epoch --gates`. It says stop (exit 3) for a rescinded request; `--epoch` adds a stop for a request sent before the latest epoch barrier, and `--gates` adds one for any gate at HOLD (without these flags neither is checked). A newer request sent in place of an old one does not stop the old one: rescind it. |
 | `lane {assign,check,deliver,status,approve-shared}` | Scoped deliver-gate: bounds a change against the domain registry and other active lanes. |
 | `onboarding {create,list,show,state,record}` | Durable first-pass ledger: segments, claims, drift, unknowns. |
 | `comprehension {scan,status,report,validate,prune}` | Offline static comprehension inventory (features, units) for one legacy repository; `pack` and the HTTP surface are planned, not yet built. |

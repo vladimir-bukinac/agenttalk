@@ -19,8 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a request sent before that still passed, so a seat could act on instructions the team had
   already set aside.
 
-  What you will notice: the wrapped-turn prompt and the lead, listen and handoff skills (Claude
-  and Codex copies) now give the check with `--epoch`. A request sent before the latest epoch
+  What you will notice: the wrapped-turn prompt, the lead, listen and handoff skills (Claude
+  and Codex copies), the README and the agent, user and new-user manuals now give the check
+  with `--epoch`. A request sent before the latest epoch
   barrier now makes the check exit 3, and the seat stops instead of going ahead. The seat needs
   no epoch value of its own: the check compares the epoch stamped on the request when it was
   sent with the current one.
@@ -32,11 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start a new session.
 
   Technical details: `src/agenttalk/wrapper/prompt.py` (`_DEFAULT_RULES`, the "Before any
-  IRREVERSIBLE action" line) and the six skill files; `check --epoch` is evaluated by
-  `_epoch_verdict` in `src/agenttalk/cli.py`. The new `tests/test_irreversible_check_text.py`
-  pins the full command in the prompt (both shells) and in every skill, and that each Claude and
-  Codex pair says the same thing; `tests/test_skill_lint.py` now pins `--epoch --gates` for the
-  lead skills.
+  IRREVERSIBLE action" line), the six skill files, `README.md`, `docs/AGENT-MANUAL.md`,
+  `docs/USER-MANUAL.md` and `docs/AGENTTALK-NEW-USER-MANUAL.md`; `check --epoch` is evaluated
+  by `_epoch_verdict` in `src/agenttalk/cli.py`. The new `tests/test_irreversible_check_text.py`
+  pins the full command in the prompt (both shells) and in every skill, that each Claude and
+  Codex pair says the same thing, and that every check example on those four pages names
+  `--epoch`; `tests/test_skill_lint.py` now pins `--epoch --gates` for the lead skills.
 
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer
