@@ -211,3 +211,41 @@ def test_a_trusted_signature_replaces_a_rejected_stored_override(tmp_path: Path,
     assert "security:sec" in close.load_close(Store(root), "rel")["signoff_overrides"]  # still stored
     capsys.readouterr()
     assert _run(["close", "check", "--id", "rel"], root) == 0                          # GO on alice's sign-off
+
+
+@pytest.mark.parametrize("field,value", [
+    ("signoff_overrides", ["security:sec"]),
+    ("signoff_overrides", "security:sec"),
+    ("signoff_overrides", {"security:sec": "x"}),
+    ("signoff_overrides", {"security:sec": {"by": ["lead"]}}),
+    ("required_signoffs", "x"),
+    ("required_signoffs", [{"id": ["a"]}]),
+])
+def test_a_malformed_stored_sign_off_state_holds_instead_of_crashing(tmp_path: Path, capsys, field, value) -> None:
+    root = _store(tmp_path, normal_signer=True)
+    _open(root)
+    store = Store(root)
+    path = close.close_path(store, "rel")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record[field] = value
+    path.write_text(json.dumps(record), encoding="utf-8")
+    capsys.readouterr()
+    assert _run(["close", "check", "--id", "rel", "--json"], root) == 3
+    assert close.HOLD_MALFORMED in {h["code"] for h in json.loads(capsys.readouterr().out)["holds"]}
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r, lid: r["required_signoffs"][0].__setitem__("generated_lens_ids", [["a"]]),
+    lambda r, lid: r["lens_acks"].__setitem__(lid, {"from": ["a"], "status": "accept"}),
+    lambda r, lid: r["lens_acks"].__setitem__(lid, "x"),
+])
+def test_a_malformed_ack_or_lens_list_holds_instead_of_crashing(tmp_path: Path, capsys, mutate) -> None:
+    root = _store(tmp_path, normal_signer=True)
+    lid = _open(root)[0]
+    path = close.close_path(Store(root), "rel")
+    record = json.loads(path.read_text(encoding="utf-8"))
+    mutate(record, lid)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    capsys.readouterr()
+    assert _run(["close", "check", "--id", "rel", "--json"], root) == 3
+    assert close.HOLD_MALFORMED in {h["code"] for h in json.loads(capsys.readouterr().out)["holds"]}

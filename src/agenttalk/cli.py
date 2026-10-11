@@ -3177,6 +3177,8 @@ def _build_signoff_eval(store, record: dict):
     from agenttalk import close as close_mod
     if not record.get("signoff_route"):   # P3 in play iff `apply` has run
         return None
+    if not close_mod._is_wellformed(record):   # the verdict reports the malformed state itself
+        return None
     cfg = store.load_config()
     active = store.active_agents()
     policy, err = close_mod.load_signoff_policy(store)

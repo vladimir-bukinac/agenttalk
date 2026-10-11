@@ -506,6 +506,28 @@ def _is_wellformed(record: object) -> bool:
     for key in ("lens_acks", "counters", "remediation_items"):
         if not isinstance(record.get(key), dict):
             return False
+    return _signoff_state_is_wellformed(record)
+
+
+def _signoff_state_is_wellformed(record: dict) -> bool:
+    """The stored sign-off state is read by indexing and hashing (sets, overrides, acks), so a hand-edited or
+    corrupt record must fail here, as a malformed-state HOLD, rather than raise later."""
+    for ack in record["lens_acks"].values():
+        if not isinstance(ack, dict) or not isinstance(ack.get("from", ""), str):
+            return False
+    overrides = record.get("signoff_overrides", {})
+    if not isinstance(overrides, dict) or not all(
+            isinstance(v, dict) and isinstance(v.get("by"), str) for v in overrides.values()):
+        return False
+    required = record.get("required_signoffs", [])
+    if not isinstance(required, list):
+        return False
+    for item in required:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            return False
+        lens_ids = item.get("generated_lens_ids", [])
+        if not isinstance(lens_ids, list) or not all(isinstance(lid, str) for lid in lens_ids):
+            return False
     return True
 
 

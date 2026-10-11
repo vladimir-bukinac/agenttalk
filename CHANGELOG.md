@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     give a sign-off; add a trusted seat to the candidates (or override to escape)".
   - `close check` (text and `--json`) and `close signoffs plan` name the seats that were left out
     (`signoff_exclusions` and `excluded_external_workers` in the JSON); they show seat names only.
+  - A close record whose stored sign-off state has the wrong shape (an override list that is not a table,
+    a sign-off set without a text id, an ack whose author is not text) now gives the normal "malformed
+    close record" HOLD instead of a crash.
   - The roster still refuses to name a paid seat as a candidate when you change it; that check
     is kept.
 
