@@ -147,8 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   created. If putting it back fails (for example a permission error), the command says so plainly, shows both
   errors and tells you to run `agenttalk gateway stop` to write it again; until you do, no stop file protects
   the gateway. A gateway launched by that start waits for the startup lock up to 45 s (it used to wait 10 s), so a
-  slow but successful start request still succeeds. After the task has been started the stop file stays removed,
-  also when the gateway then takes too long to become ready.
+  slow but successful start request still succeeds. Any error that ends the command before it starts waiting for
+  the gateway to become ready (including the startup lock failing to let go after the task was started) also
+  leaves the stop file in place. Only once that wait has begun does the stop file stay removed, also when the
+  gateway then takes too long to become ready.
 
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer

@@ -3152,3 +3152,39 @@ def test_other_lifecycle_operations_keep_the_plain_lock_wait(tmp_path, monkeypat
             with service._gateway_lifecycle_lock(tmp_path, "reconfigure"):
                 raise AssertionError("the lock was not held")
     assert time.monotonic() - started < 10
+
+
+def _lock_that_fails_on_exit(monkeypatch) -> None:
+    import contextlib
+
+    @contextlib.contextmanager
+    def failing_exit(_root, _operation):
+        yield
+        raise OSError("could not release the lifecycle lock")
+
+    monkeypatch.setattr(service, "_gateway_lifecycle_lock", failing_exit)
+
+
+@pytest.mark.parametrize("backend", [FakeCommands, FakeSystemdCommands])
+def test_a_lock_exit_error_after_a_successful_start_keeps_the_stop_file(tmp_path, monkeypatch, backend) -> None:
+    commands = backend()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root, "stopped by the operator\n")
+    _lock_that_fails_on_exit(monkeypatch)
+
+    with pytest.raises(OSError, match="release the lifecycle lock"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert commands.started                                   # the task had been asked to run
+    assert service.kill_switch_path(root).read_text(encoding="ascii") == "stopped by the operator\n"
+
+
+def test_a_lock_exit_error_does_not_create_a_stop_file_the_operator_never_had(tmp_path, monkeypatch) -> None:
+    commands = FakeCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _lock_that_fails_on_exit(monkeypatch)
+
+    with pytest.raises(OSError, match="release the lifecycle lock"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert not service.kill_switch_path(root).exists()

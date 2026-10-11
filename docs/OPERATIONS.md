@@ -1054,10 +1054,11 @@ $GatewayTask = '<task_name-from-gateway-status>'
    start (`Enable-ScheduledTask -TaskName $GatewayTask`; on Linux,
    `systemctl --user enable <task_name>`), then run `gateway start` once, and continue
    only when `gateway status` shows both readiness fields true. Enable it first:
-   `gateway start` removes `gateway.kill` before it asks Windows to run the task, and
    Windows does not run a disabled task, so the start would fail ("gateway task start
-   failed") with `gateway.kill` already gone. If that happens, enable the task and run
-   `gateway start` again. Resume one agent first:
+   failed"). A failed `gateway start` puts `gateway.kill` back as it was, so the
+   gateway stays protected; if it cannot put the file back it says so and tells you to
+   run `gateway stop`, and you do that before anything else. If the start failed,
+   enable the task and run `gateway start` again. Resume one agent first:
    set `auto_restart` to `false` on every agent's entry in the restored
    `supervisor.json` except that one (if its restored value is false, set it to true
    for the check and back afterwards; a protected agent needs the protected restart
