@@ -684,9 +684,11 @@ Then pick the cheapest way to be told, in this order:
    vanish without a signal and without its timeout. At each check-in confirm it
    still runs and re-arm it if not, but only before its expiry and while wakes are
    left: at or after the expiry the watch is over, so close its line in the
-   handover note. A wait that ended with exit 0 has already delivered its
-   signal, so do not re-arm that watch: close its line, or agree the next
-   decision point and start a new watch. The check-in timer stays your backstop, so
+   handover note. When the wait ends with exit 0, read the message. If it is the
+   agreed signal, close the watch line, or agree the next decision point and
+   start a new watch. If it is only an acknowledgement (for example that a task
+   was accepted), re-arm the wait while the expiry has not come and wakes are
+   left. The check-in timer stays your backstop, so
    never leave risky work watched by one wait alone. A lead runs one background
    wait at a time (with `--refuse-stacked-wait`, a second one is refused with exit 6):
    for a second watch, rely

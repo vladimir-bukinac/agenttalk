@@ -196,10 +196,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     because a wrapped seat reads new messages between turns.
 
   What you need to do: a copy of the skill that was installed earlier is not replaced by
-  `agenttalk install-skills` alone; it reports such a file as `skipped`. Run
-  `agenttalk install-skills --dry-run` to see which files differ, then
-  `agenttalk install-skills --force` to replace them (this also overwrites edits you made to
-  an installed copy). Then restart or re-open the lead so it reads the new text.
+  `agenttalk install-skills` alone; it reports such a file as `skipped`. There is no option
+  for a single skill, so the narrowest update is every agenttalk skill of one agent, without
+  the development skills. For Claude Code: `agenttalk install-skills --claude-only --no-devkit
+  --dry-run` lists the files that differ (marked `would-skip`), then the same command with
+  `--force` replaces them. For Codex use `--codex-only` instead of `--claude-only`. `--force`
+  replaces every listed file with the bundled one, including a skill you edited yourself (not
+  only the lead skill), so copy any edit you want to keep first. Without `--no-devkit`, a
+  forced run also replaces the edited development skills, and it writes them for both Claude
+  Code and Codex even with `--claude-only` (the run uses the default skill folders unless you
+  name others). Then restart or re-open the lead so it reads the new text.
 
 ## [0.100.0] - 2026-10-10
 
