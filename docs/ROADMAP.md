@@ -166,7 +166,7 @@ A **lane** is who builds the item: a Claude or Codex builder, a reviewer, or the
 |---|---|---|---|---|
 | 1 | **Skip empty clock turns.** A clock tick wakes a seat only when something changed. It is tried on one team first, with tokens counted per day before and after. Message handling and recovery checks stay mandatory. | M · C · Codex build | **Probe first** (the challenge verdict). Step A is done: on the second team, 103 of 121 clock ticks over three days were followed by no output from the lead. The token measurement waits for the turn journal at that team's next restart. The build has not started. | from a field report |
 | 2 | **Faster Windows CI, no check dropped.** Use the new per-test timings to remove the biggest costs (slow fixtures, repeated git starts, separate source and package runs). Split jobs only if measured and reviewed. | L · C if the gate layout changes · Codex build | Three parts are merged: per-test timings with a temporary longer Windows limit, separate Windows source and package runs on trial (the gate is unchanged), and shorter checks for docs-only pull requests. Whether to cut the gate over to the new layout is still to be decided. | #389, #395 (merged); #405 (merged, in 0.100.0); #378, #198, #151 |
-| 3 | **Replies carry the seat's identity;** a review reply may name the commit it read; verdict words are consistent. | S-M · Sec · Claude build | Mostly merged: #403 is in 0.100.0, and issues #354 and #299 are closed. #178 (a completion record, so a finished work order is never run twice or lost) is not done. A follow-up is open: the work board can show a verdict that names no commit under another reviewer's commit. | #403 (merged); follow-up #415; #354, #299, #178 |
+| 3 | **Replies carry the seat's identity;** a review reply may name the commit it read; verdict words are consistent. | S-M · Sec · Claude build | Mostly merged: #403 is in 0.100.0, and issues #354 and #299 are closed. #178 (a completion record, so a finished work order is never run twice or lost) is not done; the operator's order of 2026-10-12 builds it attempt-bound (§6.11). A follow-up is open: the work board can show a verdict that names no commit under another reviewer's commit. | #403 (merged); follow-up #415; #354, #299, #178 |
 | 4 | **Containment census:** where each team's files actually go, with the leads' input. Nothing is moved or deleted. | M · C · reviewer and lead | Done. | #336 |
 | 5 | **Clean-machine baseline** (half a day): what a newcomer actually hits, so weeks 3-4 build only what is needed. | S · none · reviewer | Not started. | new |
 | 6 | **Docs and skills paper cuts** in one pull request; knowledge notes other than lessons stop failing on a bus without a domain registry. | S+S · none · background (qwen, and a Codex read) | Both parts are done and shipped in 0.100.0: the docs and skills pull request (#397), and the fix that lets team notes work on a bus without a domain registry (#425). | #397, #425 (merged, in 0.100.0); #362, #363, #355 (closed); #312 (stays open: the policy data carries no tax label yet) |
@@ -224,7 +224,7 @@ These go ahead only with spare allowance:
 - one packaged modernisation entry path (#153);
 - a source for searchable lead history (#375);
 - the turn ticket (#384);
-- a Linux and macOS monitor, only if the teams need it (#356).
+- a Linux and macOS monitor (#356): optional in weeks 5-6, still planned (§6.11).
 
 ### 6.8 How the team works through it
 
@@ -290,7 +290,7 @@ Two notes beside item 4. They are notes, not a change of order:
 | 2 | O(1)-ish publication: no full scan under the lock; incremental order (§8) | the append-only WAL access pattern of a SQLite bridge, not SQLite itself | Later (§8), measured first |
 | 3 | Terminating obligations and stale-obligation reconciliation (§8) | A2A's task lifecycle: every task reaches a terminal state | Later (§8): the report first, then per-thread compaction |
 | 4 | Revive on need: mail owed to an exited seat triggers its relaunch | Agent Teams reviving a stopped teammate | Later, after the supervisor work in §8 |
-| 5 | Deferred self-wake (`not_before`), so a seat can wait on CI without holding its turn | Claude Code's scheduled wakeups; idle notifications | Later |
+| 5 | Deferred self-wake (`not_before`), so a seat can wait on CI without holding its turn | Claude Code's scheduled wakeups; idle notifications | Right after #178 and the README change (§7.2, item 6) |
 | 6 | Opt-in, one-shot lifecycle notifications (idle with an unanswered obligation, wrapper failed) | cross-session messaging subscriptions | Later, if still needed after 1 |
 | 7 | Opt-in completion gates: a tagged "done" without a verdict or head is refused and re-prompted in the same turn | Agent Teams' TaskCompleted/TeammateIdle hooks | Later (operator decision; it reverses the tag layer's deliberate permissiveness) |
 
@@ -351,7 +351,7 @@ Houmao runs teams of command-line agents in tmux on Linux and macOS: specialists
 | 3 + 8 | **One team definition and `agenttalk team start / stop / status`** | First generate and print the start script from the existing roster and supervisor settings (no third config file). Team stop uses the supported release, with proof that each release was consumed, never a kill. Keep-alive through tmux or systemd comes later (#356). | Change (the two merged) | Weeks 3-4 |
 | 7 | **Watch a background seat** | A read-only tail of its wrapper log, folded into the overview. No terminal attach. | Change (folded into 9) | With 9 |
 | 2 | **Typed tools through a local MCP server** | A thin front door over the same CLI and store, so delivery, signing and audit stay the same. The seat's identity comes from its launch configuration, never from a tool field. | Change: not the rejected relay (§7). Later, after 5, with its own challenge | Later |
-| 4 | **A read-only guided tour for a first-time team** | Shows a newcomer what each part does, without changing anything. | Small; the views split (keep, or not now) | Later, optional |
+| 4 | **A read-only guided tour for a first-time team** | Shows a newcomer what each part does, without changing anything. | Small; the views split (one opinion says drop, one says later) | Weeks 3-4 (small) |
 | 10 | **A Claude Code mod** (a deny-only guard plus a status band) | A guard and a band that only Claude seats would have. | Probe only. First try Claude Code's per-seat deny rules and CLI refusals. Anything every seat must obey lives in agenttalk, not in a Claude-only mod. | Later |
 
 **What the round found missing**
@@ -517,10 +517,10 @@ Do not ship broad workflow claims if any of these are true:
 
 ## 13. Recommendation
 
-1. **Done: v0.94.0 shipped** (the first board delivery plus the console v2 preview, with the fleet upgraded once), followed by v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0 and v0.101.0 (2026-10-12). #407 and #433 are merged (2026-10-10). The next steps in the operator-approved plan (§6) are the rest of wave 1 and wave 2 (§6.3 and §6.4), then the end-of-week-2 re-plan (§6.5), which also weighs the §7.1 ideas.
+1. **Done: v0.94.0 shipped** (the first board delivery plus the console v2 preview, with the fleet upgraded once), followed by v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0 and v0.101.0 (2026-10-12). #407 and #433 are merged (2026-10-10). The next steps are the operator's order of 2026-10-12 (§6.11); the rest of wave 1 and wave 2 (§6.3 and §6.4) and the end-of-week-2 re-plan (§6.5) follow, and the re-plan also weighs the §7.1 and §7.2 ideas.
 2. **Later, not in the approved plan (§8):** make the team self-healing (restart a dead seat, run the supervisor, stop a dead seat waiting out its heartbeat threshold, then the crash harness and guard-aware relaunch, then host-restart survival); fix the store at the mechanism (measure and shrink the publication critical section, reconcile stale obligations). Wrappers surviving store contention already shipped in 0.94.0 (#218).
 3. **Also later:** the remaining refocus items (context policy with knowledge and memory, §8) and a first-class migration method (#153, optional weeks 5-6 in §6.7). Spec-kitty removal is done.
 4. **Each of these keeps its own challenge:** nothing in §8 starts without one.
-5. **Later:** the remaining §7 candidates by rank, each with its own challenge verdict.
+5. **Later:** the remaining §7 candidates by rank, and the ideas in §7.2, each with its own challenge verdict.
 
 Bottom line: agenttalk can become the platform for teams of agents from different vendors to build software "by the book". But the product has to be honest about authority. It can enforce process, preserve evidence, challenge work before it starts, and fail closed when evidence is missing. It cannot remove the human oracle or prove correctness by itself.
