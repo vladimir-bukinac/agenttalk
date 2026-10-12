@@ -2357,22 +2357,27 @@ def cmd_check(args: argparse.Namespace) -> int:
             out["gates"] = gate_obj
         print(json.dumps(out, indent=2))
     else:
+        # Name what blocks: the epoch and the gates are separate reasons, and either or both may hold.
+        epoch_state = epoch_obj["state"] if epoch_obj is not None else "current"
+        gates_hold = gate_obj is not None and gate_obj["verdict"] == "HOLD"
         if exit_code == 0:
             print(f"current     {rid}")
-            if epoch_obj is not None:
-                print(f"  epoch: current ({epoch_obj['current_epoch'] or 'no barrier'})")
-        elif epoch_obj is not None and epoch_obj["state"] == "previous-epoch":
+        elif epoch_state == "previous-epoch":
             print(f"previous-epoch  {rid}")
+        elif epoch_state == "unknown-pre-epoch":
+            print(f"pre-epoch   {rid}")
+        else:
+            print(f"hold        {rid}")
+        if epoch_state == "previous-epoch":
             print(f"  this request predates the current global epoch "
                   f"({epoch_obj['current_epoch']}) — do NOT act on it; re-ask "
                   f"under the current barrier for irreversible actions.")
-        elif epoch_obj is not None:  # unknown-pre-epoch
-            print(f"pre-epoch   {rid}")
+        elif epoch_state == "unknown-pre-epoch":
             print(f"  this opener predates epochs (no epoch_at_send) and a "
                   f"barrier exists ({epoch_obj['current_epoch']}) — do NOT act; "
                   f"re-ask under the current barrier for irreversible actions.")
-        else:
-            print(f"hold        {rid}")
+        elif epoch_obj is not None:
+            print(f"  epoch: current ({epoch_obj['current_epoch'] or 'no barrier'})")
         if gate_obj is not None:
             print(f"  gates: {gate_obj['verdict']}")
             for warning in gate_obj.get("warnings", []):
@@ -2380,6 +2385,13 @@ def cmd_check(args: argparse.Namespace) -> int:
             for blocker in gate_obj["blockers"]:
                 why = f" - {blocker['reason']}" if blocker.get("reason") else ""
                 print(f"    blocker {blocker['name']}: {blocker['status']}{why}")
+        if gates_hold:
+            names = [blocker["name"] for blocker in gate_obj["blockers"]]
+            which = f"gate {names[0]} is" if len(names) == 1 else f"gates {', '.join(names)} are"
+            # Only --epoch can say the request is current; without it the epoch was not checked.
+            again = (" The request itself is current: do not re-ask it."
+                     if epoch_obj is not None and epoch_state == "current" else "")
+            print(f"  do NOT act until {which} GO (`agenttalk gate check`).{again}")
     return exit_code
 
 

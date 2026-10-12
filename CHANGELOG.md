@@ -69,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The check before an irreversible step now says what is holding a request back.** With both
+  `--epoch` and `--gates`, a request that was still current but held only by a gate at HOLD was
+  reported as "pre-epoch", and the agent was told to ask for the request again. It now says
+  `hold`, names the gate and says not to act until it is GO (`agenttalk gate check`); a request
+  from before the latest epoch barrier is still reported as one, and when both apply, both are
+  named. The exit codes are unchanged (`cmd_check` in `src/agenttalk/cli.py`).
+
 - **The source package now holds the documents its own tests read.** The tests shipped in the
   source package read the new roles page, two pages under `docs/ops/` and the staging example
   under `docs/examples/`, but the package left those files out, so those tests failed when run
