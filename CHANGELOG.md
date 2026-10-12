@@ -16,14 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 clearly what is missing. A seat that runs through the paid gateway can no longer satisfy any
 required review, and an acknowledgement counts only while its author is still an active,
 trusted seat: a finished result that rested on a reviewer who has since left now needs a
-current reviewer to acknowledge it again. The check before an irreversible step names exactly
-what holds a request back and also stops on an outdated request. A failed `agenttalk gateway
-start` no longer leaves the gateway without its stop file. Trying a command in a throwaway
-store can no longer reach the live one. The documentation set gained a license, a technical
-overview, a page on roles, skills and procedures, and operator procedures that put each
-safeguard before the step it protects; the source package now ships the documents its own
-tests read. After upgrading, refresh the installed skills as described under "Lead skills"
-below.
+current reviewer to acknowledge it again (an acceptance close whose runner has left needs a
+new attempt instead, as described below). The check before an irreversible step names
+exactly what holds a request back and also stops on an outdated request. When `agenttalk
+gateway start` fails before the task-start request is accepted, the gateway keeps its stop
+file; after that point the command says the gateway may be starting and how to check and
+stop it. `agenttalk scratch store` sets up a throwaway store that commands in that shell
+cannot leave (an ordinary folder alone does not: set it up with that command). The
+documentation set gained a license, a technical overview, a page on roles, skills and
+procedures, and operator procedures that put each safeguard before the step it protects; the
+source package now ships the documents its own tests read. After upgrading, refresh the
+installed skills as described under "Lead skills" below.
 
 ### Added
 
