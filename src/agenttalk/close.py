@@ -187,7 +187,9 @@ def empty_close(close_id: str, *, scope: str, revision: str, revision_kind: str,
 def compute_verdict(record: dict, gate_check: dict,
                     signoff_eval: dict | None = None,
                     worktree_eval: dict | None = None,
-                    dod_eval: dict | None = None) -> dict[str, Any]:
+                    dod_eval: dict | None = None,
+                    external_workers: frozenset[str] = frozenset(),
+                    active_agents: frozenset[str] | None = None) -> dict[str, Any]:
     """PURE: derive HOLD|GO + the stable hold codes from a close ``record`` and a
     ``gate_check`` result (:func:`gates.check_gates` output for the close's
     gate_scope). No I/O. GO requires, in order of the codes below: a well-formed
@@ -210,6 +212,10 @@ def compute_verdict(record: dict, gate_check: dict,
     ``assurance:<scope>`` gate's fields) and passes the already-resolved bundle in;
     :func:`evaluate_dod` only COUNTS. It is ``None`` when the close's scope has no
     DoD requirements, in which case the fold is a no-op (byte-identical to today).
+    ``external_workers`` are the seats that run through the paid gateway and ``active_agents`` is the current roster
+    (None: not checked). Like a sign-off signature or a stored override, an ack on a required lens counts only
+    while its author is, at check time, on the active roster and not a paid gateway seat; a retired, removed,
+    renamed-away or unknown author's ack is ignored and named in the hold.
     Returns ``{"verdict", "holds": [{code, detail}], "ok"}``."""
     holds: list[dict] = []
 
@@ -261,6 +267,12 @@ def compute_verdict(record: dict, gate_check: dict,
         ack = acks.get(lid)
         if not isinstance(ack, dict):
             hold(HOLD_MISSING_LENS, f"required lens {lid!r} has no ack")
+            continue
+        author = ack.get("from")
+        if author in external_workers or (active_agents is not None and author not in active_agents):
+            why = ("a paid gateway seat (external worker) cannot satisfy a required lens"
+                   if author in external_workers else "its author is no longer an active seat on the roster")
+            hold(HOLD_UNAUTHORIZED_ACK, f"lens {lid!r} ack from {author!r} is ignored: {why}")
             continue
         if not _ack_authorized(ack, lens):
             hold(HOLD_UNAUTHORIZED_ACK,
@@ -379,11 +391,12 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
                             f"signoff {sid!r} requires {required_count} but its only candidate(s) "
                             f"{', '.join(skipped)} run through the paid gateway (external workers), which "
                             "cannot give a sign-off; add a trusted seat to the candidates (or override to escape)"
-                            + rejected))
+                            + _ignored_signers_note(s, acks, active, excluded_agents) + rejected))
                 continue
             out.append((HOLD_UNROUTABLE_SIGNOFF,
                         f"signoff {sid!r} requires {required_count} but no candidate "
-                        "agents resolve from its refsets (override to escape)" + rejected))
+                        "agents resolve from its refsets (override to escape)"
+                        + _ignored_signers_note(s, acks, active, excluded_agents) + rejected))
             continue
         countable = set(s.get("countable_statuses") or [ACCEPT])
         allow_na = bool(s.get("allow_na"))
@@ -392,15 +405,34 @@ def _evaluate_signoffs(record: dict, ev: dict | None) -> list[tuple[str, str]]:
             record, s.get("generated_lens_ids") or [], acks, revision, candidates,
             active, countable, allow_na, override_counts, excluded_agents)
         if len(signers) < required_count:
-            ignored = sorted({
-                a.get("from") for lid in (s.get("generated_lens_ids") or [])
-                for a in [acks.get(lid)] if isinstance(a, dict) and a.get("from") in excluded_agents})
-            note = (f"; ignored the sign-off of {', '.join(ignored)}, a paid gateway seat (external worker) "
-                    "that cannot give one" if ignored else "")
+            note = _ignored_signers_note(s, acks, active, excluded_agents)
             out.append((HOLD_MISSING_SIGNOFF,
                         f"signoff {sid!r} needs {required_count} distinct qualifying "
                         f"acks, has {len(signers)}{note}{rejected}"))
     return out
+
+
+def _ignored_signers_note(signoff_set: dict, acks: dict, active: set, excluded_agents) -> str:
+    """Name the authors of stored sign-offs that are ignored because they are a paid gateway seat or no longer on
+    the active roster, so a HOLD says why a signature on file does not count."""
+    paid: set[str] = set()
+    gone: set[str] = set()
+    for lid in signoff_set.get("generated_lens_ids") or []:
+        ack = acks.get(lid)
+        author = ack.get("from") if isinstance(ack, dict) else None
+        if not isinstance(author, str):
+            continue
+        if author in excluded_agents:
+            paid.add(author)
+        elif author not in active:
+            gone.add(author)
+    parts = []
+    if paid:
+        parts.append(f"ignored the sign-off of {', '.join(sorted(paid))}, a paid gateway seat (external worker) "
+                     "that cannot give one")
+    if gone:
+        parts.append(f"ignored the sign-off of {', '.join(sorted(gone))}, no longer an active seat on the roster")
+    return "; " + "; ".join(parts) if parts else ""
 
 
 def _signoff_signers(record, lens_ids, acks, revision, candidates, active,

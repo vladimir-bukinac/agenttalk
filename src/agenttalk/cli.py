@@ -2357,22 +2357,27 @@ def cmd_check(args: argparse.Namespace) -> int:
             out["gates"] = gate_obj
         print(json.dumps(out, indent=2))
     else:
+        # Name what blocks: the epoch and the gates are separate reasons, and either or both may hold.
+        epoch_state = epoch_obj["state"] if epoch_obj is not None else "current"
+        gates_hold = gate_obj is not None and gate_obj["verdict"] == "HOLD"
         if exit_code == 0:
             print(f"current     {rid}")
-            if epoch_obj is not None:
-                print(f"  epoch: current ({epoch_obj['current_epoch'] or 'no barrier'})")
-        elif epoch_obj is not None and epoch_obj["state"] == "previous-epoch":
+        elif epoch_state == "previous-epoch":
             print(f"previous-epoch  {rid}")
+        elif epoch_state == "unknown-pre-epoch":
+            print(f"pre-epoch   {rid}")
+        else:
+            print(f"hold        {rid}")
+        if epoch_state == "previous-epoch":
             print(f"  this request predates the current global epoch "
                   f"({epoch_obj['current_epoch']}) — do NOT act on it; re-ask "
                   f"under the current barrier for irreversible actions.")
-        elif epoch_obj is not None:  # unknown-pre-epoch
-            print(f"pre-epoch   {rid}")
+        elif epoch_state == "unknown-pre-epoch":
             print(f"  this opener predates epochs (no epoch_at_send) and a "
                   f"barrier exists ({epoch_obj['current_epoch']}) — do NOT act; "
                   f"re-ask under the current barrier for irreversible actions.")
-        else:
-            print(f"hold        {rid}")
+        elif epoch_obj is not None:
+            print(f"  epoch: current ({epoch_obj['current_epoch'] or 'no barrier'})")
         if gate_obj is not None:
             print(f"  gates: {gate_obj['verdict']}")
             for warning in gate_obj.get("warnings", []):
@@ -2380,6 +2385,13 @@ def cmd_check(args: argparse.Namespace) -> int:
             for blocker in gate_obj["blockers"]:
                 why = f" - {blocker['reason']}" if blocker.get("reason") else ""
                 print(f"    blocker {blocker['name']}: {blocker['status']}{why}")
+        if gates_hold:
+            names = [blocker["name"] for blocker in gate_obj["blockers"]]
+            which = f"gate {names[0]} is" if len(names) == 1 else f"gates {', '.join(names)} are"
+            # Only --epoch can say the request is current; without it the epoch was not checked.
+            again = (" The request itself is current: do not re-ask it."
+                     if epoch_obj is not None and epoch_state == "current" else "")
+            print(f"  do NOT act until {which} GO (`agenttalk gate check`).{again}")
     return exit_code
 
 
@@ -4020,10 +4032,15 @@ def cmd_close(args: argparse.Namespace) -> int:
                 # A paid gateway seat (external worker) can never give a sign-off. This comes first and does
                 # not depend on --override: a hand-edited roster that makes such a seat a lead must not let
                 # it record an overriding sign-off in place of a trusted one.
-                if sid is not None and agent in close_mod.external_worker_agents(store.load_config()):
+                required_lens = any(
+                    isinstance(lens, dict) and lens.get("id") == args.lens and lens.get("required", True)
+                    for lens in record.get("required_lenses") or [])
+                if ((sid is not None or required_lens)
+                        and agent in close_mod.external_worker_agents(store.load_config())):
+                    what = f"signoff {sid!r}" if sid is not None else f"required lens {args.lens!r}"
                     sys.stderr.write(
                         f"agenttalk close ack: {agent!r} runs through the paid gateway (an external "
-                        f"worker) and cannot give signoff {sid!r}, not even as an override; ask a "
+                        f"worker) and cannot satisfy {what}, not even as an override; ask a "
                         "trusted seat. Nothing was recorded.\n")
                     return 2
                 if sid is not None and not override:
@@ -4117,11 +4134,16 @@ def cmd_close(args: argparse.Namespace) -> int:
         gate_check = gate_mod.check_gates(
             store.root, scope=record.get("gate_scope") if isinstance(record, dict) else None)
         rec = record if isinstance(record, dict) else {}
-        signoff_eval = _build_signoff_eval(store, rec) if isinstance(record, dict) else None
-        worktree_eval = _close_worktree_eval(store, rec) if isinstance(record, dict) else None
+        # A malformed record is reported by the verdict itself; no evaluator may read it first.
+        wellformed = close_mod._is_wellformed(record)
+        signoff_eval = _build_signoff_eval(store, rec) if wellformed else None
+        worktree_eval = _close_worktree_eval(store, rec) if wellformed else None
         dod_eval = (_build_dod_eval(store, rec, acceptance_live=rec.get("status") != close_mod.PUBLISHED)
-                    if isinstance(record, dict) else None)
-        result = close_mod.compute_verdict(rec, gate_check, signoff_eval, worktree_eval, dod_eval)
+                    if wellformed else None)
+        result = close_mod.compute_verdict(
+            rec, gate_check, signoff_eval, worktree_eval, dod_eval,
+            external_workers=frozenset(close_mod.external_worker_agents(store.load_config())),
+            active_agents=frozenset(store.active_agents()))
         left_out = (signoff_eval or {}).get("excluded_candidates") or {}
         if left_out:
             result["signoff_exclusions"] = left_out
@@ -4184,13 +4206,16 @@ def cmd_close(args: argparse.Namespace) -> int:
                 else:
                     gate_check = gate_mod.check_gates(
                         store.root, scope=record.get("gate_scope"))
-                    signoff_eval = _build_signoff_eval(store, record)
-                    worktree_eval = _close_worktree_eval(store, record)
-                    dod_eval = _build_dod_eval(store, record, acceptance_live=verdict == close_mod.VERDICT_GO,
-                                               preflight_scan=preflight_scan)
+                    wellformed = close_mod._is_wellformed(record)
+                    signoff_eval = _build_signoff_eval(store, record) if wellformed else None
+                    worktree_eval = _close_worktree_eval(store, record) if wellformed else None
+                    dod_eval = (_build_dod_eval(store, record, acceptance_live=verdict == close_mod.VERDICT_GO,
+                                                preflight_scan=preflight_scan) if wellformed else None)
                     record["worktree_isolation"] = worktree_eval
                     result = close_mod.compute_verdict(
-                        record, gate_check, signoff_eval, worktree_eval, dod_eval)
+                        record, gate_check, signoff_eval, worktree_eval, dod_eval,
+                        external_workers=frozenset(close_mod.external_worker_agents(store.load_config())),
+            active_agents=frozenset(store.active_agents()))
                     if args.verdict == "go" and result["verdict"] != close_mod.VERDICT_GO:
                         sys.stderr.write(
                             "agenttalk close publish: refusing GO - close check is HOLD:\n")
