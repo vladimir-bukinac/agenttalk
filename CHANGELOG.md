@@ -136,6 +136,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   What you need to do: nothing. To let the close pass, name a trusted seat as a candidate, or use
   the existing `close signoffs override`.
 
+- **A failed `agenttalk gateway start` no longer leaves the gateway without its stop file (#456).**
+  The command used to delete `gateway.kill` first and only then check the ports and ask the task to run. If a
+  port was busy, or Windows or systemd refused to run the task (for example because it was disabled), the
+  command failed but the stop file was already gone, so a later logon or restart-on-failure retry could start a
+  gateway you had stopped. Now the ports are checked before anything is deleted. The stop file is deleted only
+  while `gateway start` holds the gateway's startup lock, so a gateway launched at the same moment by another
+  trigger waits, and after a failed start finds the stop file back and refuses. If the task cannot be started
+  (or the command is interrupted), the stop file is put back exactly as it was; if you had none, none is
+  created. If putting it back fails (for example a permission error), the command says so plainly, shows both
+  errors and tells you to run `agenttalk gateway stop` to write it again; until you do, no stop file protects
+  the gateway. A gateway launched by that start waits for the startup lock up to 45 s (it used to wait 10 s), so a
+  slow but successful start request still succeeds. After the task has been started the stop file stays removed,
+  also when the gateway then takes too long to become ready.
+
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer
   who meant to try three setup commands in a throwaway store ran them against the live one;
@@ -285,6 +299,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `tests/test_store_fence.py` and `tests/test_probe_store.py`.
   - The listen and lead skills, in the Claude and Codex copies, say how to try commands, and
     so do the new-user manual and the agent manual.
+
+- **The operations guide puts safeguards before the steps they protect, and three pages say
+  what the code does.** Before a runtime switch, a rollback or a resume refreshes the
+  supervisor's scripts, the guide now has you disable its scheduled task and enable it again
+  only as the last step before the host starts, so it cannot start half-refreshed or before a
+  rolled-back gateway is in place; a restore disables it, and the paid gateway's task, from
+  the start and enables each only just before it starts; after a restore, the paid gateway
+  starts before any agent resumes; and a protected agent (the liaison or a lead) is started by
+  the protected restart request, because the supervisor never starts a stopped one on its own.
+  The roles page says what `--work-head` does on a review task (no stage requires it) and that
+  a published HOLD exits with code 3; the overview says the emergency release comes from the
+  liaison when there is one, and that a close can require captured knowledge (#444).
 
 ### Changed
 

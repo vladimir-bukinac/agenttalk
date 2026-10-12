@@ -2921,3 +2921,234 @@ def test_a_tampered_manifest_reasoning_param_fails_closed(tmp_path, monkeypatch)
         service.reconfigure_endpoint(root, ledger=ledger)
     status = gateway_status(root, commands=FakeCommands(), ledger=ledger)
     assert "install_manifest_invalid" in status["errors"]
+
+
+def _installed_for_start(tmp_path, commands, monkeypatch):
+    root = tmp_path / "project"
+    ledger = SpendLedger(tmp_path / "spend" / "ledger.sqlite3", tmp_path / "spend" / "install.json")
+    executable = tmp_path / "litellm.exe"
+    executable.write_bytes(b"fake")
+    initialize_install(
+        root,
+        litellm_executable=executable,
+        opening_micro_eur=0,
+        opening_evidence="test dashboard, observed 2026-07-16",
+        ledger=ledger,
+        front_token_path=tmp_path / "secrets" / "front.txt",
+        internal_token_path=tmp_path / "secrets" / "internal.txt",
+    )
+    ledger.place_hold(reason="start watched service before enabling paid proof")
+    install_task(root, commands=commands, ledger=ledger)
+    # not ready yet, and no token errors: the state `gateway start` is meant to begin from
+    monkeypatch.setattr(service, "gateway_status", lambda *_a, **_k: {"ready": False, "errors": []})
+    monkeypatch.setattr(service, "exclusive_bind_probe", lambda _host, _port: None)
+    return root, ledger
+
+
+class _RefusingStartCommands(FakeCommands):
+    def start(self, task_name: str) -> None:
+        raise service.GatewayConfigError("the task cannot be run (it is disabled)")
+
+
+def _put_stop_file(root, text: str = "operator-stop\n") -> None:
+    kill = service.kill_switch_path(root)
+    kill.parent.mkdir(parents=True, exist_ok=True)
+    kill.write_text(text, encoding="ascii")
+
+
+def test_start_keeps_the_stop_file_when_a_port_is_busy(tmp_path, monkeypatch) -> None:
+    commands = FakeCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root)
+
+    def busy(_host, _port):
+        raise service.GatewayConfigError("gateway port is already occupied")
+
+    monkeypatch.setattr(service, "exclusive_bind_probe", busy)
+    with pytest.raises(service.GatewayConfigError, match="occupied"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert service.kill_switch_path(root).read_text(encoding="ascii") == "operator-stop\n"
+    assert commands.started == []
+
+
+def test_start_restores_the_stop_file_when_the_task_cannot_be_run(tmp_path, monkeypatch) -> None:
+    commands = _RefusingStartCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root, "stopped by the operator\n")
+    monkeypatch.setattr(service, "exclusive_bind_probe", lambda _host, _port: None)
+
+    with pytest.raises(service.GatewayConfigError, match="disabled"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert service.kill_switch_path(root).read_text(encoding="ascii") == "stopped by the operator\n"
+
+
+def test_failed_start_does_not_create_a_stop_file_the_operator_never_had(tmp_path, monkeypatch) -> None:
+    commands = _RefusingStartCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+
+    with pytest.raises(service.GatewayConfigError, match="disabled"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert not service.kill_switch_path(root).exists()
+
+
+def test_start_removes_the_stop_file_once_the_task_was_asked_to_run(tmp_path, monkeypatch) -> None:
+    """Unchanged: after commands.start succeeded the stop file stays gone, even if readiness times out."""
+    commands = FakeCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root)
+    monkeypatch.setattr(service, "gateway_status", lambda *_a, **_k: {"ready": False, "errors": ["x"]})
+
+    with pytest.raises(service.GatewayConfigError, match="did not become ready"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert commands.started == [project_task_name(root)]
+    assert not service.kill_switch_path(root).exists()
+
+
+def test_linux_start_restores_the_stop_file_when_the_unit_cannot_be_started(tmp_path, monkeypatch) -> None:
+    class Refusing(FakeSystemdCommands):
+        def start(self, unit_name: str) -> None:
+            raise service.GatewayConfigError("unit refused to start")
+
+    commands = Refusing()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root)
+
+    with pytest.raises(service.GatewayConfigError, match="refused"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert service.kill_switch_path(root).exists()
+
+
+def _stop_file_path_class(*, interrupt_after_unlink=False, refuse_write=False):
+    """A path for gateway.kill that misbehaves at one chosen moment (the real file operations still happen)."""
+    base = type(Path())
+
+    class Flaky(base):
+        def unlink(self, missing_ok=False):
+            super().unlink(missing_ok=missing_ok)
+            if interrupt_after_unlink:
+                raise KeyboardInterrupt
+
+        def write_bytes(self, data):
+            if refuse_write:
+                raise PermissionError("denied")
+            return super().write_bytes(data)
+
+    return Flaky
+
+
+def test_an_interrupt_right_after_the_stop_file_is_removed_puts_it_back(tmp_path, monkeypatch) -> None:
+    commands = FakeCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root, "operator-stop\n")
+    flaky = _stop_file_path_class(interrupt_after_unlink=True)
+    monkeypatch.setattr(service, "kill_switch_path", lambda r: flaky(service.gateway_state_dir(r) / "gateway.kill"))
+
+    with pytest.raises(KeyboardInterrupt):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    assert (service.gateway_state_dir(root) / "gateway.kill").read_text(encoding="ascii") == "operator-stop\n"
+    assert commands.started == []
+
+
+def test_a_refused_start_and_a_failed_write_back_say_plainly_the_stop_file_is_missing(
+        tmp_path, monkeypatch) -> None:
+    commands = _RefusingStartCommands()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root)
+    flaky = _stop_file_path_class(refuse_write=True)
+    monkeypatch.setattr(service, "kill_switch_path", lambda r: flaky(service.gateway_state_dir(r) / "gateway.kill"))
+
+    with pytest.raises(service.GatewayConfigError) as caught:
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+
+    text = str(caught.value)
+    assert "NOT protected by a stop file" in text and "agenttalk gateway stop" in text
+    assert "disabled" in text and "denied" in text                       # both errors are shown
+    assert "disabled" in str(caught.value.__cause__)                     # and the start error is the cause
+
+
+@pytest.mark.parametrize("start_fails", [True, False])
+def test_no_service_can_start_while_the_stop_file_is_out(tmp_path, monkeypatch, start_fails) -> None:
+    """A startup attempted by another trigger while `gateway start` holds the lock waits for it; after a failed start
+    it then finds the stop file back and refuses, after a successful start it is free to go on."""
+    monkeypatch.setattr(service, "GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0.0)
+    monkeypatch.setattr(service, "GATEWAY_START_HOLD_ALLOWANCE_SECONDS", 0.0)
+    attempts: list[str] = []
+
+    class Racing(FakeCommands):
+        def start(self, task_name: str) -> None:
+            try:
+                run_service(root)
+            except service.GatewayLifecycleContended:
+                attempts.append("waited for the lock")
+            if start_fails:
+                raise service.GatewayConfigError("the task cannot be run (it is disabled)")
+            super().start(task_name)
+
+    commands = Racing()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    _put_stop_file(root)
+    kill = service.kill_switch_path(root)
+
+    if start_fails:
+        with pytest.raises(service.GatewayConfigError, match="disabled"):
+            start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+        assert kill.exists()
+        with pytest.raises(service.GatewayConfigError, match="gateway.kill is present"):
+            run_service(root)                                            # the later startup refuses
+    else:
+        with pytest.raises(service.GatewayConfigError, match="did not become ready"):
+            start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+        assert not kill.exists()
+        with service._gateway_lifecycle_lock(root, "probe"):             # the lock is free again afterwards
+            pass
+    assert attempts == ["waited for the lock"]
+
+
+@pytest.mark.parametrize("backend", [FakeCommands, FakeSystemdCommands])
+def test_a_slow_but_successful_start_does_not_make_the_service_give_up(tmp_path, monkeypatch, backend) -> None:
+    """The scheduler call succeeds, but later than the plain lock wait. The service launched by it waits at its
+    startup lock longer than the call can last, so it gets the lock once `gateway start` lets go."""
+    monkeypatch.setattr(service, "GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(service, "GATEWAY_START_HOLD_ALLOWANCE_SECONDS", 5.0, raising=False)
+    outcome: list[object] = []
+
+    def service_startup() -> None:
+        try:
+            with service._gateway_lifecycle_lock(root, "run-service-startup"):
+                outcome.append("got the lock")
+        except BaseException as exc:  # noqa: BLE001 - reported to the test thread
+            outcome.append(exc)
+
+    class Slow(backend):
+        def start(self, task_name: str) -> None:
+            thread = threading.Thread(target=service_startup)
+            thread.start()
+            time.sleep(0.6)                      # longer than the plain 0.2 s wait
+            super().start(task_name)
+            self.thread = thread
+
+    commands = Slow()
+    root, ledger = _installed_for_start(tmp_path, commands, monkeypatch)
+    with pytest.raises(service.GatewayConfigError, match="did not become ready"):
+        start_task(root, commands=commands, ledger=ledger, readiness_timeout_seconds=0)
+    commands.thread.join(timeout=10)
+
+    assert outcome == ["got the lock"]
+    assert commands.started
+
+
+def test_other_lifecycle_operations_keep_the_plain_lock_wait(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(service, "GATEWAY_LIFECYCLE_LOCK_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(service, "GATEWAY_START_HOLD_ALLOWANCE_SECONDS", 60.0)
+    started = time.monotonic()
+    with service._gateway_lifecycle_lock(tmp_path, "start"):
+        with pytest.raises(service.GatewayLifecycleContended):
+            with service._gateway_lifecycle_lock(tmp_path, "reconfigure"):
+                raise AssertionError("the lock was not held")
+    assert time.monotonic() - started < 10
