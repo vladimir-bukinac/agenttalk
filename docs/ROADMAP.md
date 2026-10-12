@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-12 (UTC)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-12 (UTC; the operator's order of that day in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.101.0 (2026-10-12). `CHANGELOG.md` remains the release-history source of truth.
@@ -263,6 +263,21 @@ These come from the team's own merges and reviews this week. They change how the
 4. **Combined merges paid off.** One integration pull request carried #414 and #419 through one Windows run (#430), and the release followed the same day.
 5. **Waiting on the operator:** the one-time update of the maintainers' gateway task to 0.100.0 (the step-by-step guide is reviewed), and the second team's switch-on of usage readings (its runbook is ready). Both need the operator at the machine.
 
+### 6.11 The operator's order of 2026-10-12
+
+On 2026-10-12 the operator approved this order for the work that comes next. In plain words: switch the maintainers' gateway to the new release, settle the bug that paused the paid gateway, then make "finished" mean something a seat cannot fake, then fix how the README tells people to run a team without anyone watching.
+
+1. **The 0.101.0 switch.** Its step-by-step guide is reviewed and approved.
+2. **#424, the Qwen gateway's LiteLLM stream bug.** It hit a second time on 2026-10-12 and paused all paid gateway work until it was settled by hand.
+3. **#178, the completion record, built attempt-bound.** A "done" is tied to one attempt, not to a seat or a ticket (§7.2, item 1).
+4. **A README change.** Present "a start script plus the lead's timers" as the normal way to run a team unattended on any operating system. The supervisor becomes an optional, independent watcher. Add a short section on leads that report to a lead.
+
+#356 stays planned.
+
+Two notes beside item 4. They are notes, not a change of order:
+- **The lead's timers expire.** In Claude Code they lapse after about seven days and live only in the session. So the README must say how to renew them, until agenttalk owns reminders itself (§7.2, item 6).
+- **The identity gap.** The README must state it beside the new unattended advice (§7.2, item 5): a seat can send a message that claims to come from the lead. It must also say who is operator-facing in a chain where one lead reports to another lead.
+
 ---
 
 ## 7. Candidate Features From the Agent-to-Agent Landscape
@@ -280,7 +295,7 @@ These come from the team's own merges and reviews this week. They change how the
 | 7 | Opt-in completion gates: a tagged "done" without a verdict or head is refused and re-prompted in the same turn | Agent Teams' TaskCompleted/TeammateIdle hooks | Later (operator decision; it reverses the tag layer's deliberate permissiveness) |
 
 **Rejected:**
-- another peer transport or MCP relay (it splits delivery, identity and audit);
+- another peer transport or MCP relay (it splits delivery, identity and audit). A typed MCP front door over the same CLI and store is a different thing: it adds no second transport, and it is tracked in §7.2, item 2;
 - a wholesale SQLite store (it loses per-file signing and archives; an index is fine);
 - Agent Teams as the runtime (Claude-only, interactive-only, no resume);
 - a shared self-claim task list (it breaks deliberate cross-vendor routing and the read-only board);
@@ -322,6 +337,31 @@ Scape (scape.work) is a paid macOS app that runs many Claude and Codex sessions 
 | **The operator channel as threads that settle into decisions** | Scape's shared plan keeps what is settled in the document and each open question in a thread; closing a thread records a decision or an action. Agents join only when a person invites them. The relay server sees only encrypted messages. This fits the operator's approved two-way channel with the lead (§3, row G). | Shapes that design; no extra cost |
 | **The lead's running log as a table** | Scape's manager adds one row per wake-up. The lead's state is kept as notes in prose that keep growing; a small table (time, event, item, status) would be easier to search and to hand over. | Small |
 | **Numbers for what reviews catch** | Scape reports that 4 of 5 reviewed jobs led to a change. The bus already holds every review round, so the yield and cost of reviews by kind of finding can be counted. This is reviewer calibration (#160, §8). | A report first, no build |
+
+### 7.2 Ideas from Houmao, FCoP and the mods ideas round (2026-10-12)
+
+Houmao runs teams of command-line agents in tmux on Linux and macOS: specialists with profiles, a gateway per agent, and loops. FCoP is a file-based protocol for tasks, reports and reviews, with attempts and an adapter for MCP. Alongside them the team ran its own ideas round on 2026-10-12 (the mods round). Seven seats from two vendors read ten ideas blind and voted. The table gives each idea's verdict (with how many of the seven put it in their top three), and where it goes. None is built; each still gets its own challenge before it is.
+
+| # | Idea | What it would change here | The team's verdict | Where it goes |
+|---|---|---|---|---|
+| 1 | **Completion bound to the attempt** | A "done" counts only for the request, the round and, when the task pinned one, the head it was made for. An older reply never closes a newer round, and a finished attempt is never driven again. | Keep; 7 of 7 ranked it first | Inside #178 |
+| 9 | **One read-only screen: `agenttalk overview`, plus thin `/agenttalk` and `$agenttalk`** | One screen built from the dashboard's state. It never moves a cursor, writes, wakes a seat or calls a model. | Keep; 5 of 7 in their top three | Weeks 3-4 (early) |
+| 6 | **Reminders owned by agenttalk** (the lead's check-in and handover) | Merged with the deferred self-wake in §7. Works for a Codex lead. A cost bound in paid wake-ups per day. | Keep; 4 of 7 | Right after #178 and the README change |
+| 5 | **Authority from trusted configuration, never from a claimed sender name** | FACT: the wrapper's `sender_is_lead` compares the message's own `from` with the live roster (`wrapper/run.py`); with signing off, nothing authenticates it. Cheap first step: turn signing on. Then a design. | Keep; 4 of 7 | Design right after #178; build later |
+| 3 + 8 | **One team definition and `agenttalk team start / stop / status`** | First generate and print the start script from the existing roster and supervisor settings (no third config file). Team stop uses the supported release, with proof that each release was consumed, never a kill. Keep-alive through tmux or systemd comes later (#356). | Change (the two merged) | Weeks 3-4 |
+| 7 | **Watch a background seat** | A read-only tail of its wrapper log, folded into the overview. No terminal attach. | Change (folded into 9) | With 9 |
+| 2 | **Typed tools through a local MCP server** | A thin front door over the same CLI and store, so delivery, signing and audit stay the same. The seat's identity comes from its launch configuration, never from a tool field. | Change: not the rejected relay (§7). Later, after 5, with its own challenge | Later |
+| 4 | **A read-only guided tour for a first-time team** | Shows a newcomer what each part does, without changing anything. | Small; the views split (keep, or not now) | Later, optional |
+| 10 | **A Claude Code mod** (a deny-only guard plus a status band) | A guard and a band that only Claude seats would have. | Probe only. First try Claude Code's per-seat deny rules and CLI refusals. Anything every seat must obey lives in agenttalk, not in a Claude-only mod. | Later |
+
+**What the round found missing**
+- **The switch helpers as supported commands.** Restarts that rest on evidence: a release with proof it was consumed, and readiness proved by the replacement itself. The 0.101.0 switch needed about two dozen hand-made scripts.
+- **A supported cost-per-turn report** from the ledger. Hand-made versions got the ledger's rules wrong twice.
+- **`install-skills` into a gateway seat's profile** (#468), so the paid-gateway seats get the shipped skills.
+- **A Codex-parity column** for every idea: what a Codex seat gets, and what it misses.
+- **A docs check** that every command a document shows was run once.
+
+One point from the opinions: #178 needs crash tests. A crash after the work is finished but before the reply is recorded must be covered. An outcome nobody can tell needs reconciling, not a blind rerun.
 
 ---
 
