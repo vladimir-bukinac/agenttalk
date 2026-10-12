@@ -104,7 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Codex pair says the same thing, and that every check example on those four pages names
   `--epoch`; `tests/test_skill_lint.py` now pins `--epoch --gates` for the lead skills.
 
-- **A seat that runs through the paid gateway can no longer give a required sign-off (#447).**
+- **A seat that runs through the paid gateway can no longer give a required sign-off of a sign-off set (#447).**
   Such a seat (an "external worker", a cheaper outside model with a narrower level of trust) was
   kept out of sign-off lists only at the moment the roster changed. If the sign-off policy or the
   domain lists were edited by hand afterwards, a close could list that seat as a candidate and
@@ -149,6 +149,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the gateway. A gateway launched by that start waits for the startup lock up to 45 s (it used to wait 10 s), so a
   slow but successful start request still succeeds. After the task has been started the stop file stays removed,
   also when the gateway then takes too long to become ready.
+
+- **A seat that runs through the paid gateway can satisfy no required close lens, and a malformed close record is reported before anything reads it.**
+  The earlier fix (#447) kept such a seat (an "external worker") from giving a sign-off that belongs to a
+  sign-off set. A required lens you declare by hand (`close open --lens security --allow security:gw`) and the
+  lenses of an acceptance close were not covered, so the seat could still record, and have counted, an ack on them.
+
+  What you will notice:
+  - `close ack` from a paid gateway seat on any required lens (a sign-off set's, one you declared, an acceptance
+    lens) is refused with a plain message and records nothing, also with `--override`. Optional lenses are not
+    affected, because they feed no verdict.
+  - An ack already stored on a required lens by such a seat (for example a hand-edited record) is ignored when
+    the close is counted, and `close check` names the lens and says why. A trusted seat's ack still satisfies it.
+  - The acceptance checks name an acceptance lens ack from such a seat and do not accept it as independent. Only the
+    required acceptance lenses are checked; an optional note from such a seat is left alone.
+  - An ack stored on a required lens now counts only while its author is, at check time, on the active roster and is
+    not a paid gateway seat: the same rule a sign-off signature and a stored override already follow. An ack from a
+    retired, removed, renamed-away or unknown author is ignored and `close check` names it. This deliberately turns
+    an older GO that rested on a since-retired trusted reviewer's ack into a HOLD, until a current trusted seat acks
+    the lens (or a current trusted lead records an override ack). A sign-off set's HOLD names the author whose
+    signature was ignored. Nothing about a seat's past is looked up, so a damaged or older roster cannot bring a paid
+    seat's ack back.
+  - An acceptance close is the exception to that recovery: its frozen runner must give the accept, so if that runner
+    leaves the team before publication the close stays on HOLD, a lead's override ack does not help, and the close
+    needs a new attempt (a new close id with a plan that names a current runner; a published one continues with
+    `close reopen --successor`). A recovery command is tracked in issue #463.
+  - `close check` no longer reads a malformed close record (for example `lens_acks` that is a string) before
+    reporting it: it gives the normal "malformed close record" HOLD instead of a crash. `close publish` still
+    refuses a malformed record with its existing error (exit 2); it never publishes one.
+
+  What you need to do: nothing, except that an older close that rested on a paid seat's ack, or on the ack of a
+  seat that has since left the roster, is now on HOLD until a current trusted seat acks that lens.
 
 - **Trying a command no longer risks the live message store.** A seat's shell inherits the
   live store's location, and that outranks the folder it runs in. On 2026-10-08 a reviewer
