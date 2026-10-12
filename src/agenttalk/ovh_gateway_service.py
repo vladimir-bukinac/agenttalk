@@ -2008,32 +2008,60 @@ def start_task(
     # wait is longer (GATEWAY_START_HOLD_ALLOWANCE_SECONDS), so a slow but successful start stays successful.
     # `schtasks /Run` returns once the task is launched and the systemd unit is Type=simple, so `systemctl start`
     # returns before the service asks for the lock. Readiness is polled after the lock is released.
-    with _gateway_lifecycle_lock(root, "start"):
-        # Check the ports first: a busy port must leave the operator's stop file alone.
-        exclusive_bind_probe(PUBLIC_HOST, PUBLIC_PORT)
-        exclusive_bind_probe(INTERNAL_HOST, INTERNAL_PORT)
-        kill = kill_switch_path(root)
+    kill = kill_switch_path(root)
+    stop_file: bytes | None = None
+    started = False                           # the task start request has succeeded
+    not_protected: GatewayConfigError | None = None
+
+    def put_back(exc: BaseException) -> None:
+        """Put back the stop file the operator had (never create one they lacked)."""
+        nonlocal not_protected
+        if stop_file is None:
+            return
         try:
-            stop_file = kill.read_bytes()
-        except FileNotFoundError:
-            stop_file = None
-        try:
-            kill.unlink(missing_ok=True)
-            commands.start(identity.task_name)
-        except BaseException as exc:
-            # The task was not started, so put back the stop file the operator had (never create one they
-            # lacked). This covers an interrupt right after the removal as well as a refused start.
-            if stop_file is not None:
-                try:
-                    kill.parent.mkdir(parents=True, exist_ok=True)
-                    kill.write_bytes(stop_file)
-                except BaseException as restore_error:
-                    raise GatewayConfigError(
-                        f"gateway start failed ({exc!r}) and the stop file {kill} could NOT be put back "
-                        f"({restore_error!r}): the gateway is NOT protected by a stop file. Run "
-                        "`agenttalk gateway stop` now to write it again."
-                    ) from exc
-            raise
+            kill.parent.mkdir(parents=True, exist_ok=True)
+            kill.write_bytes(stop_file)
+        except BaseException as restore_error:
+            not_protected = GatewayConfigError(
+                f"gateway start failed ({exc!r}) and the stop file {kill} could NOT be put back "
+                f"({restore_error!r}): the gateway is NOT protected by a stop file. Run "
+                "`agenttalk gateway stop` now to write it again."
+            )
+            raise not_protected from exc
+
+    try:
+        with _gateway_lifecycle_lock(root, "start"):
+            # Check the ports first: a busy port must leave the operator's stop file alone.
+            exclusive_bind_probe(PUBLIC_HOST, PUBLIC_PORT)
+            exclusive_bind_probe(INTERNAL_HOST, INTERNAL_PORT)
+            try:
+                stop_file = kill.read_bytes()
+            except FileNotFoundError:
+                stop_file = None
+            try:
+                kill.unlink(missing_ok=True)
+                commands.start(identity.task_name)
+                started = True
+            except BaseException as exc:
+                # The task was not started: this covers an interrupt right after the removal as well as a
+                # refused start. The stop file goes back while the lock is still held.
+                put_back(exc)
+                raise
+    except BaseException as exc:
+        if not_protected is not None and exc is not not_protected:
+            # The write-back failed and then the lock failed to let go: keep the warning that matters most.
+            raise GatewayConfigError(
+                f"{not_protected} Also the lifecycle lock could not be released cleanly: {exc!r}"
+            ) from exc
+        if started:
+            # Only the lock's exit can fail once the start request succeeded. The stop file stays removed
+            # (it is not restored after the lock is released: the waiting service may already be starting).
+            raise GatewayConfigError(
+                "gateway start was requested and the gateway may be starting, but the lifecycle lock could not "
+                f"be released cleanly ({exc!r}). Run `agenttalk gateway status`, then `agenttalk gateway stop` "
+                "if it should not run."
+            ) from exc
+        raise
     deadline = time.monotonic() + max(0.0, readiness_timeout_seconds)
     last_errors: list[str] = []
     while time.monotonic() < deadline:
