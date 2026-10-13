@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.101.1] - 2026-10-13
+
+**In short:** one fix for the paid gateway. When the model pauses for a long time in the middle
+of a reply, the gateway now waits up to ten minutes for the next piece instead of two. Such a
+call used to end as an "uncertain" paid attempt that stopped every gateway seat until someone
+settled it by hand. The gateway also writes one log line for each reply it streams, so a
+future stall shows what happened. Nothing else changes: LiteLLM, the spending ledger and the
+prices are as before, and the installed skills do not need refreshing.
+
 ### Fixed
 
 - **A long silent model reply no longer ends as an uncertain paid attempt (#424, part A).** The
