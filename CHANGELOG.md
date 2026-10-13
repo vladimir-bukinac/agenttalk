@@ -10,6 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A long silent model reply no longer ends as an uncertain paid attempt (#424, part A).** The
+  gateway's front door gave up when the model sent nothing for two minutes. That left the paid
+  call "uncertain" and stopped every gateway seat until someone settled it by hand. Once a reply
+  has started, the front door now waits up to ten minutes for the next piece (connecting and
+  starting the reply still wait two minutes). It also writes one line per started reply to
+  `stream-waits.jsonl` in the gateway's state folder: the longest wait for a byte, the total
+  time and how the call ended, so the next incident shows what really happened. A reply that
+  stays silent for more than ten minutes is still marked uncertain, exactly as before; the
+  LiteLLM version, the ledger and the prices are unchanged.
+  Technical detail: `FrontConfig.stream_idle_timeout_seconds` (`STREAM_IDLE_TIMEOUT_SECONDS`,
+  600 s) is applied to the upstream socket after the response headers arrive; the front keeps
+  the socket from before `getresponse()` because `http.client` drops it on "Connection: close".
+  `request_timeout_seconds` (120 s) is unchanged for connecting and waiting for the headers.
+  `GatewayFront.stream_wait_observer` receives one record per started reply, and `StreamWaitLog`
+  (bounded to 1 MiB, one rotation) writes it.
+
 ## [0.101.0] - 2026-10-12
 
 **In short:** the checks that decide whether a team's work is finished are stricter and say more

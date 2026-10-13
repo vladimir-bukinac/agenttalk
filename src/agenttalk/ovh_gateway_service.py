@@ -46,7 +46,13 @@ from .ovh_gateway import (
     render_litellm_config,
     write_secret_file,
 )
-from .ovh_gateway_front import CONFIG_ERROR_CODE, PUBLIC_ROUTE, FrontConfig, GatewayFront
+from .ovh_gateway_front import (
+    CONFIG_ERROR_CODE,
+    PUBLIC_ROUTE,
+    FrontConfig,
+    GatewayFront,
+    StreamWaitLog,
+)
 from .ovh_gateway_reasoning import (
     ReasoningParamError,
     ReasoningStripLog,
@@ -1823,6 +1829,9 @@ def run_service(
         )
         front.reasoning_observer = ReasoningStripLog(
             gateway_state_dir(root) / "reasoning-stripped.jsonl"
+        ).record
+        front.stream_wait_observer = StreamWaitLog(
+            gateway_state_dir(root) / "stream-waits.jsonl"
         ).record
         _wait_liveliness(front, process)
         server = front.make_server()

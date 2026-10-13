@@ -5,11 +5,14 @@ from __future__ import annotations
 import contextlib
 import http.client
 import json
+import os
 import socket
 import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Callable
 
@@ -41,6 +44,14 @@ from .ovh_gateway_reasoning import (
 _MAX_BUFFERED_JSON_BYTES = 8 * 1024 * 1024
 
 PUBLIC_ROUTE = "/v1/messages"
+# How long the front waits for the NEXT byte of a streamed reply from LiteLLM,
+# once the reply has started (#424). Connecting and waiting for the reply to
+# start keep FrontConfig.request_timeout_seconds (120 s). A model can reason
+# silently for longer than that; three incidents ended at 120 s and left a paid
+# attempt uncertain, which blocks every gateway seat until someone reconciles
+# it. Ten minutes is five times the old limit and well past any silence seen,
+# and a truly dead stream still ends as uncertain (just later).
+STREAM_IDLE_TIMEOUT_SECONDS = 600.0
 # Allowlisted content types the front will echo from the internal upstream into
 # the public response header (defense-in-depth vs CodeQL py/http-response-splitting;
 # the internal upstream only ever returns SSE or JSON). Anything else -> SSE default.
@@ -88,6 +99,7 @@ class FrontConfig:
     internal_host: str = INTERNAL_HOST
     internal_port: int = INTERNAL_PORT
     request_timeout_seconds: float = 120.0
+    stream_idle_timeout_seconds: float = STREAM_IDLE_TIMEOUT_SECONDS
     max_request_bytes: int = MAX_REQUEST_BYTES
     strip_reasoning: bool = True
 
@@ -104,6 +116,8 @@ class FrontConfig:
             raise GatewayConfigError("request body limit exceeds the trial policy")
         if self.request_timeout_seconds <= 0:
             raise GatewayConfigError("request timeout must be positive")
+        if self.stream_idle_timeout_seconds <= 0:
+            raise GatewayConfigError("stream idle timeout must be positive")
 
     @property
     def public_host_header(self) -> str:
@@ -198,6 +212,31 @@ class StreamUsage:
         return self.model, self.input_tokens, self.output_tokens
 
 
+class StreamWaitLog:
+    """Bounded, content-free record of how long each started reply waited for a byte (#424)."""
+
+    MAX_BYTES = 1024 * 1024
+
+    def __init__(self, path: str | os.PathLike[str]) -> None:
+        self.path = Path(path)
+        self._lock = threading.Lock()
+
+    def record(self, entry: dict[str, object]) -> None:
+        line = json.dumps(
+            {"ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), **entry},
+            separators=(",", ":"),
+        )
+        with self._lock:
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                if self.path.exists() and self.path.stat().st_size >= self.MAX_BYTES:
+                    os.replace(self.path, self.path.with_name(self.path.name + ".1"))
+                with open(self.path, "a", encoding="utf-8") as handle:
+                    handle.write(line + "\n")
+            except OSError:
+                return
+
+
 class GatewayFront:
     """Own one public listener and one conservative provider-attempt permit."""
 
@@ -208,12 +247,16 @@ class GatewayFront:
         *,
         connection_factory: Callable[..., http.client.HTTPConnection] = http.client.HTTPConnection,
         reasoning_observer: Callable[[str, ReasoningStats], None] | None = None,
+        stream_wait_observer: Callable[[dict[str, object]], None] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         config.validate()
         self.config = config
         self.ledger = ledger
         self.connection_factory = connection_factory
         self.reasoning_observer = reasoning_observer
+        self.stream_wait_observer = stream_wait_observer
+        self._clock = clock
         self._permit = threading.BoundedSemaphore(1)
         self._server: ThreadingHTTPServer | None = None
 
@@ -366,6 +409,9 @@ class GatewayFront:
     ) -> None:
         attempt_id = uuid.uuid4().hex
         public_response_started = False
+        started_at = self._clock()
+        max_wait = 0.0
+        outcome = "aborted"
         try:
             self.ledger.reserve_for_child(attempt_id, capability=capability)
         except ChildTurnCapExceeded:
@@ -408,6 +454,9 @@ class GatewayFront:
                     "Host": f"{self.config.internal_host}:{self.config.internal_port}",
                 },
             )
+            # Keep the socket: http.client drops conn.sock when the reply says
+            # "Connection: close", but the reply keeps reading from it.
+            upstream_sock = getattr(conn, "sock", None)
             response = conn.getresponse()
             if response.status != 200:
                 response.read(MAX_REQUEST_BYTES)
@@ -430,6 +479,10 @@ class GatewayFront:
             handler.send_header("Connection", "close")
             handler.end_headers()
             public_response_started = True
+            # The reply has started: from here the wait for the next byte uses
+            # the longer streaming limit (#424).
+            if upstream_sock is not None:
+                upstream_sock.settimeout(self.config.stream_idle_timeout_seconds)
             usage = StreamUsage()
             # Usage is always read from the UNFILTERED upstream bytes, so the
             # ledger settles on the provider's real reasoning-inclusive counts
@@ -448,7 +501,11 @@ class GatewayFront:
             json_stats = ReasoningStats()
             failed_stripper: SseReasoningStripper | None = None
             while True:
-                chunk = response.read(16 * 1024)
+                read_started = self._clock()
+                try:
+                    chunk = response.read(16 * 1024)
+                finally:
+                    max_wait = max(max_wait, self._clock() - read_started)
                 if not chunk:
                     break
                 usage.feed(chunk)
@@ -499,6 +556,7 @@ class GatewayFront:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
             )
+            outcome = "settled"
             live = stripper or failed_stripper
             stripped = live.stats if live is not None else json_stats
             if stripped and self.reasoning_observer is not None:
@@ -506,6 +564,7 @@ class GatewayFront:
                 with contextlib.suppress(Exception):
                     self.reasoning_observer(attempt_id, stripped)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, socket.timeout):
+            outcome = "uncertain: stream disconnect or timeout"
             self._mark_uncertain(attempt_id, "stream disconnect or timeout")
             if not public_response_started and not handler.wfile.closed:
                 try:
@@ -513,6 +572,7 @@ class GatewayFront:
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
         except (OSError, http.client.HTTPException, LedgerBlocked, LedgerHold):
+            outcome = "uncertain: transport or settlement failure"
             self._mark_uncertain(attempt_id, "transport or settlement failure")
             if not public_response_started and not handler.wfile.closed:
                 try:
@@ -520,6 +580,7 @@ class GatewayFront:
                 except (BrokenPipeError, ConnectionResetError, OSError):
                     pass
         except Exception:  # noqa: BLE001 - last resort: no path may leave a bare 'reserved'
+            outcome = "uncertain: unexpected response-path failure"
             self._mark_uncertain(attempt_id, "unexpected response-path failure")
             if not public_response_started and not handler.wfile.closed:
                 try:
@@ -530,6 +591,17 @@ class GatewayFront:
             if conn is not None:
                 conn.close()
             handler.close_connection = True
+            if public_response_started and self.stream_wait_observer is not None:
+                # One content-free record per started reply (#424): the longest
+                # wait for a byte and the total time confirm or refute an idle limit.
+                with contextlib.suppress(Exception):
+                    self.stream_wait_observer({
+                        "attempt_id": attempt_id,
+                        "outcome": outcome,
+                        "max_wait_seconds": round(max_wait, 3),
+                        "total_seconds": round(self._clock() - started_at, 3),
+                        "idle_limit_seconds": self.config.stream_idle_timeout_seconds,
+                    })
 
     def make_server(self) -> ThreadingHTTPServer:
         if self._server is not None:

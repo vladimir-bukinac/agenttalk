@@ -1509,3 +1509,213 @@ def test_a_non_streaming_reply_past_the_buffer_bound_is_forwarded_whole(
 
     assert handler.wfile.getvalue() == body  # held prefix and the rest, unstripped, in order
     _assert_settled_and_open(front)
+
+
+# ------------------------------------------------ the stream idle limit (#424)
+
+
+_STREAM_BODY = (
+    b'data: {"type":"message_start","message":{"model":"'
+    + MODEL_ALIAS.encode("ascii")
+    + b'","usage":{"input_tokens":5}}}\n\n'
+    b'data: {"type":"message_delta","usage":{"output_tokens":2}}\n\n'
+    b'data: {"type":"message_stop"}\n\n'
+)
+_STREAM_CUT = _STREAM_BODY.index(b'data: {"type":"message_delta"')
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class _FakeSocket:
+    """Stands in for the socket to LiteLLM: remembers the timeouts it was given."""
+
+    def __init__(self, timeout: float) -> None:
+        self.timeout = timeout
+        self.history = [timeout]
+
+    def settimeout(self, value: float) -> None:
+        self.timeout = value
+        self.history.append(value)
+
+
+class _SilentThenDataResponse(_FakeResponse):
+    """Sends the stream in two parts with `silence` seconds of fake time between them.
+
+    A read that would wait longer than the socket's timeout raises socket.timeout,
+    after the fake clock has moved by exactly that timeout, as a real socket does.
+    """
+
+    def __init__(self, sock: _FakeSocket, clock: _FakeClock, silence: float) -> None:
+        super().__init__(b"")
+        self.sock = sock
+        self.clock = clock
+        self.silence = silence
+        self.parts = [_STREAM_BODY[:_STREAM_CUT], _STREAM_BODY[_STREAM_CUT:]]
+        self.reads = 0
+
+    def read(self, _size: int = -1) -> bytes:
+        self.reads += 1
+        if self.reads == 2:
+            if self.silence > self.sock.timeout:
+                self.clock.now += self.sock.timeout
+                raise socket.timeout("fake silent stream")
+            self.clock.now += self.silence
+        return self.parts.pop(0) if self.parts else b""
+
+
+class _FakeSocketConnection(_FakeConnection):
+    def __init__(self, sock: _FakeSocket, response: _FakeResponse) -> None:
+        super().__init__(response)
+        self.sock = sock
+        self.timeout_when_reply_arrived: float | None = None
+
+    def getresponse(self) -> _FakeResponse:
+        self.timeout_when_reply_arrived = self.sock.timeout
+        return super().getresponse()
+
+
+def _silent_stream_front(tmp_path, silence: float):
+    clock = _FakeClock()
+    sock = _FakeSocket(FrontConfig("a", "b").request_timeout_seconds)
+    connection = _FakeSocketConnection(sock, _SilentThenDataResponse(sock, clock, silence))
+    front = _direct_front(tmp_path, connection)
+    front._clock = clock
+    waits: list[dict] = []
+    front.stream_wait_observer = waits.append
+    return front, connection, sock, waits
+
+
+def test_the_stream_limit_is_longer_than_the_old_limit_and_named_once() -> None:
+    config = FrontConfig(public_token="a", internal_token="b")
+    assert config.request_timeout_seconds == 120.0
+    assert config.stream_idle_timeout_seconds == front_module.STREAM_IDLE_TIMEOUT_SECONDS == 600.0
+    with pytest.raises(gateway.GatewayConfigError, match="stream idle timeout"):
+        dataclasses.replace(config, stream_idle_timeout_seconds=0).validate()
+
+
+def test_a_stream_silent_past_the_old_limit_but_within_the_new_one_settles(tmp_path) -> None:
+    front, connection, sock, waits = _silent_stream_front(tmp_path, silence=300.0)
+    handler = _FakeHandler()
+
+    front._proxy(handler, b"{}", capability=_direct_capability(front))
+
+    assert handler.status == 200
+    assert connection.timeout_when_reply_arrived == 120.0  # connecting and starting: today's limit
+    assert sock.history == [120.0, 600.0]  # only the streaming wait is longer
+    status = front.ledger.status()
+    assert status["unresolved"] == []
+    assert status["current_committed_micro_eur"] == settlement_cost_micro_eur(5, 2)
+    assert len(waits) == 1
+    assert waits[0]["outcome"] == "settled"
+    assert waits[0]["max_wait_seconds"] == 300.0
+    assert waits[0]["total_seconds"] == 300.0
+    assert waits[0]["idle_limit_seconds"] == 600.0
+
+
+def test_a_stream_silent_past_the_new_limit_is_still_uncertain(tmp_path) -> None:
+    front, _connection, _sock, waits = _silent_stream_front(tmp_path, silence=700.0)
+
+    front._proxy(_FakeHandler(), b"{}", capability=_direct_capability(front))
+
+    (attempt,) = front.ledger.status()["unresolved"]
+    assert attempt["state"] == "uncertain"
+    assert attempt["reason"] == "stream disconnect or timeout"
+    assert len(waits) == 1
+    assert waits[0]["outcome"] == "uncertain: stream disconnect or timeout"
+    assert waits[0]["max_wait_seconds"] == 600.0
+
+
+def test_a_failing_wait_observer_never_affects_settlement(tmp_path) -> None:
+    front, _connection, _sock, _waits = _silent_stream_front(tmp_path, silence=1.0)
+
+    def broken(_entry: dict) -> None:
+        raise RuntimeError("observer failed")
+
+    front.stream_wait_observer = broken
+    front._proxy(_FakeHandler(), b"{}", capability=_direct_capability(front))
+
+    assert front.ledger.status()["unresolved"] == []
+
+
+def test_a_reply_that_never_starts_writes_no_wait_record(tmp_path) -> None:
+    front = _direct_front(tmp_path, _FakeConnection(failure=socket.timeout("fake timeout")))
+    waits: list[dict] = []
+    front.stream_wait_observer = waits.append
+
+    front._proxy(_FakeHandler(), b"{}", capability=_direct_capability(front))
+
+    assert waits == []
+
+
+def test_the_wait_log_line_carries_the_measured_wait(tmp_path) -> None:
+    path = tmp_path / "gateway" / "stream-waits.jsonl"
+    front, _connection, _sock, _waits = _silent_stream_front(tmp_path, silence=250.0)
+    front.stream_wait_observer = front_module.StreamWaitLog(path).record
+
+    front._proxy(_FakeHandler(), b"{}", capability=_direct_capability(front))
+
+    (line,) = path.read_text(encoding="utf-8").splitlines()
+    entry = json.loads(line)
+    assert entry["max_wait_seconds"] == 250.0 and entry["total_seconds"] == 250.0
+    assert entry["outcome"] == "settled" and entry["idle_limit_seconds"] == 600.0
+    assert len(entry["attempt_id"]) == 32 and entry["ts"].endswith("Z")
+
+
+def test_a_real_socket_stall_past_the_start_limit_survives_on_the_stream_limit(tmp_path) -> None:
+    """The longer limit must reach a real connection whose reply says "Connection: close"."""
+
+    class StallingUpstream(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()  # an HTTP/1.0 reply: no length, closes at the end
+            self.wfile.write(_STREAM_BODY[:_STREAM_CUT])
+            self.wfile.flush()
+            time.sleep(0.8)  # longer than the 0.3 s start limit used below
+            self.wfile.write(_STREAM_BODY[_STREAM_CUT:])
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), StallingUpstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    try:
+        ledger = SpendLedger(tmp_path / "ledger.sqlite3", tmp_path / "install.json")
+        ledger.initialize(
+            opening_micro_eur=0,
+            opening_evidence="fake front fixture, observed 2026-07-16",
+            generation="a" * 32,
+            child_cap_issuer_token=TEST_CHILD_CAP_ISSUER,
+        )
+        front = GatewayFront(
+            FrontConfig(
+                public_token="front",
+                internal_token="internal",
+                internal_port=int(upstream.server_address[1]),
+                request_timeout_seconds=0.3,
+                stream_idle_timeout_seconds=10.0,
+            ),
+            ledger,
+        )
+        waits: list[dict] = []
+        front.stream_wait_observer = waits.append
+        handler = _FakeHandler()
+
+        front._proxy(handler, b"{}", capability=_direct_capability(front))
+
+        assert handler.status == 200
+        assert ledger.status()["unresolved"] == []
+        assert waits[0]["outcome"] == "settled"
+        assert 0.6 <= waits[0]["max_wait_seconds"] < 5.0
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
