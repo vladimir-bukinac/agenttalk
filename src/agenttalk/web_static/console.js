@@ -4216,6 +4216,11 @@
     }
     var ctx = capPct(a, 'context_used_pct');
     cap.appendChild(bigMeter('Context window', ctx, contextNote(capData.context, ctx)));
+    // Conversation size (#475): which figure it is is always said; a warning is advice only.
+    var cvText = conversationSizeText(a.conversation_size);
+    if (cvText) {
+      cap.appendChild(el('div', a.conversation_size.warn ? 'tc-cap-meta tc-cap-warn' : 'tc-cap-meta', cvText));
+    }
     col.appendChild(cap);
 
     // Supervisor card.
@@ -4290,6 +4295,20 @@
     }
     rows.push(supRow('Runtime', rtText, 'tc-chip'));
     return rows;
+  }
+
+  // The one line for an agent's conversation size (#475); null when there is nothing to show.
+  // The turn counter is cumulative (a fresh start does not reset it), and the line says so.
+  function conversationSizeText(cv) {
+    if (!cv || typeof cv.value !== 'number' || !isFinite(cv.value)) return null;
+    var tokens = cv.basis === 'context_tokens';
+    var text = 'Conversation: ' + cv.value.toLocaleString('en-US') +
+      (tokens ? ' tokens of context' : ' turns in total');
+    if (cv.warn === true) {
+      text += ' - over ' + Number(cv.limit).toLocaleString('en-US') + ': ' +
+        (tokens ? 'every turn re-sends it' : 'may count earlier conversations');
+    }
+    return text;
   }
 
   function capacitySummary(agent) {

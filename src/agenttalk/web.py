@@ -130,6 +130,7 @@ from agenttalk import __version__
 from agenttalk import attention as _attention
 from agenttalk import avatars as _avatars
 from agenttalk import capacity as _capacity
+from agenttalk import conversation_size as _conversation_size
 from agenttalk import domains as _domains
 from agenttalk import health as _health
 from agenttalk import knowledge as _knowledge
@@ -1669,6 +1670,7 @@ def _agent_entries(store: Store, cfg: dict, msgs: list[Message],
     avatar_prefs = avatar_prefs or {}
     managed_loop = managed_loop or set()
     cli_child_verdicts = cli_child_verdicts or {}
+    conv_settings = _conversation_size.load_settings(store.dir)
     now = datetime.now(timezone.utc)
     now_epoch = now.timestamp()
     # 0.19.0 (FR-001): per-agent message counts from the SAME validated `msgs`
@@ -1754,6 +1756,13 @@ def _agent_entries(store: Store, cfg: dict, msgs: list[Message],
         cap = _capacity_entry(snap, now=now)
         if cap is not None:
             e["capacity"] = cap
+        _rt_for_size = store.read_wrapper_runtime(a) or {}
+        size = _conversation_size.conversation_size(
+            _conversation_size.resolve_cli(a, conv_settings, health, snap),
+            _capacity.current_view(snap, now=now) if isinstance(snap, dict) else None,
+            _rt_for_size.get("turns") if _rt_for_size.get("turns_known") else None, conv_settings)
+        if size is not None:  # absent-not-null (#475): only when a size is known
+            e["conversation_size"] = size
         # wrapped/restartable arm on EITHER the health mode OR the managed
         # lead-loop set (review P2-1): health mode alone omits the field exactly
         # when a wrapped agent's health goes stale/missing (mode unknown),
