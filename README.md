@@ -2,9 +2,10 @@
 
 **In plain words:** agenttalk lets you run a team of AI coding assistants, such as
 Claude Code and Codex, on one project. They hand work to each other and review it
-across AI companies; a start script and the lead's timers keep them working
-unattended on any operating system; and a shared, curated memory brings lessons from
-past work back into later turns. The
+across AI companies; on any operating system, a start script and the lead's timers
+keep them working while you are away, though a seat that crashes stays down until it is
+started again (on Windows the optional supervisor can do that); and a shared, curated
+memory brings lessons from past work back into later turns. The
 messages and the team's shared records are files in your project, so the messaging
 needs no server and no account; a few things, such as logs and signing keys, live in
 per-user folders on the same computer. This front page is for anyone deciding whether
@@ -342,7 +343,7 @@ in the technical reference.
     does not ship one; [Run a team unattended](#run-a-team-unattended) shows what it
     contains;
   - the lead's timers, which remind it to check on the team and to write a handover
-    note;
+    note. They live in the lead's own interactive session;
   - optionally, the supervisor, an independent watcher that restarts an assistant
     after a crash or an outage. It runs on Windows only today;
     [#356](https://github.com/zoolok17/agenttalk/issues/356) tracks a monitor for Linux
@@ -606,17 +607,24 @@ place. Every assistant runs in the background through agenttalk's wrapper, start
 by a small script, and the lead keeps two timers that remind it to look after the team.
 This works on Windows, Linux and macOS. The supervisor is an optional extra on top.
 
+What this does not do: a seat that crashes, and every seat after the computer restarts,
+stays stopped until a person starts it again with the start script (on Windows, the
+optional supervisor can do that instead). And if the lead's own session closes, its
+timers go with it, so nobody is reminded to look after the team.
+
 **Before you leave a team alone, know one limit: agenttalk does not prove who sent a
-message.** A seat treats a work order as the lead's when the message names the lead as
-its sender, and any seat on the team can write such a message. Message signing
-(`agenttalk hmac-init`) shows when a message file was changed by someone who cannot read
-the key, but every seat run by the same user can read that key, so signing cannot tell
-one seat from another. Put only assistants you trust on one team, and give each one only
-the permissions its work needs.
+message.** A seat accepts a work order when the message names the lead or the
+operator-facing seat as its sender, and any seat on the team can write such a message.
+Message signing (`agenttalk hmac-init`) shows when a message file was changed by someone
+who cannot read the key, but every seat run by the same user can read that key, so
+signing cannot tell one seat from another. Put only assistants you trust on one team,
+and give each one only the permissions its work needs.
 
 1. **A start script.** agenttalk ships none; the lead writes one for your team, and a
-   person runs it once. For each seat it starts the wrapper in the background, from
-   that seat's own folder:
+   person runs it once. It starts the teammates only: the lead already runs in your own
+   session (step 2), and a second process under the lead's name would read the same
+   mailbox. For each teammate it starts the wrapper in the background, from that seat's
+   own folder:
 
    ```
    agenttalk --root <project> wrap --for <seat> --cli <claude-or-codex> --loop -- <command that starts the assistant>
@@ -626,27 +634,41 @@ the permissions its work needs.
 
    ```powershell
    Start-Process -FilePath agenttalk -WorkingDirectory '<seat-folder>' -WindowStyle Hidden `
-     -ArgumentList '--root','<project>','wrap','--for','claude-dev','--cli','claude','--loop','--','claude','--permission-mode','<mode>'
+     -ArgumentList '--root','"<project>"','wrap','--for','claude-dev','--cli','claude','--loop','--','claude','--permission-mode','<mode>'
    ```
 
-   and on Linux or macOS (bash):
+   Keep the double quotes inside the single quotes around the project path:
+   `Start-Process` joins the list with spaces, so a path with a space in it would
+   otherwise break apart.
+
+   On Linux or macOS (bash):
 
    ```bash
-   (cd '<seat-folder>' && nohup agenttalk --root '<project>' wrap --for codex-rev --cli codex --loop -- codex -a never -s workspace-write > codex-rev.log 2>&1 &)
+   (cd '<seat-folder>' && nohup agenttalk --root '<project>' wrap --for codex-rev --cli codex --loop -- codex -a never -s workspace-write -c "sandbox_workspace_write.writable_roots=['<project>/.agenttalk']" > /dev/null 2>&1 &)
    ```
+
+   This line sends the wrapper's console output nowhere, as the hidden window does on
+   Windows; if you keep it in a file instead, rotate that file, because it grows without
+   limit. A Codex seat whose bus lies outside its own folder must be allowed to write the
+   bus's `.agenttalk` folder, as `writable_roots` does here; otherwise it receives its
+   work but cannot reply. Add any other folder the seat must write to the same list.
 
    An unattended assistant cannot answer a permission question, so choose what each
    one may do on purpose: the words after `--` are the assistant's own command and its
    permission settings. Start each seat once: two wrappers for one seat read the same
    mailbox. On Linux and macOS a wrapped Codex seat also needs
    `"reply_shell": "bash"` (see [what you need](#who-it-is-for-and-what-you-need-first)).
-2. **The lead's timers.** The lead keeps two timers in its own session: a check-in, for
-   example every 30 minutes, and a handover note, for example every two hours. In
-   Claude Code these are scheduled prompts (`/loop 30m` and `/loop 2h` with the routine
-   as the prompt; the lead's instructions describe both). They live only in that
-   session and lapse after about seven days, so renew them before then and after every
-   restart of the lead: ask the lead to list its scheduled tasks and re-create the ones
-   that are missing, replacing a timer rather than adding a second one. A Codex lead has
+2. **The lead's timers.** The lead runs as an ordinary interactive session that you
+   start and leave open, not through the wrapper. That session holds its timers: a
+   wrapped seat starts its assistant afresh for each message (a Claude Code seat as a
+   one-shot `claude -p` that exits again), so a timer set there never fires. The lead
+   keeps two timers: a check-in, for example every 30 minutes, and a handover note, for
+   example every two hours. In Claude Code these are scheduled prompts (`/loop 30m` and
+   `/loop 2h` with the routine as the prompt; the lead's instructions describe both).
+   They live only in that session and lapse after about seven days, so renew them before
+   then and after every restart of the lead: ask the lead to list its scheduled tasks
+   and re-create the ones that are missing, replacing a timer rather than adding a
+   second one. A Codex lead has
    no built-in timer; an operating-system scheduled task that reminds it does the same
    job. agenttalk does not keep these reminders itself yet.
 3. **Stopping a seat.** Stop a seat between turns with
@@ -656,7 +678,10 @@ the permissions its work needs.
    first, or it starts the seat again
    ([Operations guide](docs/OPERATIONS.md#pause-stop-and-recover)).
 4. **Optionally, the supervisor.** It watches from outside and restarts a seat after a
-   crash or an outage, within a restart budget. It needs Windows and PowerShell 7 today
+   crash or an outage, within a restart budget. Its scheduled task also starts when you
+   log on, so after the computer restarts it brings back the seats in its settings once
+   someone logs on. Without it, a crashed seat stays down until someone runs its line of
+   the start script again. It needs Windows and PowerShell 7 today
    ([#356](https://github.com/zoolok17/agenttalk/issues/356) tracks Linux and macOS);
    [the supervisor tutorial](docs/supervisor-tutorial.md) explains how to start it.
 
