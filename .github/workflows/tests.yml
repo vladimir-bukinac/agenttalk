@@ -199,7 +199,7 @@ jobs:
           --evidence "${{ runner.temp }}/dev-gate-evidence/dev-gate-evidence.json"
       - name: Upload leg evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: dev-gate-leg-${{ matrix.os.id }}-${{ matrix.python-version }}
           path: ${{ runner.temp }}/dev-gate-evidence/
@@ -247,7 +247,7 @@ jobs:
           python -I -m pip install --no-deps --no-build-isolation .
       - name: Download leg evidence
         if: always() && needs.scope.outputs.docs_only == 'false'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
         with:
           pattern: dev-gate-leg-*
           path: ${{ runner.temp }}/dev-gate-legs
@@ -261,7 +261,7 @@ jobs:
           --evidence "${{ runner.temp }}/dev-gate-aggregate.json"
       - name: Upload aggregate evidence
         if: always() && needs.scope.outputs.docs_only == 'false'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: dev-gate-aggregate
           path: ${{ runner.temp }}/dev-gate-aggregate.json
@@ -304,7 +304,7 @@ jobs:
           --output "${{ runner.temp }}/windows-trial"
       - name: Upload trial evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-trial-${{ github.run_id }}-${{ github.run_attempt }}-windows-${{ matrix.python-version }}-${{ matrix.mode }}
           path: ${{ runner.temp }}/windows-trial/
@@ -340,7 +340,7 @@ jobs:
           --output "${{ runner.temp }}/windows-trial-collected"
       - name: Upload trial comparison
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: windows-trial-comparison-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/windows-trial-collected/

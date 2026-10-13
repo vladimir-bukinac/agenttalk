@@ -45,8 +45,8 @@ def test_ci_voting_jobs_invoke_only_the_committed_gate_plan() -> None:
 def test_ci_evidence_actions_and_gitleaks_archive_are_immutable() -> None:
     workflow = Path(".github/workflows/tests.yml").read_text(encoding="utf-8")
 
-    assert "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in workflow
-    assert "actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c" in workflow
+    assert "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9" in workflow
+    assert "actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333" in workflow
     assert "gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz" in workflow
     assert "551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb" in workflow
     assert "if-no-files-found: error" in workflow
