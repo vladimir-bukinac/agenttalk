@@ -2508,6 +2508,16 @@ def close_ovh_child_turn_on_dead_letter(
         pass
 
 
+def _apply_fresh_request(store, agent: str, session_state, persist) -> None:
+    """Apply a pending start-fresh request (#475); a failure here never fails a turn."""
+    from . import session as _session
+
+    try:
+        _session.apply_fresh_request(store, agent, session_state, persist)
+    except Exception:  # noqa: BLE001 - the request stays pending and is retried
+        return
+
+
 def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str], *,
                sender: str | None = None, min_interval: float = 5.0,
                render: bool = True, rules: str | None = None,
@@ -3084,6 +3094,7 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
         prompt = _prompt.assemble_turn_prompt(
             record, rules=rules, rejoin=rejoin, lessons=lesson_prompt,
             sender_is_lead=sender_is_lead, reply_shell=reply_shell, seat=agent)
+        _apply_fresh_request(store, agent, session_state, persist)  # #475: between turns only
         spec = _session.build_turn(session_state, prompt)
         cli = session_state.cli
         # A failed RESUME turn self-heals to a fresh session before we classify (codex:
@@ -3473,6 +3484,7 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
     def cadence_drive(snapshot: dict, items: list) -> bool:
         prompt = _prompt.assemble_cadence_prompt(
             snapshot, items, rules=rules, reply_shell=reply_shell)
+        _apply_fresh_request(store, agent, session_state, persist)  # #475: between turns only
         spec = _session.build_turn(session_state, prompt)
         cli_name = session_state.cli
         attempted_resume = ((cli_name == "codex" and "resume" in spec.args)

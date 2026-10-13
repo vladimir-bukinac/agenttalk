@@ -20,6 +20,7 @@ process + the atomic persistence of SessionState.
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
@@ -57,6 +58,13 @@ class SessionState:
     # #301: the seat's latest rate-limit reading per window, folded from its own
     # rate_limit_event lines (capacity.claude_stream_reading).
     claude_rate_limit: dict | None = None
+    # #475: the last start-fresh request the wrapper handled (its id also makes a
+    # marker that survived a crash between "saved" and "cleared" apply only once).
+    fresh_request_id: str = ""
+    fresh_request_outcome: str = ""
+    fresh_request_at: str = ""
+    fresh_request_reason: str = ""
+    fresh_request_turn: int = 0
 
 
 @dataclass(frozen=True)
@@ -144,6 +152,71 @@ def reset_claude_session(state: SessionState, reason: str) -> None:
     state.resume_available = False
     state.resume_unavailable_reason = reason
     state.continuity_lost_reason = reason
+
+
+def apply_fresh_request(store, agent: str, state: SessionState, persist=None) -> dict | None:
+    """Apply a pending start-fresh request (#475), between turns only.
+
+    Called by the wrapper itself, from its own thread, while no turn runs: when it is
+    idle and again just before it builds a turn. The wrapper owns the session record
+    (it loads it once and saves its own copy), so the request is a marker the wrapper
+    reads, never an edit of the record from outside.
+
+    Claude: a new session id (:func:`reset_claude_session`). Codex: the thread id is
+    cleared (:func:`mark_resume_unavailable`). Exactly once: the request id is saved with
+    the reset BEFORE the marker is cleared, so a crash in between cannot apply it twice.
+    Returns the outcome record, or None when nothing was pending (or it was already done).
+    """
+    marker = store.read_fresh_request(agent)
+    if marker is None:
+        return None
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if "request_id" not in marker:  # the closed "unusable" fact: nothing to trust or apply
+        store.clear_fresh_request(agent, None)
+        state.fresh_request_id = "unreadable"
+        state.fresh_request_outcome = "unreadable_request_removed"
+        state.fresh_request_at = now
+        state.fresh_request_reason = ""
+        state.fresh_request_turn = state.turns
+        if persist is not None:
+            persist(state)
+        return {"outcome": state.fresh_request_outcome}
+    rid = marker["request_id"]
+    if state.fresh_request_id == rid:  # applied already; only the clearing was lost
+        store.clear_fresh_request(agent, rid)
+        return None
+    reason = " ".join(str(marker.get("reason") or "").split())[:200]
+    if state.cli in ("claude", "codex"):
+        _backup_session_record(store, agent, rid)
+        if state.cli == "claude":
+            reset_claude_session(state, "fresh_requested")
+        else:
+            mark_resume_unavailable(state, "fresh_requested")
+        clear_resume_attempt(state)
+        state.resume_failure_count = 0
+        state.resume_failure_key = ""
+        outcome = "applied"
+    else:
+        outcome = "unsupported_cli"
+    state.fresh_request_id = rid
+    state.fresh_request_outcome = outcome
+    state.fresh_request_at = now
+    state.fresh_request_reason = reason
+    state.fresh_request_turn = state.turns
+    if persist is not None:
+        persist(state)
+    store.clear_fresh_request(agent, rid)
+    return {"request_id": rid, "outcome": outcome, "reason": reason}
+
+
+def _backup_session_record(store, agent: str, request_id: str) -> None:
+    """Keep the record the wrapper is about to replace (best effort: never blocks the reset)."""
+    src = _session_path(store, agent)
+    try:
+        if src.exists():
+            shutil.copyfile(src, src.with_name(f"{agent}.wrapper-session.before-fresh-{request_id}.json"))
+    except OSError:
+        pass
 
 
 def compute_runtime_fingerprint(model: str | None, effort: str | None) -> str:
