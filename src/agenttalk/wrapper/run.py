@@ -2508,14 +2508,33 @@ def close_ovh_child_turn_on_dead_letter(
         pass
 
 
-def _apply_fresh_request(store, agent: str, session_state, persist) -> None:
-    """Apply a pending start-fresh request (#475); a failure here never fails a turn."""
+def _apply_fresh_request(store, agent: str, session_state, persist, owner_check=None) -> None:
+    """Apply a pending start-fresh request (#475); a failure here never fails a turn.
+
+    ``owner_check`` (idle path): False means this wrapper is no longer the active one, so
+    it must leave the marker for the wrapper that replaced it.
+    """
     from . import session as _session
 
     try:
+        if owner_check is not None and not owner_check():
+            return
         _session.apply_fresh_request(store, agent, session_state, persist)
     except Exception:  # noqa: BLE001 - the request stays pending and is retried
         return
+
+
+def is_active_wrapper(store, agent: str, wrapper_generation: str) -> bool:
+    """True while the runtime record names this wrapper generation as the current one.
+
+    A wrapper that a replacement has superseded sees another generation (or none yet)
+    and must not consume the agent's start-fresh request.
+    """
+    from agenttalk import wrapper_runtime as _wr
+
+    rec = _wr.read_runtime(store.state_dir, agent)
+    record = rec.get("record") if rec.get("status") == _wr.STATUS_VALID else None
+    return bool(isinstance(record, dict) and record.get("wrapper_generation") == wrapper_generation)
 
 
 def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str], *,

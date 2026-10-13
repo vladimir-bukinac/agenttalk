@@ -64,6 +64,7 @@ class SessionState:
     fresh_request_outcome: str = ""
     fresh_request_at: str = ""
     fresh_request_reason: str = ""
+    fresh_request_by: str = ""
     fresh_request_turn: int = 0
 
 
@@ -163,8 +164,13 @@ def apply_fresh_request(store, agent: str, state: SessionState, persist=None) ->
     reads, never an edit of the record from outside.
 
     Claude: a new session id (:func:`reset_claude_session`). Codex: the thread id is
-    cleared (:func:`mark_resume_unavailable`). Exactly once: the request id is saved with
-    the reset BEFORE the marker is cleared, so a crash in between cannot apply it twice.
+    cleared (:func:`mark_resume_unavailable`).
+
+    The marker is cleared only after the reset is DURABLY saved: "already applied" is
+    decided from the saved record on disk, never from the in-memory request id, so a
+    failed save is retried (the exception propagates, the marker stays) and a restart
+    after a failed save still finds the request. The old record is copied aside first and
+    the reset does not start unless that copy succeeded.
     Returns the outcome record, or None when nothing was pending (or it was already done).
     """
     marker = store.read_fresh_request(agent)
@@ -177,46 +183,62 @@ def apply_fresh_request(store, agent: str, state: SessionState, persist=None) ->
         state.fresh_request_outcome = "unreadable_request_removed"
         state.fresh_request_at = now
         state.fresh_request_reason = ""
+        state.fresh_request_by = ""
         state.fresh_request_turn = state.turns
         if persist is not None:
             persist(state)
         return {"outcome": state.fresh_request_outcome}
     rid = marker["request_id"]
-    if state.fresh_request_id == rid:  # applied already; only the clearing was lost
+    if _saved_request_id(store, agent) == rid:  # saved already; only the clearing was lost
         store.clear_fresh_request(agent, rid)
         return None
     reason = " ".join(str(marker.get("reason") or "").split())[:200]
-    if state.cli in ("claude", "codex"):
-        _backup_session_record(store, agent, rid)
-        if state.cli == "claude":
-            reset_claude_session(state, "fresh_requested")
+    requested_by = str(marker.get("requested_by") or "")[:64]
+    if state.fresh_request_id != rid:  # not reset in memory yet (a retry keeps the first reset)
+        if state.cli in ("claude", "codex"):
+            _backup_session_record(store, agent, rid)  # raises: no backup, no reset
+            if state.cli == "claude":
+                reset_claude_session(state, "fresh_requested")
+            else:
+                mark_resume_unavailable(state, "fresh_requested")
+            clear_resume_attempt(state)
+            state.resume_failure_count = 0
+            state.resume_failure_key = ""
+            state.fresh_request_outcome = "applied"
         else:
-            mark_resume_unavailable(state, "fresh_requested")
-        clear_resume_attempt(state)
-        state.resume_failure_count = 0
-        state.resume_failure_key = ""
-        outcome = "applied"
-    else:
-        outcome = "unsupported_cli"
-    state.fresh_request_id = rid
-    state.fresh_request_outcome = outcome
-    state.fresh_request_at = now
-    state.fresh_request_reason = reason
-    state.fresh_request_turn = state.turns
+            state.fresh_request_outcome = "unsupported_cli"
+        state.fresh_request_id = rid
+        state.fresh_request_at = now
+        state.fresh_request_reason = reason
+        state.fresh_request_by = requested_by
+        state.fresh_request_turn = state.turns
     if persist is not None:
-        persist(state)
+        persist(state)  # raises on failure: the marker stays and the next call retries
     store.clear_fresh_request(agent, rid)
-    return {"request_id": rid, "outcome": outcome, "reason": reason}
+    return {"request_id": rid, "outcome": state.fresh_request_outcome, "reason": reason,
+            "requested_by": requested_by}
+
+
+def _saved_request_id(store, agent: str) -> str:
+    """The start-fresh request id in the record ON DISK ("" when absent or unreadable)."""
+    try:
+        data = json.loads(_session_path(store, agent).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    value = data.get("fresh_request_id") if isinstance(data, dict) else ""
+    return value if isinstance(value, str) else ""
 
 
 def _backup_session_record(store, agent: str, request_id: str) -> None:
-    """Keep the record the wrapper is about to replace (best effort: never blocks the reset)."""
+    """Copy the record the wrapper is about to replace. A failed copy raises, so the reset
+    never goes ahead without its backup (the request stays pending). No record yet: nothing to keep."""
     src = _session_path(store, agent)
-    try:
-        if src.exists():
-            shutil.copyfile(src, src.with_name(f"{agent}.wrapper-session.before-fresh-{request_id}.json"))
-    except OSError:
-        pass
+    if not src.exists():
+        return
+    dst = src.with_name(f"{agent}.wrapper-session.before-fresh-{request_id}.json")
+    shutil.copyfile(src, dst)
+    if dst.read_bytes() != src.read_bytes():
+        raise OSError("the session record backup does not match the record")
 
 
 def compute_runtime_fingerprint(model: str | None, effort: str | None) -> str:

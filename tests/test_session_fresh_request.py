@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from agenttalk import cli
+from agenttalk import wrapper_runtime as wr
 from agenttalk.store import Store
 from agenttalk.wrapper import loop, recv_api, run, session
 
@@ -148,21 +149,105 @@ def test_a_request_is_applied_exactly_once_even_when_the_clearing_was_lost(tmp_p
     assert state.claude_session_id != applied_id
 
 
-def test_a_failed_save_is_retried_and_still_applies_once(tmp_path) -> None:
+def test_a_failed_save_keeps_the_request_until_the_reset_is_saved_to_disk(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)  # the initial record is on disk
+    _request(s)
+    failures = {"left": 1}
+
+    def flaky(st) -> None:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise OSError("disk full")
+        session.save_session(s, "beta", st)
+
+    run._apply_fresh_request(s, "beta", state, flaky)  # never raises into the wrapper
+
+    assert s.read_fresh_request("beta") is not None  # still pending: nothing durable yet
+    assert session.load_session(s, "beta", "claude").claude_session_id == OLD_ID
+    reset_id = state.claude_session_id
+    run._apply_fresh_request(s, "beta", state, flaky)  # the same-process retry saves it
+    assert state.claude_session_id == reset_id  # the retry did not reset a second time
+    assert s.read_fresh_request("beta") is None
+    reloaded = session.load_session(s, "beta", "claude")
+    assert reloaded.claude_session_id == reset_id != OLD_ID  # a restart would not resume the old one
+    assert reloaded.fresh_request_id == "fr-aaaaaaaaaaaa"
+
+
+def test_a_restart_after_a_failed_save_still_finds_the_request(tmp_path) -> None:
+    for cli_name, old in (("claude", OLD_ID), ("codex", "thread-old")):
+        root = tmp_path / cli_name
+        s = _store(root)
+        state = (_claude_state() if cli_name == "claude"
+                 else session.SessionState(cli="codex", codex_thread_id=old, turns=4))
+        session.save_session(s, "beta", state)
+        _request(s)
+
+        def broken(_st) -> None:
+            raise OSError("disk full")
+
+        run._apply_fresh_request(s, "beta", state, broken)
+        restarted = session.load_session(s, "beta", cli_name)  # the old record, as on disk
+        assert s.read_fresh_request("beta") is not None
+        session.apply_fresh_request(s, "beta", restarted, _saved(s))
+        spec = session.build_turn(restarted, "hello")
+        assert "--resume" not in spec.args and "resume" not in spec.args and old not in spec.args
+
+
+def test_no_backup_means_no_reset_and_the_request_stays_pending(tmp_path, monkeypatch) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    _request(s)
+
+    def no_copy(*_a, **_k):
+        raise OSError("read-only folder")
+
+    monkeypatch.setattr(session.shutil, "copyfile", no_copy)
+    run._apply_fresh_request(s, "beta", state, _saved(s))
+
+    assert state.claude_session_id == OLD_ID and state.fresh_request_id == ""
+    assert s.read_fresh_request("beta") is not None
+    assert json.loads(_session_file(s).read_text(encoding="utf-8"))["claude_session_id"] == OLD_ID
+    monkeypatch.undo()
+    run._apply_fresh_request(s, "beta", state, _saved(s))  # the folder is writable again
+    assert state.claude_session_id != OLD_ID and s.read_fresh_request("beta") is None
+
+
+def test_the_requester_is_kept_in_the_applied_record_and_status(tmp_path) -> None:
     s = _store(tmp_path)
     state = _claude_state()
     _request(s)
+    assert s.read_fresh_status("beta")["pending"]["requested_by"] == "lead"
 
-    def broken(_st) -> None:
-        raise OSError("disk full")
+    session.apply_fresh_request(s, "beta", state, _saved(s))
 
-    run._apply_fresh_request(s, "beta", state, broken)  # never raises into the wrapper
+    assert json.loads(_session_file(s).read_text(encoding="utf-8"))["fresh_request_by"] == "lead"
+    assert s.read_fresh_status("beta")["applied"]["requested_by"] == "lead"
 
-    assert s.read_fresh_request("beta") is not None  # still pending
-    reset_id = state.claude_session_id
-    run._apply_fresh_request(s, "beta", state, _saved(s))
-    assert state.claude_session_id == reset_id  # the retry only finishes the clearing
-    assert s.read_fresh_request("beta") is None
+
+def test_a_superseded_wrapper_leaves_the_request_for_its_replacement(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    _request(s)
+    old = wr.WrapperRuntimeWriter(s.state_dir, "beta", "generation-old", wrapper_pid=1111, wrapper_start="a")
+    old.idle()
+    assert run.is_active_wrapper(s, "beta", "generation-old")
+    new = wr.WrapperRuntimeWriter(s.state_dir, "beta", "generation-new", wrapper_pid=2222, wrapper_start="b")
+    new.idle()  # the replacement takes over the runtime record
+
+    old_owner = lambda: run.is_active_wrapper(s, "beta", "generation-old")  # noqa: E731
+    run._apply_fresh_request(s, "beta", state, _saved(s), owner_check=old_owner)
+
+    assert s.read_fresh_request("beta") is not None and state.claude_session_id == OLD_ID
+    new_owner = lambda: run.is_active_wrapper(s, "beta", "generation-new")  # noqa: E731
+    run._apply_fresh_request(s, "beta", state, _saved(s), owner_check=new_owner)
+    assert s.read_fresh_request("beta") is None and state.claude_session_id != OLD_ID
+
+
+def test_no_runtime_record_yet_is_not_the_active_wrapper(tmp_path) -> None:
+    assert not run.is_active_wrapper(_store(tmp_path), "beta", "generation-new")
 
 
 def test_an_unreadable_request_is_removed_and_recorded_without_a_reset(tmp_path) -> None:
@@ -215,13 +300,13 @@ def test_a_request_that_arrives_during_a_turn_waits_for_the_turn_to_end(tmp_path
     assert recv_api.next_record(s, "beta") is None
 
 
-def test_an_idle_agent_applies_the_request_without_waiting_for_a_message(tmp_path) -> None:
+def test_an_ordinary_empty_idle_poll_applies_a_request_written_while_idle(tmp_path) -> None:
     s = _store(tmp_path)
     state = _claude_state()
     _request(s)
 
     loop.run_loop(s, "beta", lambda rec: True, clock=lambda: 0.0, sleep=lambda d: None, max_polls=2,
-                  on_runtime_idle=lambda: run._apply_fresh_request(s, "beta", state, _saved(s)))
+                  on_idle_poll=lambda: run._apply_fresh_request(s, "beta", state, _saved(s)))
 
     assert state.claude_session_id != OLD_ID and s.read_fresh_request("beta") is None
 
@@ -250,6 +335,27 @@ def test_status_shows_pending_then_applied_with_the_reason(tmp_path, capsys) -> 
 
     assert _run(tmp_path, "status") == 0
     assert "fresh=applied" in capsys.readouterr().out
+
+
+def test_the_dashboard_state_shows_a_pending_then_applied_request(tmp_path) -> None:
+    from agenttalk import web
+
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    _request(s)
+
+    def beta_entry() -> dict:
+        root = web.build_state([web.RootDescriptor(store=s, label="root")])["roots"][0]
+        return next(a for a in root["agents"] if a["name"] == "beta")
+
+    assert beta_entry()["fresh_request"] == {"state": "pending", "at": "2026-10-13T12:00:00Z",
+                                             "requested_by": "lead"}
+    session.apply_fresh_request(s, "beta", state, _saved(s))
+    entry = beta_entry()
+    assert entry["fresh_request"]["state"] == "applied" and entry["fresh_request"]["requested_by"] == "lead"
+    assert "conversation too big" not in json.dumps(entry)  # no free text on the dashboard
+    assert OLD_ID not in json.dumps(entry) and state.claude_session_id not in json.dumps(entry)
 
 
 def test_the_dashboard_projection_knows_the_new_reset_reason(tmp_path) -> None:

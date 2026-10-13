@@ -7022,7 +7022,8 @@ class Store:
         if isinstance(marker, dict) and not is_unusable_restart_request(marker):
             return {"pending": {"request_id": marker.get("request_id"),
                                 "at": marker.get("at"),
-                                "reason": str(marker.get("reason") or "")[:200]}}
+                                "reason": str(marker.get("reason") or "")[:200],
+                                "requested_by": str(marker.get("requested_by") or "")[:64]}}
         if is_unusable_restart_request(marker):
             return {"pending": {"request_id": None, "at": None, "reason": "unreadable request"}}
         try:
@@ -7038,6 +7039,7 @@ class Store:
             "outcome": str(data.get("fresh_request_outcome") or "")[:40],
             "at": data.get("fresh_request_at"),
             "reason": str(data.get("fresh_request_reason") or "")[:200],
+            "requested_by": str(data.get("fresh_request_by") or "")[:64],
             "turns_before": turn if isinstance(turn, int) and not isinstance(turn, bool) else None,
         }}
 

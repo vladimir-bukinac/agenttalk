@@ -12551,12 +12551,13 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
         on_transition=lifecycle_log.runtime_transition,
     )
 
-    def _idle_with_fresh_request() -> None:
-        # #475: a start-fresh request is applied here, while no turn runs, so the
-        # outcome shows in `status` without waiting for the next message.
+    def _apply_fresh_when_idle() -> None:
+        # #475: on every idle poll (no turn runs), so the outcome shows in `status` without
+        # waiting for a message. Only the ACTIVE wrapper consumes the request: one that a
+        # replacement superseded leaves it for the replacement.
         wrapper_run._apply_fresh_request(
-            store, agent, state, lambda st: wsession.save_session(store, agent, st))
-        runtime_writer.idle()
+            store, agent, state, lambda st: wsession.save_session(store, agent, st),
+            owner_check=lambda: wrapper_run.is_active_wrapper(store, agent, wrapper_generation))
     # The optional turn journal: built here (no I/O), started just before the loop.
     journal = None
     if turn_events and one_shot_request_id is None:
@@ -12822,7 +12823,8 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
             on_health_parked=health_writer.parked,  # #58: config-blocked park is visible, not a frozen 'idle'
             on_health_contention=health_writer.lock_contention,  # #154
             on_contention_persisting=_on_contention_persisting,  # #154
-            on_runtime_idle=_idle_with_fresh_request,
+            on_runtime_idle=runtime_writer.idle,
+            on_idle_poll=_apply_fresh_when_idle,
             on_runtime_dead_letter=_on_runtime_dead_letter,
             capacity_refresh=capacity_refresh,
             wrapper_generation=wrapper_generation,
