@@ -280,12 +280,12 @@ Two notes beside item 4. They are notes, not a change of order:
 
 ### 6.12 When people use the same subscriptions outside agenttalk *(operator approved, 2026-10-12)*
 
-A team's people may use the same Claude subscription, or the same pay-per-use key, outside agenttalk. Part of this is already handled. A Claude seat's usage reading is the provider's figure for the whole account, so outside use is counted in the pacing. A seat that reaches the limit stops and keeps its work queued. The bill check for the paid gateway catches other use of its key. What is missing: nobody can tell who used what, there is no fresh figure while no seat is running, a forecast built from agenttalk's own work alone comes out wrong, and nothing keeps room for the people.
+A team's people may use the same Claude subscription, or the same pay-per-use key, outside agenttalk. Part of this is already handled. A Claude seat's usage reading is the provider's figure for the whole account, so outside use is counted in the pacing. A seat that reaches the limit stops and keeps its work queued. For a pay-per-use key, comparing the provider's bill with the gateway's own record of its spending shows other use of the key; the maintainers make that comparison themselves, outside agenttalk. What is missing: nobody can tell who used what, there is no fresh figure while no seat is running, a forecast built from agenttalk's own work alone comes out wrong, and nothing keeps room for the people.
 
-The operator approved four measures:
+The operator approved four measures. Two of them belong to a separate usage service: a program, not part of agenttalk and kept outside this repository, that gathers the usage figures of several subscriptions in one place.
 1. **Advice in the README:** one subscription for the agents and separate ones for people, and one pay-per-use key for each agenttalk team. It goes into the README change (§6.11, item 4).
-2. **A reserve for people:** a per-team setting such as "the agents use at most 70% of the weekly allowance". Past it, the lead takes on urgent work only. It goes to the design of the separate usage service.
-3. **Outside use shown as its own category,** never as an error. Also for the usage service's design.
+2. **A reserve for people:** a per-team setting such as "the agents use at most 70% of the weekly allowance". Past it, the lead takes on urgent work only. It goes to the usage service's design.
+3. **Outside use shown as its own category,** never as an error. It also goes to the usage service's design.
 4. **Readings from people's own Claude Code sessions,** through the same status-line reading the seats already use, so that less of the outside use goes unseen. Use in the Claude app or on the website still shows only in the account total. Small; it waits its turn with the usage-limit follow-ups (wave 2, item 10). (#470)
 
 ---
@@ -377,6 +377,10 @@ One point from the opinions: #178 needs crash tests. A crash after the work is f
 
 ## 8. Later / On Hold
 
+**Moved out of this section into the plan** (both still open):
+- **A completion receipt for tasks (#178).** The operator's order of 2026-10-12 builds it attempt-bound as the third step (§6.11); its analysis is part of plan item 3 (§6.3).
+- **A Linux and macOS monitor (#356).** Planned, optional in weeks 5-6 (§6.7, §6.11). A test on Linux on 2026-10-05 found that the service manager already restarts a crashed wrapper and keeps its message, while nothing acts on a seat that hangs without crashing and no alert is raised. The full POSIX supervisor stays below.
+
 **Carried from the old "Next" list (§6 before 2026-10-09).** The 2026-10-07 plan (§6) does not carry these. Every item is summarised here (the full old wording is in git history); each keeps its issue numbers and, where the old text gave one, the trigger that brings it back. Before any of them is built it gets its own challenge, as before.
 - **The lead can always (re)start team members** (operator directive 2026-09-27; old §6.1). A dead seat is still relaunched by hand, because the supervisor is not run on the maintainers' fleet. Eight gaps were listed: run the supervisor for the fleet (G1); remove two manual pre-steps, including a preflight for the Codex ACL step (G2, #147); guard-aware relaunch (G3); a crash-simulation harness (G4, a prerequisite for G3); a POSIX supervisor (G5, design first); decide absence from a complete process snapshot, not the heartbeat (G6, which would cut a dead Codex seat's outage from about 40 minutes); terminate a provably childless wrapper and cap the retry (G7); launch only on complete ownership proof (G8, design first). Old order: G2 then G1, then G6; G4 before G3, G7 and G8. Related: #155, #139, #180, #182. The older supervisor issues #26, #27, #28 and #33, and #37, are scheduled for verification in wave 2 item 16 (§6.4); only issues found obsolete are closed.
 - **The publication hot path** (old §6.2). **Stage 1 shipped in 0.94.0 as #218:** wrappers survive store-lock contention without re-driving a paid turn. **Still open:** stage 2, measure lock wait against lock hold at fleet size, remove redundant scans, share the validated snapshot with the board, and only then decide on incremental order maintenance (an append-only order log is a format change that needs its own challenge and compatibility decision). Undecided: per-recipient inboxes, only if measurement shows the shared order cannot meet the target. Not planned: replacing the per-message files with SQLite (a rebuildable index is acceptable). Interim rule: one publication per command. Related: #154, #147, #171.
@@ -397,7 +401,6 @@ One point from the opinions: #178 needs crash tests. A crash after the work is f
 
 **Supervisor and runtime:**
 - the POSIX supervisor (P1), carried from the 2026-08 plan (the crash-simulation harness P2 is gap G4 above);
-- ~~a Linux and macOS monitor (#356)~~ — **planned, not on hold:** optional in weeks 5-6 (§6.7), and the operator's order of 2026-10-12 keeps it planned (§6.11). A test on Linux on 2026-10-05 found that the service manager already restarts a crashed wrapper and keeps its message, while nothing acts on a seat that hangs without crashing and no alert is raised;
 - the **tuning call** (runner-up in the 2026-10-05 ideas game, §6.9): one command that shows every seat's agenttalk version, skills, code version, identity and rules side by side, with seats that are out of step highlighted, without spending a model turn;
 - the agent lifecycle RFC (#36);
 - direct-wrap diagnostics (#181);
@@ -409,7 +412,6 @@ One point from the opinions: #178 needs crash tests. A crash after the work is f
   - **Provision the `.agenttalk/` ignore rule:** `ASSURANCE.md` treats the state directory as gitignored, but `init` does not provision the rule.
 
 **Bus and protocol:**
-- ~~a completion receipt for tasks (#178)~~ — **promoted out of this list by the operator's order of 2026-10-12**, which builds it attempt-bound as the third step (§6.11); its analysis is part of plan item 3, §6.3;
 - ~~the task version gate refusing tasks to seats not yet relaunched after a release bump (#185), and the whole-roster sender-version check (#201)~~ — **fixed by PR #259** (the gate now compares the recipient against the fixed 0.88.0 floor, not the sender's version; other seats' versions are irrelevant);
 - drain losing mail under truncated output (#37; a check is scheduled in wave 2 item 16, §6.4, with a small fix if it is still real);
 - not-found subclasses (#39);
