@@ -10,6 +10,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`agenttalk status` and the dashboard now show how large each agent's conversation is, and warn
+  before it gets expensive (#475, part 1).** An agent that runs in the background keeps one
+  conversation for as long as it lives, and every turn sends all of it again, so a long
+  conversation makes every turn, even an idle check, cost more.
+
+  What you will notice: each agent's row in `status` (and its Capacity card in the dashboard) has a
+  new line saying either how many tokens of context its last turn used, when its AI reports that,
+  or how many turns it has run since its last fresh start. It always says which of the two it is.
+  Above a limit the line carries a warning. The warning is advice only: nothing is restarted,
+  stopped or changed, and no message is sent. The limits are 150,000 tokens for Claude, 190,000 for
+  Codex, and 300 turns for either; the token limits sit at about three quarters of the context
+  windows those tools report, and 300 turns is well above the 170 to 230 that healthy agents reach
+  and far below the 830 behind the report.
+
+  What you need to do: nothing. To change a limit, add `conversation_warn_tokens` or
+  `conversation_warn_turns` to `supervisor.json`, either one number for both tools or
+  `{"claude": n, "codex": n}`; an unusable value is ignored. Starting an agent on a fresh
+  conversation with one command is the next part of #475 and is not in this change.
+
+  Technical details: new module `conversation_size.py`; additive `conversation_size` object
+  (`basis` is `context_tokens` or `turns`, plus `value`, `limit`, `warn`, `cli`) in
+  `status --json` and in each agent of `/api/state`, left out when neither figure is known. The
+  token figure is `context_tokens` from the agent's capacity snapshot (an expired reading counts
+  as absent); the turns figure is `turns` from the wrapper session record. Read-only.
+
 ## [0.101.0] - 2026-10-12
 
 **In short:** the checks that decide whether a team's work is finished are stricter and say more

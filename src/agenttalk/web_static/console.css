@@ -2427,3 +2427,4 @@ body {
   .tc-feed-item.is-fresh { animation: none; }
   .tc-meter-fill { transition: none; }
 }
+.tc-cap-warn { color: var(--warn); font-weight: 600; }

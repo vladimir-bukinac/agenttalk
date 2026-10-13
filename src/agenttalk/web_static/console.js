@@ -4216,6 +4216,14 @@
     }
     var ctx = capPct(a, 'context_used_pct');
     cap.appendChild(bigMeter('Context window', ctx, contextNote(capData.context, ctx)));
+    // Conversation size (#475): which figure it is is always said; a warning is advice only.
+    var cv = a.conversation_size;
+    if (cv && typeof cv.value === 'number') {
+      var cvWhat = cv.basis === 'context_tokens' ? 'tokens of context' : 'turns since fresh start';
+      var cvText = cv.value.toLocaleString() + ' ' + cvWhat;
+      if (cv.warn) cvText += ' - over ' + Number(cv.limit).toLocaleString() + ': every turn re-sends it';
+      cap.appendChild(el('div', cv.warn ? 'tc-cap-meta tc-cap-warn' : 'tc-cap-meta', 'Conversation: ' + cvText));
+    }
     col.appendChild(cap);
 
     // Supervisor card.

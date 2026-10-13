@@ -49,6 +49,7 @@ from agenttalk.store import (
     validate_rescind,
 )
 from agenttalk import capacity as capmod
+from agenttalk import conversation_size as convsize
 from agenttalk import checkpoint as checkpoint_mod
 from agenttalk import deadman as deadman_mod
 from agenttalk import ephemeral as eph
@@ -734,6 +735,18 @@ def _rate_limit_reason_flag(health: object) -> str | None:
     return None
 
 
+def _status_cli(agent: str, cfg_agent: dict, health: dict, capacity_snap: dict | None) -> str | None:
+    """``"claude"`` / ``"codex"`` for an agent, or None: the supervisor entry's ``cli``,
+    else the health record's, else the capacity source prefix, else the name prefix."""
+    candidates = [cfg_agent.get("cli") if isinstance(cfg_agent, dict) else None,
+                  health.get("cli") if isinstance(health, dict) else None]
+    src = capacity_snap.get("source") if isinstance(capacity_snap, dict) else None
+    if isinstance(src, str):
+        candidates.append(src.split("_", 1)[0])
+    candidates.append(agent.split("-", 1)[0])
+    return next((c for c in candidates if c in ("claude", "codex")), None)
+
+
 def _gather_status(store: Store) -> dict:
     """Build the structured status payload shared by both output modes."""
     cfg = store.load_config()
@@ -768,6 +781,7 @@ def _gather_status(store: Store) -> dict:
     supervisor_rows, supervisor_warnings = _status_supervisor_summaries(
         store, now.timestamp(), sup_cfg)
     agents = []
+    conv_settings = convsize.load_settings(store.dir)
     capacities = store.read_all_capacities()
     for a in cfg.get("agents", []):
         hb = store.read_heartbeat(a)
@@ -834,6 +848,13 @@ def _gather_status(store: Store) -> dict:
             row["capacity"] = {"state": snap["confidence"],
                                "observed_at": snap.get("observed_at"),
                                "reason": snap.get("reason"), "account": snap.get("account")}
+        size = convsize.conversation_size(
+            _status_cli(a, cfg_agent, health, capacities.get(a)),
+            capmod.current_view(capacities[a], now=now) if a in capacities else None,
+            (store.read_wrapper_runtime(a) or {}).get("turns"),
+            conv_settings)  # additive (#475): absent unless a size is known
+        if size is not None:
+            row["conversation_size"] = size
         journal_label = _turn_journal_label(store, a, health)
         if journal_label is not None:  # additive: absent unless this project uses the journal
             row["turn_events"] = journal_label
@@ -1653,6 +1674,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             seen += {"observed": " capacity=current",
                      "stale": f" capacity=stale(last reading {_format_age(age or 0)})"
                      }.get(cap["state"], f" capacity=unknown({cap.get('reason') or 'no signal'})")
+        if isinstance(a.get("conversation_size"), dict):
+            seen += " " + convsize.format_size(a["conversation_size"])
         role = f" role={a['role']}" if a.get("role") else ""
         of = " [operator-facing]" if a.get("operator_facing") else ""
         print(f"  {a['name']:<10}{role}{of} cursor={cursor:<32} unread={a['unread']:<3} {seen}")
