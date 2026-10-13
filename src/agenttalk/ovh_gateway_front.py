@@ -503,7 +503,9 @@ class GatewayFront:
             while True:
                 read_started = self._clock()
                 try:
-                    chunk = response.read(16 * 1024)
+                    # read1 returns what one network read gives, so the timing is the
+                    # real gap between bytes; read(n) would join many chunks first.
+                    chunk = getattr(response, "read1", response.read)(16 * 1024)
                 finally:
                     max_wait = max(max_wait, self._clock() - read_started)
                 if not chunk:

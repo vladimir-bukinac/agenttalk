@@ -1719,3 +1719,62 @@ def test_a_real_socket_stall_past_the_start_limit_survives_on_the_stream_limit(t
         upstream.shutdown()
         upstream.server_close()
         thread.join(timeout=5)
+
+
+def test_the_recorded_wait_is_the_gap_between_bytes_not_the_whole_stream(tmp_path) -> None:
+    """A chunked reply that trickles in must not look like one long silence (#424 review)."""
+
+    class TricklingUpstream(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def _chunk(self, data: bytes) -> None:
+            self.wfile.write(f"{len(data):x}\r\n".encode("ascii") + data + b"\r\n")
+            self.wfile.flush()
+
+        def do_POST(self) -> None:  # noqa: N802 - http.server API
+            self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            pieces = [_STREAM_BODY[:_STREAM_CUT]] + [b": ping\n\n"] * 4 + [_STREAM_BODY[_STREAM_CUT:]]
+            for piece in pieces:
+                self._chunk(piece)
+                time.sleep(0.25)
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), TricklingUpstream)
+    thread = threading.Thread(target=upstream.serve_forever, daemon=True)
+    thread.start()
+    try:
+        ledger = SpendLedger(tmp_path / "ledger.sqlite3", tmp_path / "install.json")
+        ledger.initialize(
+            opening_micro_eur=0,
+            opening_evidence="fake front fixture, observed 2026-07-16",
+            generation="a" * 32,
+            child_cap_issuer_token=TEST_CHILD_CAP_ISSUER,
+        )
+        front = GatewayFront(
+            FrontConfig(
+                public_token="front",
+                internal_token="internal",
+                internal_port=int(upstream.server_address[1]),
+            ),
+            ledger,
+        )
+        waits: list[dict] = []
+        front.stream_wait_observer = waits.append
+
+        front._proxy(_FakeHandler(), b"{}", capability=_direct_capability(front))
+
+        assert ledger.status()["unresolved"] == []
+        assert waits[0]["total_seconds"] >= 1.2  # six pieces, 0.25 s apart
+        assert waits[0]["max_wait_seconds"] < 0.9  # never the whole stream
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)
