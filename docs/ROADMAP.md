@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-12 (UTC; the operator's order of that day in §6.11, the ideas round in §7.2)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-13 (UTC; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.101.0 (2026-10-12). `CHANGELOG.md` remains the release-history source of truth.
@@ -278,6 +278,16 @@ Two notes beside item 4. They are notes, not a change of order:
 - **The lead's timers expire.** In Claude Code they lapse after about seven days and live only in the session. So the README must say how to renew them, until agenttalk owns reminders itself (§7.2, item 6).
 - **The identity gap.** The README must state it beside the new unattended advice (§7.2, item 5): a seat can send a message that claims to come from the lead. It must also say who is operator-facing in a chain where one lead reports to another lead.
 
+### 6.12 When people use the same subscriptions outside agenttalk *(operator approved, 2026-10-12)*
+
+A team's people may use the same Claude subscription, or the same pay-per-use key, outside agenttalk. Part of this is already handled. A Claude seat's usage reading is the provider's figure for the whole account, so outside use is counted in the pacing. A seat that reaches the limit stops and keeps its work queued. For a pay-per-use key, comparing the provider's bill with the gateway's own record of its spending shows other use of the key; the maintainers make that comparison themselves, outside agenttalk. What is missing: nobody can tell who used what, there is no fresh figure while no seat is running, a forecast built from agenttalk's own work alone comes out wrong, and nothing keeps room for the people.
+
+The operator approved four measures. Two of them belong to a separate usage service: a program, not part of agenttalk and kept outside this repository, that gathers the usage figures of several subscriptions in one place.
+1. **Advice in the README:** one subscription for the agents and separate ones for people, and one pay-per-use key for each agenttalk team. It goes into the README change (§6.11, item 4).
+2. **A reserve for people:** a per-team setting such as "the agents use at most 70% of the weekly allowance". Past it, the lead takes on urgent work only. It goes to the usage service's design.
+3. **Outside use shown as its own category,** never as an error. It also goes to the usage service's design.
+4. **Readings from people's own Claude Code sessions,** through the same status-line reading the seats already use, so that less of the outside use goes unseen. Use in the Claude app or on the website still shows only in the account total. Small; it waits its turn with the usage-limit follow-ups (wave 2, item 10). (#470)
+
 ---
 
 ## 7. Candidate Features From the Agent-to-Agent Landscape
@@ -340,17 +350,17 @@ Scape (scape.work) is a paid macOS app that runs many Claude and Codex sessions 
 
 ### 7.2 Ideas from Houmao, FCoP and the mods ideas round (2026-10-12)
 
-Houmao runs teams of command-line agents in tmux on Linux and macOS: specialists with profiles, a gateway per agent, and loops. FCoP is a file-based protocol for tasks, reports and reviews, with attempts and an adapter for MCP. Alongside them the team ran its own ideas round on 2026-10-12 (the mods round). Seven seats from two vendors read ten ideas blind and voted. The table gives each idea's verdict (with how many of the seven put it in their top three), and where it goes. None is built; each still gets its own challenge before it is.
+Houmao runs teams of command-line agents in tmux on Linux and macOS: specialists with profiles, a gateway per agent, and loops. FCoP is a file-based protocol for tasks, reports and reviews, with attempts and an adapter for MCP. Alongside them the team ran its own ideas round on 2026-10-12 (the mods round). Seven seats from two vendors read ten ideas blind and voted. The table gives each idea's verdict (with how many of the seven put it in their top three), and where it goes. Each of the seven named three ideas, 21 picks in all: idea 1 got 7, idea 9 got 5, ideas 6 and 5 got 4 each, and idea 2 got 1. No one picked 3, 8, 7, 4 or 10, so the merged row 3 + 8 has no picks either. None is built; each still gets its own challenge before it is.
 
 | # | Idea | What it would change here | The team's verdict | Where it goes |
 |---|---|---|---|---|
 | 1 | **Completion bound to the attempt** | A "done" counts only for the request, the round and, when the task pinned one, the head it was made for. An older reply never closes a newer round, and a finished attempt is never driven again. | Keep; 7 of 7 ranked it first | Inside #178 |
 | 9 | **One read-only screen: `agenttalk overview`, plus thin `/agenttalk` and `$agenttalk`** | One screen built from the dashboard's state. It never moves a cursor, writes, wakes a seat or calls a model. | Keep; 5 of 7 in their top three | Weeks 3-4 (early) |
 | 6 | **Reminders owned by agenttalk** (the lead's check-in and handover) | Merged with the deferred self-wake in §7. Works for a Codex lead. A cost bound in paid wake-ups per day. | Keep; 4 of 7 | Right after #178 and the README change |
-| 5 | **Authority from trusted configuration, never from a claimed sender name** | FACT: the wrapper's `sender_is_lead` compares the message's own `from` with the live roster (`wrapper/run.py`); with signing off, nothing authenticates it. Turning signing on is worth doing as protection against tampering, but it does not settle this: while seats share one key it cannot prove which seat sent a message, so a misled seat could still sign a message as the lead. The goal needs a seat-specific credential or configuration boundary. Design first. | Keep; 4 of 7 | Design right after #178; build later |
+| 5 | **Authority from trusted configuration, never from a claimed sender name** | FACT: the wrapper's `sender_is_lead` compares the message's own `from` with the live roster (`wrapper/run.py`); with signing off, nothing authenticates it. Turning signing on is still worth doing: it shows when a message file was edited by anyone who cannot read the key, such as another user account on the machine. But it does not settle this: while seats share one key it cannot prove which seat sent a message, so a misled seat could still sign a message as the lead. The goal needs a seat-specific credential or configuration boundary. Design first. | Keep; 4 of 7 | Design right after #178; build later |
 | 3 + 8 | **One team definition and `agenttalk team start / stop / status`** | First generate and print the start script from the existing roster and supervisor settings (no third config file). Team stop uses the supported release, with proof that each release was consumed, never a kill. Keep-alive through tmux or systemd comes later (#356). | Change (the two merged) | Weeks 3-4 |
 | 7 | **Watch a background seat** | A read-only tail of its wrapper log, folded into the overview. No terminal attach. | Change (folded into 9) | With 9 |
-| 2 | **Typed tools through a local MCP server** | A thin front door over the same CLI and store, so delivery, signing and audit stay the same. The seat's identity comes from its launch configuration, never from a tool field. | Change: not the rejected relay (§7). Later, after 5, with its own challenge | Later |
+| 2 | **Typed tools through a local MCP server** | A thin front door over the same CLI and store, so delivery, signing and audit stay the same. The seat's identity comes from its launch configuration, never from a tool field. | Change: not the rejected relay (§7). Later, after 5, with its own challenge; 1 of 7 | Later |
 | 4 | **A read-only guided tour for a first-time team** | Shows a newcomer what each part does, without changing anything. | Small; the views split (one opinion says drop, one says later) | Weeks 3-4 (small) |
 | 10 | **A Claude Code mod** (a deny-only guard plus a status band) | A guard and a band that only Claude seats would have. | Probe only. First try Claude Code's per-seat deny rules and CLI refusals. Anything every seat must obey lives in agenttalk, not in a Claude-only mod. | Later |
 
@@ -366,6 +376,10 @@ One point from the opinions: #178 needs crash tests. A crash after the work is f
 ---
 
 ## 8. Later / On Hold
+
+**Moved out of this section into the plan** (both still open):
+- **A completion receipt for tasks (#178).** The operator's order of 2026-10-12 builds it attempt-bound as the third step (§6.11); its analysis is part of plan item 3 (§6.3).
+- **A Linux and macOS monitor (#356).** Planned, optional in weeks 5-6 (§6.7, §6.11). A test on Linux on 2026-10-05 found that the service manager already restarts a crashed wrapper and keeps its message, while nothing acts on a seat that hangs without crashing and no alert is raised. The full POSIX supervisor stays below.
 
 **Carried from the old "Next" list (§6 before 2026-10-09).** The 2026-10-07 plan (§6) does not carry these. Every item is summarised here (the full old wording is in git history); each keeps its issue numbers and, where the old text gave one, the trigger that brings it back. Before any of them is built it gets its own challenge, as before.
 - **The lead can always (re)start team members** (operator directive 2026-09-27; old §6.1). A dead seat is still relaunched by hand, because the supervisor is not run on the maintainers' fleet. Eight gaps were listed: run the supervisor for the fleet (G1); remove two manual pre-steps, including a preflight for the Codex ACL step (G2, #147); guard-aware relaunch (G3); a crash-simulation harness (G4, a prerequisite for G3); a POSIX supervisor (G5, design first); decide absence from a complete process snapshot, not the heartbeat (G6, which would cut a dead Codex seat's outage from about 40 minutes); terminate a provably childless wrapper and cap the retry (G7); launch only on complete ownership proof (G8, design first). Old order: G2 then G1, then G6; G4 before G3, G7 and G8. Related: #155, #139, #180, #182. The older supervisor issues #26, #27, #28 and #33, and #37, are scheduled for verification in wave 2 item 16 (§6.4); only issues found obsolete are closed.
@@ -386,7 +400,7 @@ One point from the opinions: #178 needs crash tests. A crash after the work is f
 - **Plan review write path (#206).** Annotate a plan and send it back. It is resumed only if the operator's trial of a markup tool shows that marking up beats chat. The read half is D1–D3 (§5).
 
 **Supervisor and runtime:**
-- the POSIX supervisor (P1), carried from the 2026-08 plan (the crash-simulation harness P2 is gap G4 above). A test on Linux on 2026-10-05 found that the service manager already restarts a crashed wrapper and keeps its message, while nothing acts on a seat that hangs without crashing and no alert is raised (#356);
+- the POSIX supervisor (P1), carried from the 2026-08 plan (the crash-simulation harness P2 is gap G4 above);
 - the **tuning call** (runner-up in the 2026-10-05 ideas game, §6.9): one command that shows every seat's agenttalk version, skills, code version, identity and rules side by side, with seats that are out of step highlighted, without spending a model turn;
 - the agent lifecycle RFC (#36);
 - direct-wrap diagnostics (#181);
@@ -398,7 +412,6 @@ One point from the opinions: #178 needs crash tests. A crash after the work is f
   - **Provision the `.agenttalk/` ignore rule:** `ASSURANCE.md` treats the state directory as gitignored, but `init` does not provision the rule.
 
 **Bus and protocol:**
-- a completion receipt for tasks (#178): **promoted out of this list by the operator's order of 2026-10-12**, which builds it attempt-bound as the third step (§6.11); its analysis is part of plan item 3, §6.3;
 - ~~the task version gate refusing tasks to seats not yet relaunched after a release bump (#185), and the whole-roster sender-version check (#201)~~ — **fixed by PR #259** (the gate now compares the recipient against the fixed 0.88.0 floor, not the sender's version; other seats' versions are irrelevant);
 - drain losing mail under truncated output (#37; a check is scheduled in wave 2 item 16, §6.4, with a small fix if it is still real);
 - not-found subclasses (#39);
@@ -521,6 +534,6 @@ Do not ship broad workflow claims if any of these are true:
 2. **Later, not in the approved plan (§8):** make the team self-healing (restart a dead seat, run the supervisor, stop a dead seat waiting out its heartbeat threshold, then the crash harness and guard-aware relaunch, then host-restart survival); fix the store at the mechanism (measure and shrink the publication critical section, reconcile stale obligations). Wrappers surviving store contention already shipped in 0.94.0 (#218).
 3. **Also later:** the remaining refocus items (context policy with knowledge and memory, §8) and a first-class migration method (#153, optional weeks 5-6 in §6.7). Spec-kitty removal is done.
 4. **Each of these keeps its own challenge:** nothing in §8 starts without one.
-5. **Later:** the remaining §7 candidates by rank, and the ideas in §7.2, each with its own challenge verdict.
+5. **Later:** the remaining §7 candidates by rank, and the §7.2 ideas that have no place yet: 2 (typed tools through MCP), 10 (the Claude Code mod) and the build of 5. The other §7.2 ideas are already placed: 1 inside #178 (§6.11), 6 right after #178 and the README change, the design of 5 right after #178, and 9, 7, 3 + 8 and 4 in weeks 3-4. Each still gets its own challenge verdict.
 
 Bottom line: agenttalk can become the platform for teams of agents from different vendors to build software "by the book". But the product has to be honest about authority. It can enforce process, preserve evidence, challenge work before it starts, and fail closed when evidence is missing. It cannot remove the human oracle or prove correctness by itself.
