@@ -817,6 +817,7 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
              on_health_contention: Callable[[str], None] | None = None,
              on_contention_persisting: Callable[[dict], None] | None = None,
              on_runtime_idle: Callable[[], None] | None = None,
+             on_idle_poll: Callable[[], None] | None = None,
              on_runtime_dead_letter: Callable[[dict], None] | None = None,
              capacity_refresh: Callable[[], None] | None = None,
              capacity_interval_seconds: float = 60.0,
@@ -935,6 +936,7 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
             on_health_contention=on_health_contention,
             on_contention_persisting=on_contention_persisting,
             on_runtime_idle=on_runtime_idle,
+            on_idle_poll=on_idle_poll,
             on_runtime_dead_letter=on_runtime_dead_letter,
             capacity_refresh=capacity_refresh,
             capacity_interval_seconds=capacity_interval_seconds,
@@ -974,6 +976,7 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                     capacity_refresh: Callable[[], None] | None,
                     capacity_interval_seconds: float,
                     commit_gate,
+                    on_idle_poll: Callable[[], None] | None = None,
                     now_iso: Callable[[], str],
                     wrapper_generation: str | None = None,
                     on_message_disposed: Callable[[dict, str, dict], None] | None = None,
@@ -1542,6 +1545,8 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         if marker_head is not None and (record is None or record.get("id") != marker_head):
             _drop_marker()                  # the parked head was consumed or is gone
         if record is None:
+            if on_idle_poll is not None:
+                on_idle_poll()      # between turns by construction: no turn runs on this thread
             # IDLE. First consult the proactive CADENCE hook (WP3): it gates due-ness
             # itself and, when due, drives at most ONE synthetic sweep turn - WITHOUT
             # ever advancing the cursor / recording an attempt / dead-lettering (this

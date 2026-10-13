@@ -39,6 +39,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token figure is `context_tokens` from the agent's capacity snapshot (an expired reading counts
   as absent); the turns figure is `turns` from the wrapper session record, shown only when the record has one (an absent counter is unknown, not 0). A reading of 0 is a reading. Limits must be positive whole numbers. `supervisor.json` is read the way the supervisor reads it (a byte-order mark is fine), and the dashboard and `status` resolve each agent's tool the same way. Read-only.
 
+- **Start an agent on a fresh conversation with one command (#475, part 2).** An agent that runs
+  in the background keeps one conversation for as long as it lives, and every turn sends all of it
+  again, so a long-lived agent gets slower and costlier. Until now the only way out was editing
+  the agent's session record by hand. `agenttalk session fresh --for <agent> --reason "..."` now
+  asks the agent's own wrapper to start its next turn on a new conversation. The wrapper does it
+  between turns: at once if the agent is idle, or right after the turn that is running. Nothing is
+  stopped and no file is edited by the command. The old conversation is never resumed, the request
+  is applied exactly once, and a second request while one is waiting is refused. `agenttalk status`
+  shows `fresh=pending` and then `fresh=applied` (with the reason and the turn count it started
+  from, in `status --json`). The old session record is kept beside the new one. The agent itself,
+  a lead or the operator-facing agent may ask. Works for Claude and Codex agents. The agent starts
+  without its old conversation, so it should leave a note of what is next before it is asked to
+  start fresh; the automatic handover note is planned (#475, steps 2 and 3).
+  Technical detail: the wrapper loads `<agent>.wrapper-session.json` once and saves its own copy,
+  so an outside edit could be overwritten or ignored. The command therefore only writes a
+  `<agent>.fresh-request` marker. `wrapper/session.py` `apply_fresh_request` is called from the
+  wrapper's own thread before each turn is built (both drives) and on each idle poll: it resets the
+  in-memory session (a new Claude session id, or a cleared Codex thread), saves the request id with
+  the reset, and only then clears the marker, which is what makes it apply once even after a crash.
+  The outcome is recorded in the session record (`fresh_request_*`) and projected by
+  `Store.read_fresh_status` and, as the reset reason `fresh_requested`, by the dashboard reader.
+
 ## [0.101.0] - 2026-10-12
 
 **In short:** the checks that decide whether a team's work is finished are stricter and say more

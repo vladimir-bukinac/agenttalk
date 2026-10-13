@@ -1797,6 +1797,17 @@ def _agent_entries(store: Store, cfg: dict, msgs: list[Message],
             if rt.get("reset_reason"):
                 runtime["reset_reason"] = rt["reset_reason"]
             e["runtime"] = runtime
+        # #475: a start-fresh request, pending or applied. Closed fields only: no free text
+        # (the reason stays in `status`), no session identities.
+        fresh = store.read_fresh_status(a)
+        if fresh is not None:
+            kind = "pending" if "pending" in fresh else "applied"
+            detail = fresh[kind]
+            e["fresh_request"] = {
+                "state": "pending" if kind == "pending" else (detail.get("outcome") or "recorded"),
+                "at": detail.get("at"),
+                "requested_by": detail.get("requested_by") or None,
+            }
         # health_timeline: best-effort in-memory ring (§5). Record this tick,
         # then emit the collapsed segments — omitted entirely when history is
         # None (build_state stays pure) or no meaningful samples have

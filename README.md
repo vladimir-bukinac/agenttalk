@@ -1270,6 +1270,7 @@ typed-evidence shape at the milestone level.
 | `checkpoint {save,resume,show}` | Capture/restore context headroom, git state, and actionable threads across a compaction. |
 | `heartbeat` | Stamp liveness; `--hook` mode never blocks a tool call. |
 | `request-restart` | Bounce one agent on demand; resumes its session. |
+| `session fresh --for <agent> --reason "..."` | Ask one agent's wrapper to start its next turn on a fresh conversation. Use it when a conversation has grown so long that every turn is slow or costly. The wrapper applies it between turns; nothing is stopped and no file is edited. `agenttalk status` shows `fresh=pending` and then `fresh=applied`. The old session record is kept beside it as `<agent>.wrapper-session.before-fresh-<id>.json`. Handover notes are not part of this command, so the agent starts without its old conversation. |
 | `request-launch` | Request a fresh ephemeral agent for a profile/skill/revision. |
 | `commit-gate {status,reset}` | Per-agent breaker state and authenticated reset. |
 

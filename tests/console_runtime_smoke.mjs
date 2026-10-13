@@ -208,4 +208,26 @@ assert.deepEqual(groupActions, [], 'a dead-letter group card offers no action bu
 const ordinaryDeadLetterActions = api.attentionActions({ source: 'deadletter' });
 assert.ok(ordinaryDeadLetterActions.length > 0, 'an ordinary (ungrouped) dead-letter card keeps its actions');
 
+// --- 14) #475: a start-fresh request is visible in the runtime rows: pending and applied,
+//         with the requester; an agent without one keeps exactly three rows; wire values
+//         stay inert (textContent). ---
+const noFresh = api.supRuntimeRows({ model: 'm', runtime: { state: 'resumed' } });
+assert.equal(noFresh.length, 3, 'no fresh_request -> still three rows');
+const pendingRows = api.supRuntimeRows({
+  model: 'm', runtime: { state: 'resumed' },
+  fresh_request: { state: 'pending', at: '2026-10-13T12:00:00Z', requested_by: 'lead' },
+});
+assert.equal(pendingRows.length, 4, 'a pending request adds the Fresh start row');
+assert.equal(pendingRows[3].children[0].textContent, 'Fresh start');
+assert.equal(pendingRows[3].children[1].textContent, 'pending · by lead');
+const appliedRows = api.supRuntimeRows({
+  fresh_request: { state: 'applied', requested_by: 'beta' },
+});
+assert.equal(appliedRows[3].children[1].textContent, 'applied · by beta');
+const noRequester = api.supRuntimeRows({ fresh_request: { state: 'applied', requested_by: null } });
+assert.equal(noRequester[3].children[1].textContent, 'applied');
+const injected = api.supRuntimeRows({ fresh_request: { state: XSS, requested_by: XSS } });
+assert.equal(injected[3].children[1].textContent, XSS + ' · by ' + XSS);
+assert.equal(injected[3].children[1].innerHTML, undefined, 'innerHTML must never be set');
+
 console.log('console runtime render smoke: PASS');

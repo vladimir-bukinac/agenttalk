@@ -20,6 +20,7 @@ process + the atomic persistence of SessionState.
 from __future__ import annotations
 
 import json
+import shutil
 import uuid
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timezone
@@ -57,6 +58,14 @@ class SessionState:
     # #301: the seat's latest rate-limit reading per window, folded from its own
     # rate_limit_event lines (capacity.claude_stream_reading).
     claude_rate_limit: dict | None = None
+    # #475: the last start-fresh request the wrapper handled (its id also makes a
+    # marker that survived a crash between "saved" and "cleared" apply only once).
+    fresh_request_id: str = ""
+    fresh_request_outcome: str = ""
+    fresh_request_at: str = ""
+    fresh_request_reason: str = ""
+    fresh_request_by: str = ""
+    fresh_request_turn: int = 0
 
 
 @dataclass(frozen=True)
@@ -144,6 +153,92 @@ def reset_claude_session(state: SessionState, reason: str) -> None:
     state.resume_available = False
     state.resume_unavailable_reason = reason
     state.continuity_lost_reason = reason
+
+
+def apply_fresh_request(store, agent: str, state: SessionState, persist=None) -> dict | None:
+    """Apply a pending start-fresh request (#475), between turns only.
+
+    Called by the wrapper itself, from its own thread, while no turn runs: when it is
+    idle and again just before it builds a turn. The wrapper owns the session record
+    (it loads it once and saves its own copy), so the request is a marker the wrapper
+    reads, never an edit of the record from outside.
+
+    Claude: a new session id (:func:`reset_claude_session`). Codex: the thread id is
+    cleared (:func:`mark_resume_unavailable`).
+
+    The marker is cleared only after the reset is DURABLY saved: "already applied" is
+    decided from the saved record on disk, never from the in-memory request id, so a
+    failed save is retried (the exception propagates, the marker stays) and a restart
+    after a failed save still finds the request. The old record is copied aside first and
+    the reset does not start unless that copy succeeded.
+    Returns the outcome record, or None when nothing was pending (or it was already done).
+    """
+    marker = store.read_fresh_request(agent)
+    if marker is None:
+        return None
+    now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if "request_id" not in marker:  # the closed "unusable" fact: nothing to trust or apply
+        store.clear_fresh_request(agent, None)
+        state.fresh_request_id = "unreadable"
+        state.fresh_request_outcome = "unreadable_request_removed"
+        state.fresh_request_at = now
+        state.fresh_request_reason = ""
+        state.fresh_request_by = ""
+        state.fresh_request_turn = state.turns
+        if persist is not None:
+            persist(state)
+        return {"outcome": state.fresh_request_outcome}
+    rid = marker["request_id"]
+    if _saved_request_id(store, agent) == rid:  # saved already; only the clearing was lost
+        store.clear_fresh_request(agent, rid)
+        return None
+    reason = " ".join(str(marker.get("reason") or "").split())[:200]
+    requested_by = str(marker.get("requested_by") or "")[:64]
+    if state.fresh_request_id != rid:  # not reset in memory yet (a retry keeps the first reset)
+        if state.cli in ("claude", "codex"):
+            _backup_session_record(store, agent, rid)  # raises: no backup, no reset
+            if state.cli == "claude":
+                reset_claude_session(state, "fresh_requested")
+            else:
+                mark_resume_unavailable(state, "fresh_requested")
+            clear_resume_attempt(state)
+            state.resume_failure_count = 0
+            state.resume_failure_key = ""
+            state.fresh_request_outcome = "applied"
+        else:
+            state.fresh_request_outcome = "unsupported_cli"
+        state.fresh_request_id = rid
+        state.fresh_request_at = now
+        state.fresh_request_reason = reason
+        state.fresh_request_by = requested_by
+        state.fresh_request_turn = state.turns
+    if persist is not None:
+        persist(state)  # raises on failure: the marker stays and the next call retries
+    store.clear_fresh_request(agent, rid)
+    return {"request_id": rid, "outcome": state.fresh_request_outcome, "reason": reason,
+            "requested_by": requested_by}
+
+
+def _saved_request_id(store, agent: str) -> str:
+    """The start-fresh request id in the record ON DISK ("" when absent or unreadable)."""
+    try:
+        data = json.loads(_session_path(store, agent).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    value = data.get("fresh_request_id") if isinstance(data, dict) else ""
+    return value if isinstance(value, str) else ""
+
+
+def _backup_session_record(store, agent: str, request_id: str) -> None:
+    """Copy the record the wrapper is about to replace. A failed copy raises, so the reset
+    never goes ahead without its backup (the request stays pending). No record yet: nothing to keep."""
+    src = _session_path(store, agent)
+    if not src.exists():
+        return
+    dst = src.with_name(f"{agent}.wrapper-session.before-fresh-{request_id}.json")
+    shutil.copyfile(src, dst)
+    if dst.read_bytes() != src.read_bytes():
+        raise OSError("the session record backup does not match the record")
 
 
 def compute_runtime_fingerprint(model: str | None, effort: str | None) -> str:
