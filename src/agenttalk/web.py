@@ -1756,9 +1756,11 @@ def _agent_entries(store: Store, cfg: dict, msgs: list[Message],
         cap = _capacity_entry(snap, now=now)
         if cap is not None:
             e["capacity"] = cap
+        _rt_for_size = store.read_wrapper_runtime(a) or {}
         size = _conversation_size.conversation_size(
-            cli, _capacity.current_view(snap, now=now) if isinstance(snap, dict) else None,
-            (store.read_wrapper_runtime(a) or {}).get("turns"), conv_settings)
+            _conversation_size.resolve_cli(a, conv_settings, health, snap),
+            _capacity.current_view(snap, now=now) if isinstance(snap, dict) else None,
+            _rt_for_size.get("turns") if _rt_for_size.get("turns_known") else None, conv_settings)
         if size is not None:  # absent-not-null (#475): only when a size is known
             e["conversation_size"] = size
         # wrapped/restartable arm on EITHER the health mode OR the managed

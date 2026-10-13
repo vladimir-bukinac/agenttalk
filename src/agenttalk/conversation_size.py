@@ -6,7 +6,13 @@ conversation again, so a long conversation makes every turn dearer. This module 
 
 Two figures, never mixed: the context size the agent's CLI reported on its last turn
 (``capacity`` snapshot, ``context_tokens``) where a reading exists, else the number of
-turns since the agent's last fresh start (the wrapper session record's ``turns``).
+turns the agent has run in total (the wrapper session record's ``turns``).
+
+The turn counter is NOT tied to one conversation: it counts every successful turn, a fresh
+start does not reset it (``wrapper/session.py``, ``wrapper/run.py``) and other code reads
+it, so it is not reset here. The figure is therefore labelled ``turns_total`` and the
+warning says it can include earlier conversations; only the token reading describes the
+current conversation. (A later change can subtract the count recorded at a fresh start.)
 
 Defaults (``DEFAULT_WARN_TOKENS`` / ``DEFAULT_WARN_TURNS``) and how they were chosen:
   * tokens: Claude reports a 200000-token window (a 1000000-token variant exists) and Codex
@@ -14,17 +20,20 @@ Defaults (``DEFAULT_WARN_TOKENS`` / ``DEFAULT_WARN_TURNS``) and how they were ch
     warning sits well below it: 150000 for Claude (75% of 200000) and 190000 for Codex
     (about 74% of 258400).
   * turns: the incident behind #475 was a conversation of 830 turns; healthy desktop
-    agents sit at 170 to 230. 300 stays quiet for them and fires long before 830.
+    agents sit at 170 to 230 in their current conversations. 300 stays quiet for them and
+    fires long before 830. Because the counter is cumulative it can fire for an agent that
+    has since been started fresh; the text says so.
 They can be changed in ``supervisor.json`` with ``conversation_warn_tokens`` and
 ``conversation_warn_turns`` (a number for every CLI, or ``{"claude": n, "codex": n}``).
 """
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 BASIS_TOKENS = "context_tokens"
-BASIS_TURNS = "turns"
+BASIS_TURNS = "turns_total"
 
 DEFAULT_WARN_TOKENS = {"claude": 150_000, "codex": 190_000}
 DEFAULT_WARN_TURNS = {"claude": 300, "codex": 300}
@@ -33,12 +42,27 @@ _CONFIG_TURNS_KEY = "conversation_warn_turns"
 _FALLBACK_CLI = "claude"
 
 
+def _whole(value: object) -> int | None:
+    """A whole number (an int, or a float with no fraction), else None. Never a bool."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    return None
+
+
 def _positive_int(value: object) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    if value != value or value in (float("inf"), float("-inf")) or value <= 0:
-        return None
-    return int(value)
+    """A limit: a positive whole number (0.5 is refused, not turned into 0)."""
+    whole = _whole(value)
+    return whole if whole is not None and whole > 0 else None
+
+
+def _measurement(value: object) -> int | None:
+    """A reading or a count: a whole number from 0 up. Zero is a real value."""
+    whole = _whole(value)
+    return whole if whole is not None and whole >= 0 else None
 
 
 def _limit(raw: object, defaults: dict[str, int], cli: str) -> int:
@@ -51,16 +75,37 @@ def _limit(raw: object, defaults: dict[str, int], cli: str) -> int:
 
 
 def load_settings(store_dir: Path) -> dict:
-    """The two warning settings from ``supervisor.json`` (``{}`` when absent or unreadable).
+    """The two warning settings and the per-agent ``cli`` names from ``supervisor.json``.
 
-    Reads only the two keys and never raises: a broken file must not hide the status."""
+    ``{}`` when absent or unreadable. Reads the file the way the supervisor does
+    (``utf-8-sig``, so a byte-order mark is accepted) and never raises: a broken file must
+    not hide the status."""
     try:
-        data = json.loads(Path(store_dir, "supervisor.json").read_text(encoding="utf-8"))
+        data = json.loads(Path(store_dir, "supervisor.json").read_text(encoding="utf-8-sig"))
     except (OSError, ValueError):
         return {}
     if not isinstance(data, dict):
         return {}
-    return {k: data[k] for k in (_CONFIG_TOKENS_KEY, _CONFIG_TURNS_KEY) if k in data}
+    out = {k: data[k] for k in (_CONFIG_TOKENS_KEY, _CONFIG_TURNS_KEY) if k in data}
+    agents = data.get("agents")
+    if isinstance(agents, dict):
+        out["agent_cli"] = {name: entry["cli"] for name, entry in agents.items()
+                            if isinstance(entry, dict) and entry.get("cli") in DEFAULT_WARN_TOKENS}
+    return out
+
+
+def resolve_cli(agent: str, settings: dict | None, health: dict | None,
+                capacity_snap: dict | None) -> str | None:
+    """``"claude"`` / ``"codex"`` or None: the supervisor entry's ``cli``, else the health
+    record's, else the capacity source prefix, else the agent-name prefix. ONE rule for
+    ``status`` and the dashboard, so they cannot disagree."""
+    candidates = [((settings or {}).get("agent_cli") or {}).get(agent),
+                  health.get("cli") if isinstance(health, dict) else None]
+    src = capacity_snap.get("source") if isinstance(capacity_snap, dict) else None
+    if isinstance(src, str):
+        candidates.append(src.split("_", 1)[0])
+    candidates.append(agent.split("-", 1)[0])
+    return next((c for c in candidates if c in DEFAULT_WARN_TOKENS), None)
 
 
 def conversation_size(cli: str | None, capacity_snap: dict | None, turns: object,
@@ -71,12 +116,12 @@ def conversation_size(cli: str | None, capacity_snap: dict | None, turns: object
     ``context_tokens`` as None and falls back to turns). ``turns`` may be None/absent."""
     settings = settings or {}
     cli_key = cli if cli in DEFAULT_WARN_TOKENS else _FALLBACK_CLI
-    tokens = _positive_int(capacity_snap.get("context_tokens")) if isinstance(capacity_snap, dict) else None
+    tokens = _measurement(capacity_snap.get("context_tokens")) if isinstance(capacity_snap, dict) else None
     if tokens is not None:
         limit = _limit(settings.get(_CONFIG_TOKENS_KEY), DEFAULT_WARN_TOKENS, cli_key)
         return {"basis": BASIS_TOKENS, "value": tokens, "limit": limit,
                 "warn": tokens > limit, "cli": cli_key}
-    count = turns if isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0 else None
+    count = _measurement(turns)
     if count is None:
         return None
     limit = _limit(settings.get(_CONFIG_TURNS_KEY), DEFAULT_WARN_TURNS, cli_key)
@@ -86,8 +131,12 @@ def conversation_size(cli: str | None, capacity_snap: dict | None, turns: object
 
 def format_size(size: dict) -> str:
     """One short phrase for a terminal row, saying which figure it is."""
-    unit = "tokens of context" if size["basis"] == BASIS_TOKENS else "turns since fresh start"
-    text = f"conversation={size['value']:,} {unit}"
+    if size["basis"] == BASIS_TOKENS:
+        text = f"conversation={size['value']:,} tokens of context"
+        note = "every turn re-sends it"
+    else:
+        text = f"conversation={size['value']:,} turns in total"
+        note = "may count earlier conversations; a fresh start does not reset it"
     if size["warn"]:
-        text += f" WARN(over {size['limit']:,}: every turn re-sends it; consider a fresh start)"
+        text += f" WARN(over {size['limit']:,}: {note})"
     return text

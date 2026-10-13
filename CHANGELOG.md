@@ -19,8 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   What you will notice: each agent's row in `status` (and its Capacity card in the dashboard) has a
   new line saying either how many tokens of context its last turn used, when its AI reports that,
-  or how many turns it has run since its last fresh start. It always says which of the two it is.
-  Above a limit the line carries a warning. The warning is advice only: nothing is restarted,
+  or how many turns it has run in total. It always says which of the two it is. The turn count is
+  cumulative: a fresh start does not reset it, so it can include earlier conversations, and the
+  warning says so; only the token figure describes the current conversation. Above a limit the line
+  carries a warning. The warning is advice only: nothing is restarted,
   stopped or changed, and no message is sent. The limits are 150,000 tokens for Claude, 190,000 for
   Codex, and 300 turns for either; the token limits sit at about three quarters of the context
   windows those tools report, and 300 turns is well above the 170 to 230 that healthy agents reach
@@ -32,10 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conversation with one command is the next part of #475 and is not in this change.
 
   Technical details: new module `conversation_size.py`; additive `conversation_size` object
-  (`basis` is `context_tokens` or `turns`, plus `value`, `limit`, `warn`, `cli`) in
+  (`basis` is `context_tokens` or `turns_total`, plus `value`, `limit`, `warn`, `cli`) in
   `status --json` and in each agent of `/api/state`, left out when neither figure is known. The
   token figure is `context_tokens` from the agent's capacity snapshot (an expired reading counts
-  as absent); the turns figure is `turns` from the wrapper session record. Read-only.
+  as absent); the turns figure is `turns` from the wrapper session record, shown only when the record has one (an absent counter is unknown, not 0). A reading of 0 is a reading. Limits must be positive whole numbers. `supervisor.json` is read the way the supervisor reads it (a byte-order mark is fine), and the dashboard and `status` resolve each agent's tool the same way. Read-only.
 
 ## [0.101.0] - 2026-10-12
 

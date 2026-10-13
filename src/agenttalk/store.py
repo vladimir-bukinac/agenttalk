@@ -7878,8 +7878,10 @@ class Store:
         if isinstance(effort, str) and effort.strip():
             out["reasoning_effort"] = effort
         turns = d.get("turns")
-        turns = turns if isinstance(turns, int) and not isinstance(turns, bool) else 0
+        turns_known = isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0
+        turns = turns if turns_known else 0
         out["turns"] = turns
+        out["turns_known"] = turns_known  # False: the record does not say (0 here is not a reading)
         thread_id = d.get("codex_thread_id")
         session_id = d.get("claude_session_id")
         has_id = bool(
