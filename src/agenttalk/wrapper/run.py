@@ -2540,6 +2540,14 @@ def claim_wrapper_ownership(store, agent: str, wrapper_generation: str) -> None:
     _atomic.write_text(_owner_path(store, agent), wrapper_generation)
 
 
+def _fresh_owner_check(store, agent: str, wrapper_generation: str | None):
+    """The ownership check for a turn-start application, or None when the drive was built
+    without a generation (tests and one-off callers)."""
+    if not wrapper_generation:
+        return None
+    return lambda: is_active_wrapper(store, agent, wrapper_generation)
+
+
 def is_active_wrapper(store, agent: str, wrapper_generation: str) -> bool:
     """True while this wrapper generation is the one that claimed the agent last.
 
@@ -3129,7 +3137,8 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
         prompt = _prompt.assemble_turn_prompt(
             record, rules=rules, rejoin=rejoin, lessons=lesson_prompt,
             sender_is_lead=sender_is_lead, reply_shell=reply_shell, seat=agent)
-        _apply_fresh_request(store, agent, session_state, persist)  # #475: between turns only
+        _apply_fresh_request(store, agent, session_state, persist,
+                             _fresh_owner_check(store, agent, wrapper_generation))  # #475
         spec = _session.build_turn(session_state, prompt)
         cli = session_state.cli
         # A failed RESUME turn self-heals to a fresh session before we classify (codex:
@@ -3324,6 +3333,7 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
                        work_heartbeat=None,
                        lifecycle_log=None,
                        lease_lost_exceptions: tuple = (),
+                       wrapper_generation: str | None = None,
                        ) -> Callable[[dict, list], bool]:
     """Build the SYNTHETIC cadence-turn drive for the managed lead-loop controller (WP3).
 
@@ -3519,7 +3529,8 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
     def cadence_drive(snapshot: dict, items: list) -> bool:
         prompt = _prompt.assemble_cadence_prompt(
             snapshot, items, rules=rules, reply_shell=reply_shell)
-        _apply_fresh_request(store, agent, session_state, persist)  # #475: between turns only
+        _apply_fresh_request(store, agent, session_state, persist,
+                             _fresh_owner_check(store, agent, wrapper_generation))  # #475
         spec = _session.build_turn(session_state, prompt)
         cli_name = session_state.cli
         attempted_resume = ((cli_name == "codex" and "resume" in spec.args)

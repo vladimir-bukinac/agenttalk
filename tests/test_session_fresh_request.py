@@ -166,13 +166,13 @@ def test_a_failed_save_keeps_the_request_until_the_reset_is_saved_to_disk(tmp_pa
 
     assert s.read_fresh_request("beta") is not None  # still pending: nothing durable yet
     assert session.load_session(s, "beta", "claude").claude_session_id == OLD_ID
-    reset_id = state.claude_session_id
-    run._apply_fresh_request(s, "beta", state, flaky)  # the same-process retry saves it
-    assert state.claude_session_id == reset_id  # the retry did not reset a second time
+    assert state.claude_session_id == OLD_ID  # nothing runs on a reset that is not saved
+    assert state.fresh_request_id == "" and state.resume_available
+    run._apply_fresh_request(s, "beta", state, flaky)  # the same-process retry applies and saves it
     assert s.read_fresh_request("beta") is None
     reloaded = session.load_session(s, "beta", "claude")
-    assert reloaded.claude_session_id == reset_id != OLD_ID  # a restart would not resume the old one
-    assert reloaded.fresh_request_id == "fr-aaaaaaaaaaaa"
+    assert reloaded.claude_session_id == state.claude_session_id != OLD_ID
+    assert reloaded.fresh_request_id == "fr-aaaaaaaaaaaa"  # a restart would not resume the old one
 
 
 def test_a_restart_after_a_failed_save_still_finds_the_request(tmp_path) -> None:
@@ -374,3 +374,124 @@ def test_the_dashboard_projection_knows_the_new_reset_reason(tmp_path) -> None:
     session.apply_fresh_request(s, "beta", state, _saved(s))
 
     assert s.read_wrapper_runtime("beta")["reset_reason"] == "fresh_requested"
+
+
+# ------------------------------------------------ turn path: the fence and a failed save
+
+
+def _drive_claude(s: Store, state, calls: list, *, generation: str | None, persist=None):
+    def spawn(argv, _stdin):
+        calls.append(list(argv))
+        return _ok_lines()
+
+    return run.make_drive(s, "beta", "claude", state, ["claude"], spawn=spawn, clock=lambda: 0.0,
+                          render=False, persist=persist or _saved(s), wrapper_generation=generation)
+
+
+def _send_one(s: Store) -> None:
+    s.send(sender="lead", recipient="beta", body="work", kind="message", meta={})
+
+
+def test_a_superseded_wrapper_finishing_a_turn_cannot_take_the_request(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    run.claim_wrapper_ownership(s, "beta", "generation-new")  # the replacement owns the agent
+    _request(s)
+    _send_one(s)
+    calls: list = []
+    drive = _drive_claude(s, state, calls, generation="generation-old")
+
+    loop.run_loop(s, "beta", drive, clock=lambda: 0.0, sleep=lambda d: None, max_turns=1)
+
+    assert s.read_fresh_request("beta") is not None  # left for the replacement
+    assert "--resume" in calls[0] and OLD_ID in calls[0]
+
+
+def test_the_active_wrapper_applies_the_request_at_the_start_of_a_turn(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    run.claim_wrapper_ownership(s, "beta", "generation-new")
+    _request(s)
+    _send_one(s)
+    calls: list = []
+    drive = _drive_claude(s, state, calls, generation="generation-new")
+
+    loop.run_loop(s, "beta", drive, clock=lambda: 0.0, sleep=lambda d: None, max_turns=1)
+
+    assert s.read_fresh_request("beta") is None
+    assert "--session-id" in calls[0] and OLD_ID not in calls[0]
+
+
+def test_a_superseded_wrapper_cannot_take_the_request_on_a_cadence_turn(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    run.claim_wrapper_ownership(s, "beta", "generation-new")
+    _request(s)
+    calls: list = []
+    cadence = run.make_cadence_drive(
+        s, "beta", "claude", state, ["claude"], clock=lambda: 0.0, render=False, persist=_saved(s),
+        spawn=lambda argv, _stdin: calls.append(list(argv)) or _ok_lines(),
+        wrapper_generation="generation-old")
+
+    cadence({"agent": "beta"}, [{"type": "dead_letter", "key": "dl:1"}])
+
+    assert s.read_fresh_request("beta") is not None
+    assert "--resume" in calls[0] and OLD_ID in calls[0]
+
+
+def test_a_failed_save_at_turn_start_runs_the_turn_on_the_saved_conversation(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    _request(s)
+    _send_one(s)
+    calls: list = []
+    failures = {"left": 1}
+
+    def flaky(st) -> None:
+        if failures["left"]:
+            failures["left"] -= 1
+            raise OSError("disk full")
+        session.save_session(s, "beta", st)
+
+    drive = _drive_claude(s, state, calls, generation=None, persist=flaky)
+
+    loop.run_loop(s, "beta", drive, clock=lambda: 0.0, sleep=lambda d: None, max_turns=1)
+
+    # the reset could not be saved, so the turn did NOT run on an unsaved fresh conversation
+    assert "--resume" in calls[0] and OLD_ID in calls[0]
+    assert s.read_fresh_request("beta") is not None  # still pending: a later process applies it once
+    on_disk = session.load_session(s, "beta", "claude")
+    assert on_disk.claude_session_id == OLD_ID and on_disk.fresh_request_id == ""
+
+
+# ------------------------------------------------------------ parked head records
+
+
+def test_a_parked_head_does_not_make_a_request_wait(tmp_path) -> None:
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    _send_one(s)
+    polls = {"with_head": 0}
+
+    def parked_drive(_rec):
+        return loop.DriveOutcome(ok=False, failure_class=loop.CLASS_CONFIG_BLOCKED,
+                                 summary="gateway is held")
+
+    def hook() -> None:
+        if recv_api.next_record(s, "beta") is not None:
+            polls["with_head"] += 1
+            if polls["with_head"] == 2:  # the request is written while the head is parked
+                _request(s)
+        run._apply_fresh_request(s, "beta", state, _saved(s))
+
+    loop.run_loop(s, "beta", parked_drive, clock=lambda: 0.0, sleep=lambda d: None, max_polls=8,
+                  k_poison=0, k_escalate=20, on_idle_poll=hook)
+
+    assert recv_api.next_record(s, "beta") is not None  # the head is still parked, never consumed
+    assert s.read_fresh_request("beta") is None  # yet the request was applied
+    assert state.claude_session_id != OLD_ID

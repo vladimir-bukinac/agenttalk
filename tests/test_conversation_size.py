@@ -275,3 +275,42 @@ def test_a_malformed_cli_entry_is_skipped_and_the_rest_still_apply(tmp_path: Pat
 def test_a_malformed_health_cli_does_not_crash_the_resolver(bad) -> None:
     assert cs.resolve_cli("codex-x", {}, {"cli": bad}, None) == "codex"
     assert cs.resolve_cli("zzz", {"agent_cli": {"zzz": bad}}, {}, None) is None
+
+
+# ---------------------------------------- a reading from before a fresh start (#475)
+
+
+def test_a_reading_from_before_the_fresh_start_is_ignored() -> None:
+    snap = {"context_tokens": 160_000, "observed_at": "2026-10-13T10:00:00Z"}
+    before = cs.conversation_size("claude", snap, 12, fresh_at="2026-10-13T11:00:00Z")
+    assert before["basis"] == "turns_total" and before["value"] == 12
+    after = cs.conversation_size("claude", snap, 12, fresh_at="2026-10-13T09:00:00Z")
+    assert after["basis"] == "context_tokens" and after["value"] == 160_000
+    assert cs.conversation_size("claude", snap, 12)["basis"] == "context_tokens"  # no fresh start
+    undated = cs.conversation_size("claude", {"context_tokens": 5}, 12, fresh_at="2026-10-13T09:00:00Z")
+    assert undated["basis"] == "turns_total"  # a reading with no readable time cannot be shown as current
+
+
+def _applied_fresh(store: Store, agent: str, at: str, turns: int = 400) -> None:
+    (store.state_dir / f"{agent}.wrapper-session.json").write_text(json.dumps({
+        "turns": turns, "fresh_request_id": "fr-aaaaaaaaaaaa", "fresh_request_outcome": "applied",
+        "fresh_request_at": at, "fresh_request_turn": turns}), encoding="utf-8")
+
+
+def test_status_and_dashboard_drop_the_old_conversations_reading_after_a_fresh_start(
+        tmp_path: Path, capsys) -> None:
+    s = _store(tmp_path)
+    s.write_capacity("claude-a", _reading("claude_statusline", 170_000))  # observed now
+    _applied_fresh(s, "claude-a", "2999-01-01T00:00:00Z")  # the fresh start is later than the reading
+
+    assert cli.main(["--root", str(tmp_path), "status", "--json"]) == 0
+    row = next(a for a in json.loads(capsys.readouterr().out)["agents"] if a["name"] == "claude-a")
+    assert row["conversation_size"]["basis"] == "turns_total"
+    entry = next(a for a in web.build_state([web.RootDescriptor(store=s, label="r")])["roots"][0]["agents"]
+                 if a["name"] == "claude-a")
+    assert entry["conversation_size"]["basis"] == "turns_total"
+
+    _applied_fresh(s, "claude-a", "2000-01-01T00:00:00Z")  # the reading is newer than the fresh start
+    assert cli.main(["--root", str(tmp_path), "status", "--json"]) == 0
+    row = next(a for a in json.loads(capsys.readouterr().out)["agents"] if a["name"] == "claude-a")
+    assert row["conversation_size"]["basis"] == "context_tokens"

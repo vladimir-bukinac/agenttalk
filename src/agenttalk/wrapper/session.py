@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import shutil
 import uuid
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timezone
 
 from .. import capacity
@@ -194,7 +194,8 @@ def apply_fresh_request(store, agent: str, state: SessionState, persist=None) ->
         return None
     reason = " ".join(str(marker.get("reason") or "").split())[:200]
     requested_by = str(marker.get("requested_by") or "")[:64]
-    if state.fresh_request_id != rid:  # not reset in memory yet (a retry keeps the first reset)
+    before = replace(state)  # what to put back if the reset cannot be saved
+    if state.fresh_request_id != rid:  # not reset in memory yet
         if state.cli in ("claude", "codex"):
             _backup_session_record(store, agent, rid)  # raises: no backup, no reset
             if state.cli == "claude":
@@ -213,7 +214,14 @@ def apply_fresh_request(store, agent: str, state: SessionState, persist=None) ->
         state.fresh_request_by = requested_by
         state.fresh_request_turn = state.turns
     if persist is not None:
-        persist(state)  # raises on failure: the marker stays and the next call retries
+        try:
+            persist(state)
+        except BaseException:
+            # Nothing may run on a reset that is not on disk: put the session back, keep the
+            # marker, and let the caller see the failure. The next call applies it afresh.
+            for f in fields(SessionState):
+                setattr(state, f.name, getattr(before, f.name))
+            raise
     store.clear_fresh_request(agent, rid)
     return {"request_id": rid, "outcome": state.fresh_request_outcome, "reason": reason,
             "requested_by": requested_by}

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import math
+from datetime import datetime
 from pathlib import Path
 
 BASIS_TOKENS = "context_tokens"
@@ -114,15 +115,32 @@ def resolve_cli(agent: str, settings: dict | None, health: dict | None,
     return next((c for c in candidates if _is_cli(c)), None)
 
 
+def _read_before(observed_at: object, fresh_at: object) -> bool:
+    """True when a context reading was observed before the agent's last fresh start (or its
+    time cannot be read): it describes the previous conversation. False without a fresh start."""
+    if not isinstance(fresh_at, str) or not fresh_at:
+        return False
+    try:
+        start = datetime.fromisoformat(fresh_at.replace("Z", "+00:00"))
+        seen = datetime.fromisoformat(str(observed_at).replace("Z", "+00:00"))
+        return seen < start
+    except (TypeError, ValueError):
+        return True
+
+
 def conversation_size(cli: str | None, capacity_snap: dict | None, turns: object,
-                      settings: dict | None = None) -> dict | None:
+                      settings: dict | None = None, fresh_at: str | None = None) -> dict | None:
     """``{basis, value, limit, warn, cli}`` or None when neither figure is known.
 
     ``capacity_snap`` is a ``capacity.current_view`` result (so an expired reading shows
-    ``context_tokens`` as None and falls back to turns). ``turns`` may be None/absent."""
+    ``context_tokens`` as None and falls back to turns). ``turns`` may be None/absent.
+    ``fresh_at`` is when the agent last started fresh (``fresh_request_at``): a token reading
+    observed before it belongs to the old conversation and is ignored."""
     settings = settings or {}
     cli_key = cli if cli in DEFAULT_WARN_TOKENS else _FALLBACK_CLI
     tokens = _measurement(capacity_snap.get("context_tokens")) if isinstance(capacity_snap, dict) else None
+    if tokens is not None and _read_before(capacity_snap.get("observed_at"), fresh_at):
+        tokens = None
     if tokens is not None:
         limit = _limit(settings.get(_CONFIG_TOKENS_KEY), DEFAULT_WARN_TOKENS, cli_key)
         return {"basis": BASIS_TOKENS, "value": tokens, "limit": limit,

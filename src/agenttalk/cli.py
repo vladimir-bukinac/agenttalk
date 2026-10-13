@@ -841,17 +841,18 @@ def _gather_status(store: Store) -> dict:
             row["capacity"] = {"state": snap["confidence"],
                                "observed_at": snap.get("observed_at"),
                                "reason": snap.get("reason"), "account": snap.get("account")}
+        fresh_status = store.read_fresh_status(a)
         size = convsize.conversation_size(
             convsize.resolve_cli(a, conv_settings, health, capacities.get(a)),
             capmod.current_view(capacities[a], now=now) if a in capacities else None,
             _known_turns(store.read_wrapper_runtime(a)),
-            conv_settings)  # additive (#475): absent unless a size is known
+            conv_settings,
+            fresh_at=((fresh_status or {}).get("applied") or {}).get("at"))  # additive (#475)
         if size is not None:
             row["conversation_size"] = size
         journal_label = _turn_journal_label(store, a, health)
         if journal_label is not None:  # additive: absent unless this project uses the journal
             row["turn_events"] = journal_label
-        fresh_status = store.read_fresh_status(a)
         if fresh_status is not None:  # additive (#475): absent unless a start-fresh request exists
             row["fresh_request"] = fresh_status
         sup_row = supervisor_rows.get(a)
@@ -12684,7 +12685,8 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
             runtime_writer=runtime_writer,
             work_heartbeat=work_heartbeat,
             lifecycle_log=lifecycle_log,
-            lease_lost_exceptions=(_LeadLoopLeaseLost,))
+            lease_lost_exceptions=(_LeadLoopLeaseLost,),
+            wrapper_generation=wrapper_generation)
         cadence_health = _cadence_health_notifier(store, agent)
 
         def _cadence() -> "wloop.CadenceResult":

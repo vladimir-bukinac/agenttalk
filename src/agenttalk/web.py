@@ -1757,10 +1757,12 @@ def _agent_entries(store: Store, cfg: dict, msgs: list[Message],
         if cap is not None:
             e["capacity"] = cap
         _rt_for_size = store.read_wrapper_runtime(a) or {}
+        fresh = store.read_fresh_status(a)
         size = _conversation_size.conversation_size(
             _conversation_size.resolve_cli(a, conv_settings, health, snap),
             _capacity.current_view(snap, now=now) if isinstance(snap, dict) else None,
-            _rt_for_size.get("turns") if _rt_for_size.get("turns_known") else None, conv_settings)
+            _rt_for_size.get("turns") if _rt_for_size.get("turns_known") else None, conv_settings,
+            fresh_at=((fresh or {}).get("applied") or {}).get("at"))
         if size is not None:  # absent-not-null (#475): only when a size is known
             e["conversation_size"] = size
         # wrapped/restartable arm on EITHER the health mode OR the managed
@@ -1799,7 +1801,6 @@ def _agent_entries(store: Store, cfg: dict, msgs: list[Message],
             e["runtime"] = runtime
         # #475: a start-fresh request, pending or applied. Closed fields only: no free text
         # (the reason stays in `status`), no session identities.
-        fresh = store.read_fresh_status(a)
         if fresh is not None:
             kind = "pending" if "pending" in fresh else "applied"
             detail = fresh[kind]

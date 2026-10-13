@@ -1544,9 +1544,12 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         now = clock()
         if marker_head is not None and (record is None or record.get("id") != marker_head):
             _drop_marker()                  # the parked head was consumed or is gone
+        if on_idle_poll is not None:
+            # Between turns by construction (no turn runs on this thread), on EVERY poll:
+            # a head that is parked (usage limit, sticky config failure, blocked gate) must
+            # not make a request wait for hours.
+            on_idle_poll()
         if record is None:
-            if on_idle_poll is not None:
-                on_idle_poll()      # between turns by construction: no turn runs on this thread
             # IDLE. First consult the proactive CADENCE hook (WP3): it gates due-ness
             # itself and, when due, drives at most ONE synthetic sweep turn - WITHOUT
             # ever advancing the cursor / recording an attempt / dead-lettering (this
