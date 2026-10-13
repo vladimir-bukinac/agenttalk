@@ -314,3 +314,20 @@ def test_status_and_dashboard_drop_the_old_conversations_reading_after_a_fresh_s
     assert cli.main(["--root", str(tmp_path), "status", "--json"]) == 0
     row = next(a for a in json.loads(capsys.readouterr().out)["agents"] if a["name"] == "claude-a")
     assert row["conversation_size"]["basis"] == "context_tokens"
+
+
+def test_a_pending_request_does_not_bring_the_old_reading_back(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    s.write_capacity("claude-a", _reading("claude_statusline", 170_000))  # observed now
+    _applied_fresh(s, "claude-a", "2999-01-01T00:00:00Z")  # a fresh start applied after the reading
+    # a second request is pending (its clearing is also what a retry looks like)
+    assert s.write_fresh_request("claude-a", {"agent": "claude-a", "request_id": "fr-bbbbbbbbbbbb",
+                                              "reason": "again", "requested_by": "claude-a",
+                                              "at": "2999-01-02T00:00:00Z"})
+    assert "pending" in s.read_fresh_status("claude-a")  # the display now shows pending, not applied
+
+    row = next(r for r in cli._gather_status(s)["agents"] if r["name"] == "claude-a")
+    entry = next(e for e in web._agent_entries(s, s.load_config(), [], None) if e["name"] == "claude-a")
+
+    assert row["conversation_size"]["basis"] == "turns_total"
+    assert entry["conversation_size"]["basis"] == "turns_total"

@@ -495,3 +495,64 @@ def test_a_parked_head_does_not_make_a_request_wait(tmp_path) -> None:
     assert recv_api.next_record(s, "beta") is not None  # the head is still parked, never consumed
     assert s.read_fresh_request("beta") is None  # yet the request was applied
     assert state.claude_session_id != OLD_ID
+
+
+# -------------------------------------------- a save that landed but then raised (#483)
+
+
+@pytest.mark.parametrize("cli_name", ["claude", "codex"])
+def test_a_save_that_landed_before_fsync_raised_is_adopted_not_undone(tmp_path, monkeypatch, cli_name) -> None:
+    from agenttalk import _atomic
+
+    s = _store(tmp_path)
+    state = (_claude_state() if cli_name == "claude"
+             else session.SessionState(cli="codex", codex_thread_id="thread-old", turns=7,
+                                       resume_available=True))
+    session.save_session(s, "beta", state)
+    _request(s)
+    real_fsync = _atomic.os.fsync
+    calls = {"n": 0, "failed": False}
+
+    def fsync_fails_once(fd):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            calls["failed"] = True
+            raise OSError("fsync failed after the data was written and flushed")
+        return real_fsync(fd)
+
+    monkeypatch.setattr(_atomic, "_sandbox_direct_write", True)  # the direct final-path write
+    monkeypatch.setattr(_atomic.os, "fsync", fsync_fails_once)
+
+    outcome = session.apply_fresh_request(s, "beta", state, lambda st: session.save_session(s, "beta", st))
+
+    assert calls["failed"]  # the injected failure really happened, after the write
+    assert outcome["outcome"] == "applied" and s.read_fresh_request("beta") is None
+    on_disk = session.load_session(s, "beta", cli_name)
+    assert on_disk.fresh_request_id == "fr-aaaaaaaaaaaa"
+    # memory and disk agree on the reset, so the next turn starts fresh and saving it keeps the reset
+    if cli_name == "claude":
+        assert state.claude_session_id == on_disk.claude_session_id != OLD_ID
+    else:
+        assert state.codex_thread_id is None and on_disk.codex_thread_id is None
+    spec = session.build_turn(state, "hello")
+    assert "--resume" not in spec.args and "resume" not in spec.args
+    session.save_session(s, "beta", state)
+    assert session.load_session(s, "beta", cli_name).fresh_request_id == "fr-aaaaaaaaaaaa"
+
+
+def test_a_failed_save_that_did_not_land_still_restores_the_old_session(tmp_path, monkeypatch) -> None:
+    from agenttalk import _atomic
+
+    s = _store(tmp_path)
+    state = _claude_state()
+    session.save_session(s, "beta", state)
+    _request(s)
+
+    def write_fails(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(_atomic, "write_text", write_fails)
+    with pytest.raises(OSError):
+        session.apply_fresh_request(s, "beta", state, lambda st: session.save_session(s, "beta", st))
+
+    assert state.claude_session_id == OLD_ID and s.read_fresh_request("beta") is not None

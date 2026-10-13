@@ -847,7 +847,7 @@ def _gather_status(store: Store) -> dict:
             capmod.current_view(capacities[a], now=now) if a in capacities else None,
             _known_turns(store.read_wrapper_runtime(a)),
             conv_settings,
-            fresh_at=((fresh_status or {}).get("applied") or {}).get("at"))  # additive (#475)
+            fresh_at=store.read_last_fresh_reset_at(a))  # additive (#475)
         if size is not None:
             row["conversation_size"] = size
         journal_label = _turn_journal_label(store, a, health)

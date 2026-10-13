@@ -217,11 +217,17 @@ def apply_fresh_request(store, agent: str, state: SessionState, persist=None) ->
         try:
             persist(state)
         except BaseException:
-            # Nothing may run on a reset that is not on disk: put the session back, keep the
-            # marker, and let the caller see the failure. The next call applies it afresh.
-            for f in fields(SessionState):
-                setattr(state, f.name, getattr(before, f.name))
-            raise
+            if _saved_request_id(store, agent) == rid:
+                # The write landed and only a later step (fsync) failed: the record on disk
+                # IS the reset. Memory already holds it, so adopt it (never resume the old
+                # conversation over it) and finish by clearing the marker.
+                pass
+            else:
+                # Nothing may run on a reset that is not on disk: put the session back, keep
+                # the marker, and let the caller see the failure. The next call applies it afresh.
+                for f in fields(SessionState):
+                    setattr(state, f.name, getattr(before, f.name))
+                raise
     store.clear_fresh_request(agent, rid)
     return {"request_id": rid, "outcome": state.fresh_request_outcome, "reason": reason,
             "requested_by": requested_by}

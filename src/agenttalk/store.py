@@ -7011,6 +7011,20 @@ class Store:
             except OSError:
                 return False
 
+    def read_last_fresh_reset_at(self, agent: str) -> str | None:
+        """When the agent's last APPLIED start-fresh reset was recorded, or None. Read from the
+        session record alone, so a pending marker (a second request, or a clearing that is
+        being retried) never hides it. Never raises."""
+        try:
+            data = json.loads((self.state_dir / f"{agent}.wrapper-session.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or data.get("fresh_request_outcome") != "applied":
+            return None
+        at = data.get("fresh_request_at")
+        return at if isinstance(at, str) and at else None
+
     def read_fresh_status(self, agent: str) -> dict | None:
         """What ``status`` shows for a start-fresh request: ``{"pending": {...}}`` or the
         last outcome the wrapper recorded, ``{"applied": {...}}``; ``None`` when neither.
