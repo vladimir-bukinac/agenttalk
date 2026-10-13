@@ -74,6 +74,12 @@ def _limit(raw: object, defaults: dict[str, int], cli: str) -> int:
     return value if value is not None else defaults.get(cli, defaults[_FALLBACK_CLI])
 
 
+def _is_cli(value: object) -> bool:
+    """True only for the two known tool names. A list or object is simply not one (it must
+    not be used as a dict key: that raises TypeError)."""
+    return isinstance(value, str) and value in DEFAULT_WARN_TOKENS
+
+
 def load_settings(store_dir: Path) -> dict:
     """The two warning settings and the per-agent ``cli`` names from ``supervisor.json``.
 
@@ -90,7 +96,7 @@ def load_settings(store_dir: Path) -> dict:
     agents = data.get("agents")
     if isinstance(agents, dict):
         out["agent_cli"] = {name: entry["cli"] for name, entry in agents.items()
-                            if isinstance(entry, dict) and entry.get("cli") in DEFAULT_WARN_TOKENS}
+                            if isinstance(entry, dict) and _is_cli(entry.get("cli"))}
     return out
 
 
@@ -105,7 +111,7 @@ def resolve_cli(agent: str, settings: dict | None, health: dict | None,
     if isinstance(src, str):
         candidates.append(src.split("_", 1)[0])
     candidates.append(agent.split("-", 1)[0])
-    return next((c for c in candidates if c in DEFAULT_WARN_TOKENS), None)
+    return next((c for c in candidates if _is_cli(c)), None)
 
 
 def conversation_size(cli: str | None, capacity_snap: dict | None, turns: object,

@@ -247,3 +247,31 @@ def test_the_dashboard_script_uses_the_tested_helper() -> None:
     assert "conversationSizeText(a.conversation_size)" in js
     assert ".tc-cap-warn" in (Path(__file__).resolve().parents[1] / "src" / "agenttalk"
                               / "web_static" / "console.css").read_text(encoding="utf-8")
+
+
+# ------------------------------------------- a malformed setting must not break anything
+
+@pytest.mark.parametrize("bad", [["codex"], {"x": 1}, 7, None, True])
+def test_a_malformed_cli_entry_is_skipped_and_the_rest_still_apply(tmp_path: Path, bad) -> None:
+    s = _store(tmp_path)
+    s.write_capacity("codex-b", _reading("codex_rollout", 200_000))
+    _session(s, "claude-a", 500)
+    (s.dir / "supervisor.json").write_text(json.dumps({
+        "conversation_warn_turns": 400,
+        "agents": {"unrelated": {"cli": bad}, "codex-b": {"cli": "codex"}, "claude-a": {"cli": bad}},
+    }), encoding="utf-8")
+    assert cs.load_settings(s.dir)["agent_cli"] == {"codex-b": "codex"}
+    rows = {r["name"]: r for r in cli._gather_status(s)["agents"]}
+    entries = {e["name"]: e for e in web._agent_entries(s, s.load_config(), [], None)}
+    for got in (rows, entries):
+        assert got["codex-b"]["conversation_size"]["limit"] == 190_000
+        assert got["codex-b"]["conversation_size"]["warn"] is True
+        # the valid warning setting still applies; the bad entry falls back to the name prefix
+        assert got["claude-a"]["conversation_size"] == {
+            "basis": "turns_total", "value": 500, "limit": 400, "warn": True, "cli": "claude"}
+
+
+@pytest.mark.parametrize("bad", [["codex"], {"x": 1}])
+def test_a_malformed_health_cli_does_not_crash_the_resolver(bad) -> None:
+    assert cs.resolve_cli("codex-x", {}, {"cli": bad}, None) == "codex"
+    assert cs.resolve_cli("zzz", {"agent_cli": {"zzz": bad}}, {}, None) is None
