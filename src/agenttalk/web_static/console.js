@@ -4289,6 +4289,14 @@
       if (rt.reset_reason) rtText += ' · ' + rt.reset_reason;
     }
     rows.push(supRow('Runtime', rtText, 'tc-chip'));
+    // #475: a start-fresh request, shown only while one exists or has been handled
+    // (so agents without one keep the three rows above). Closed wire fields, textContent.
+    var fr = a && a.fresh_request;
+    if (fr && fr.state) {
+      var frText = fr.state;
+      if (fr.requested_by) frText += ' · by ' + fr.requested_by;
+      rows.push(supRow('Fresh start', frText, 'tc-chip'));
+    }
     return rows;
   }
 

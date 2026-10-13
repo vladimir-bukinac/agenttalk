@@ -227,26 +227,35 @@ def test_the_requester_is_kept_in_the_applied_record_and_status(tmp_path) -> Non
     assert s.read_fresh_status("beta")["applied"]["requested_by"] == "lead"
 
 
-def test_a_superseded_wrapper_leaves_the_request_for_its_replacement(tmp_path) -> None:
+def test_a_late_status_write_by_a_superseded_wrapper_cannot_take_the_request(tmp_path) -> None:
     s = _store(tmp_path)
     state = _claude_state()
-    _request(s)
-    old = wr.WrapperRuntimeWriter(s.state_dir, "beta", "generation-old", wrapper_pid=1111, wrapper_start="a")
-    old.idle()
+    old_runtime = wr.WrapperRuntimeWriter(s.state_dir, "beta", "generation-old", wrapper_pid=1111,
+                                          wrapper_start="a")
+    run.claim_wrapper_ownership(s, "beta", "generation-old")
+    old_runtime.starting(message_id="20261013-000000-000000-aaaa")  # the old wrapper's turn is running
     assert run.is_active_wrapper(s, "beta", "generation-old")
-    new = wr.WrapperRuntimeWriter(s.state_dir, "beta", "generation-new", wrapper_pid=2222, wrapper_start="b")
-    new.idle()  # the replacement takes over the runtime record
+
+    # the replacement starts: it claims the agent and publishes its own idle runtime
+    new_runtime = wr.WrapperRuntimeWriter(s.state_dir, "beta", "generation-new", wrapper_pid=2222,
+                                          wrapper_start="b")
+    run.claim_wrapper_ownership(s, "beta", "generation-new")
+    new_runtime.idle()
+
+    old_runtime.idle()  # the old turn finishes and writes late: the runtime record names it again
+    assert wr.read_runtime(s.state_dir, "beta")["record"]["wrapper_generation"] == "generation-old"
+    _request(s)  # a request arrives
 
     old_owner = lambda: run.is_active_wrapper(s, "beta", "generation-old")  # noqa: E731
     run._apply_fresh_request(s, "beta", state, _saved(s), owner_check=old_owner)
-
     assert s.read_fresh_request("beta") is not None and state.claude_session_id == OLD_ID
+
     new_owner = lambda: run.is_active_wrapper(s, "beta", "generation-new")  # noqa: E731
     run._apply_fresh_request(s, "beta", state, _saved(s), owner_check=new_owner)
     assert s.read_fresh_request("beta") is None and state.claude_session_id != OLD_ID
 
 
-def test_no_runtime_record_yet_is_not_the_active_wrapper(tmp_path) -> None:
+def test_no_ownership_claim_yet_is_not_the_active_wrapper(tmp_path) -> None:
     assert not run.is_active_wrapper(_store(tmp_path), "beta", "generation-new")
 
 

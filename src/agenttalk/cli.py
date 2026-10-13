@@ -12551,6 +12551,10 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
         on_transition=lifecycle_log.runtime_transition,
     )
 
+    # #475: claim the agent once, at start. Only the wrapper that claimed last may consume a
+    # start-fresh request, and no status writer touches this claim.
+    wrapper_run.claim_wrapper_ownership(store, agent, wrapper_generation)
+
     def _apply_fresh_when_idle() -> None:
         # #475: on every idle poll (no turn runs), so the outcome shows in `status` without
         # waiting for a message. Only the ACTIVE wrapper consumes the request: one that a

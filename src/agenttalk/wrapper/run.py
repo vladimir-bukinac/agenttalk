@@ -2524,17 +2524,33 @@ def _apply_fresh_request(store, agent: str, session_state, persist, owner_check=
         return
 
 
-def is_active_wrapper(store, agent: str, wrapper_generation: str) -> bool:
-    """True while the runtime record names this wrapper generation as the current one.
+def _owner_path(store, agent: str):
+    return store.state_dir / f"{agent}.wrapper-owner"
 
-    A wrapper that a replacement has superseded sees another generation (or none yet)
-    and must not consume the agent's start-fresh request.
+
+def claim_wrapper_ownership(store, agent: str, wrapper_generation: str) -> None:
+    """Record this wrapper generation as the agent's owner, ONCE, when the wrapper starts.
+
+    A wrapper that starts later takes over by writing its own generation. Nothing else
+    writes this file (not the runtime or health writers, which a superseded wrapper keeps
+    calling until it exits), so a late write by a superseded wrapper cannot take ownership back.
     """
-    from agenttalk import wrapper_runtime as _wr
+    from agenttalk import _atomic
 
-    rec = _wr.read_runtime(store.state_dir, agent)
-    record = rec.get("record") if rec.get("status") == _wr.STATUS_VALID else None
-    return bool(isinstance(record, dict) and record.get("wrapper_generation") == wrapper_generation)
+    _atomic.write_text(_owner_path(store, agent), wrapper_generation)
+
+
+def is_active_wrapper(store, agent: str, wrapper_generation: str) -> bool:
+    """True while this wrapper generation is the one that claimed the agent last.
+
+    A wrapper that a replacement has superseded sees the replacement's generation (or no
+    claim yet) and must not consume the agent's start-fresh request.
+    """
+    try:
+        claimed = _owner_path(store, agent).read_text(encoding="utf-8").strip()
+    except OSError:
+        return False
+    return bool(claimed) and claimed == wrapper_generation
 
 
 def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str], *,
