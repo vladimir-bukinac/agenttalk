@@ -2,8 +2,10 @@
 
 **In plain words:** agenttalk lets you run a team of AI coding assistants, such as
 Claude Code and Codex, on one project. They hand work to each other and review it
-across AI companies; on Windows, an optional supervisor keeps them running; and a
-shared, curated memory brings lessons from past work back into later turns. The
+across AI companies; on any operating system, a start script and the lead's timers
+keep them working while you are away, though a seat that crashes stays down until it is
+started again (on Windows the optional supervisor can do that); and a shared, curated
+memory brings lessons from past work back into later turns. The
 messages and the team's shared records are files in your project, so the messaging
 needs no server and no account; a few things, such as logs and signing keys, live in
 per-user folders on the same computer. This front page is for anyone deciding whether
@@ -21,7 +23,9 @@ guide and reference follow further down.
    guess](#what-it-does-well-that-you-might-not-guess), [what stays on your
    machine](#what-stays-on-your-machine) and [what agenttalk is
    not](#what-agenttalk-is-not)
-2. [Quick setup](#2-quick-setup)
+2. [Quick setup](#2-quick-setup), including [running a team
+   unattended](#run-a-team-unattended) and [leads that report to a
+   lead](#leads-that-report-to-a-lead)
 3. [Use cases](#3-use-cases)
 4. [In depth: how a migration works](#4-in-depth-how-a-migration-works)
 5. [Technical reference and FAQ](#5-technical-reference-and-faq)
@@ -41,16 +45,22 @@ What you need:
   you type commands): Claude Code, Codex, or both. Each needs working access to its AI
   model: often a subscription, or an account the AI company bills by how much you use
   it; either way, that cost is yours. agenttalk does not supply AI models or pay for
-  them. Its optional managed gateway can give a wrapped Claude Code seat (one that
+  them. Give the agents a subscription of their own and keep separate ones for people,
+  and give each agenttalk team its own pay-per-use key. A Claude seat's usage reading
+  covers the whole account, so a person's own use on the same subscription eats into
+  the team's allowance and nobody can tell who used what; a key used by one team only
+  lets you compare the provider's bill with that team's own spending record. Its
+  optional managed gateway can give a wrapped Claude Code seat (one that
   `agenttalk wrap` runs, turn by turn) one other model (Qwen, through OVH AI Endpoints,
   with your own key). To have work reviewed across AI
   companies, you need assistants from two companies.
 - **Python 3.10 or newer**, to install agenttalk.
 - **Windows, Linux or macOS.** The project's tests run on all three, with Python 3.10
   to 3.13. Some optional parts are tied to one system:
-  - The bundled supervisor, the monitor that keeps an unattended team running, needs
-    Windows and PowerShell 7. A monitor that restarts seats on Linux and macOS is not
-    built yet; [#356](https://github.com/zoolok17/agenttalk/issues/356) tracks it.
+  - The bundled supervisor, an optional watcher that restarts a seat after a crash or
+    an outage, needs Windows and PowerShell 7. You do not need it to run a team
+    unattended. A monitor that restarts seats on Linux and macOS is not built yet;
+    [#356](https://github.com/zoolok17/agenttalk/issues/356) tracks it.
   - The optional managed gateway runs as a background service through Windows Task
     Scheduler, or through a systemd user service on other systems. macOS has no
     systemd, so that service cannot be installed on a Mac.
@@ -67,9 +77,9 @@ What you need:
 few commands to install agenttalk and set up the project, set one setting (an
 environment variable) in each terminal, and start the assistants; [Get
 started](#get-started) shows them. If that is new to you, ask someone who has done it
-before. An unattended team, with the supervisor and a lead woken on a schedule, is a
-bigger job for someone technical; [the supervisor tutorial](docs/supervisor-tutorial.md)
-walks through it.
+before. An unattended team, started by a script and kept going by the lead's timers,
+is a bigger job for someone technical; [Run a team unattended](#run-a-team-unattended)
+shows what it takes.
 
 ## A normal day with a small team
 
@@ -171,10 +181,11 @@ Then, in your project's top folder:
 5. Ask the lead to hand a piece of work to the other assistant for review.
 
 This two-terminal pair is the simplest first try. For a bigger team you still start
-only one assistant, the lead. The lead can add the teammates to the roster and write
-the supervisor's settings. On Windows with PowerShell 7 you can ask the lead to start the supervisor too (or start it yourself), and the supervisor, not the lead, starts the teammates in its
-settings in the background, by default with no window of their own. [Start one agent
-as a self-guiding lead](#start-one-agent-as-a-self-guiding-lead) explains how.
+only one assistant, the lead. The lead adds the teammates to the roster and writes a
+start script that runs each of them in the background, and you run that script once.
+[Start one agent as a self-guiding lead](#start-one-agent-as-a-self-guiding-lead) and
+[Run a team unattended](#run-a-team-unattended) explain how; the supervisor is an
+optional extra on Windows.
 
 [Quick setup](#2-quick-setup) explains each step. After that, [Use
 cases](#3-use-cases) shows the shapes a team grows into,
@@ -328,14 +339,16 @@ in the technical reference.
   are away also needs:
   - the wrapper (`agenttalk wrap --loop`), which hands each assistant its messages one
     turn at a time and tries to keep its session;
-  - the supervisor, which starts the assistants and restarts them after a crash or an
-    outage. It runs on Windows only today; [#356](https://github.com/zoolok17/agenttalk/issues/356) tracks a monitor for Linux and
-    macOS, and [the supervisor tutorial](docs/supervisor-tutorial.md) explains how to
-    start it;
-  - something that wakes the lead on a schedule, such as the managed lead loop's regular
-    check-in (`agenttalk wrap --loop --lead-loop --for <agent>`, once that identity is
-    registered with `agenttalk managed-lead-loop set <agent>`; [the agent
-    manual](docs/AGENT-MANUAL.md#5-the-v0420-split-identity-lead-loop) explains both steps) or a scheduled job of your own.
+  - a start script that starts each wrapped assistant once, in the background. agenttalk
+    does not ship one; [Run a team unattended](#run-a-team-unattended) shows what it
+    contains;
+  - the lead's timers, which remind it to check on the team and to write a handover
+    note. They live in the lead's own interactive session;
+  - optionally, the supervisor, an independent watcher that restarts an assistant
+    after a crash or an outage. It runs on Windows only today;
+    [#356](https://github.com/zoolok17/agenttalk/issues/356) tracks a monitor for Linux
+    and macOS, and [the supervisor tutorial](docs/supervisor-tutorial.md) explains how
+    to start it.
 
 ### What agenttalk is not
 
@@ -509,16 +522,20 @@ coordinates the rest of the team on your behalf.
 
 **You do not have to set up each teammate by hand.** You start one
 assistant, the lead, and ask it to set up the team. It adds each teammate
-to the roster (`agenttalk roster add`) and writes the supervisor's settings
-(`agenttalk supervise --init` writes a starting `.agenttalk/supervisor.json` whose placeholders the lead renames to the roster names and fills in for each teammate, then checks with `agenttalk supervise --bootstrap-check` before launching; every error must be fixed except `supervisor_agent_not_fresh`, which clears once the supervisor runs),
-with each teammate run through the wrapper.
-
-You then start the supervisor, or ask the lead to start it for you, with the PowerShell command in [the supervisor tutorial](docs/supervisor-tutorial.md). The lead may start the supervisor when you ask, but it never starts a teammate's assistant itself. The supervisor starts the teammates in its settings in the
-background, by default with no window of their own, and you watch the team in the read-only dashboard,
-`agenttalk dashboard`, which runs only on your own computer. This works on
-Windows with PowerShell 7 today; on Linux and macOS you start each teammate
-yourself ([#356](https://github.com/zoolok17/agenttalk/issues/356)). The two-terminal pair in the next section stays the
-simplest first try.
+to the roster (`agenttalk roster add`) and writes a start script that runs
+each teammate through the wrapper, in the background. You run the script
+once; [Run a team unattended](#run-a-team-unattended) shows what it contains.
+You watch the team in the read-only dashboard, `agenttalk dashboard`, which
+runs only on your own computer. This works on Windows, Linux and macOS. On
+Windows with PowerShell 7 you can add the supervisor as well, an optional
+watcher that restarts a seat after a crash: the lead writes its settings
+(`agenttalk supervise --init` writes a starting `.agenttalk/supervisor.json`
+whose placeholders the lead renames to the roster names and fills in for each
+teammate, then checks with `agenttalk supervise --bootstrap-check`) and you
+start it with the PowerShell command in
+[the supervisor tutorial](docs/supervisor-tutorial.md). The supervisor then
+starts the seats in its settings itself, so the start script is not needed for
+them. The two-terminal pair in the next section stays the simplest first try.
 
 ### Add a second agent of another vendor
 
@@ -582,6 +599,113 @@ agenttalk sync --for <agent>
 `sync` summarizes roster identity, open request threads, unread
 traffic, and deterministic next-action hints — it's the fastest way
 for an agent (or you) to answer "what's outstanding right now."
+
+### Run a team unattended
+
+**In plain words.** A team keeps working while nobody watches when two things are in
+place. Every assistant runs in the background through agenttalk's wrapper, started once
+by a small script, and the lead keeps two timers that remind it to look after the team.
+This works on Windows, Linux and macOS. The supervisor is an optional extra on top.
+
+What this does not do: a seat that crashes, and every seat after the computer restarts,
+stays stopped until a person starts it again with the start script (on Windows, the
+optional supervisor can do that instead). And if the lead's own session closes, its
+timers go with it, so nobody is reminded to look after the team.
+
+**Before you leave a team alone, know one limit: agenttalk does not prove who sent a
+message.** A seat accepts a work order when the message names the lead or the
+operator-facing seat as its sender, and any seat on the team can write such a message.
+Message signing (`agenttalk hmac-init`) shows when a message file was changed by someone
+who cannot read the key, but every seat run by the same user can read that key, so
+signing cannot tell one seat from another. Put only assistants you trust on one team,
+and give each one only the permissions its work needs.
+
+1. **A start script.** agenttalk ships none; the lead writes one for your team, and a
+   person runs it once. It starts the teammates only: the lead already runs in your own
+   session (step 2), and a second process under the lead's name would read the same
+   mailbox. For each teammate it starts the wrapper in the background, from that seat's
+   own folder:
+
+   ```
+   agenttalk --root <project> wrap --for <seat> --cli <claude-or-codex> --loop -- <command that starts the assistant>
+   ```
+
+   For example, on Windows (PowerShell, no window):
+
+   ```powershell
+   Start-Process -FilePath agenttalk -WorkingDirectory '<seat-folder>' -WindowStyle Hidden `
+     -ArgumentList '--root','"<project>"','wrap','--for','claude-dev','--cli','claude','--loop','--','claude','--permission-mode','<mode>'
+   ```
+
+   Keep the double quotes inside the single quotes around the project path:
+   `Start-Process` joins the list with spaces, so a path with a space in it would
+   otherwise break apart.
+
+   On Linux or macOS (bash):
+
+   ```bash
+   (cd '<seat-folder>' && nohup agenttalk --root '<project>' wrap --for codex-rev --cli codex --loop -- codex -a never -s workspace-write -c "sandbox_workspace_write.writable_roots=['<project>/.agenttalk']" > /dev/null 2>&1 &)
+   ```
+
+   This line sends the wrapper's console output nowhere, as the hidden window does on
+   Windows; if you keep it in a file instead, rotate that file, because it grows without
+   limit. A Codex seat whose bus lies outside its own folder must be allowed to write the
+   bus's `.agenttalk` folder, as `writable_roots` does here; otherwise it receives its
+   work but cannot reply. Add any other folder the seat must write to the same list.
+
+   An unattended assistant cannot answer a permission question, so choose what each
+   one may do on purpose: the words after `--` are the assistant's own command and its
+   permission settings. Start each seat once: two wrappers for one seat read the same
+   mailbox. On Linux and macOS a wrapped Codex seat also needs
+   `"reply_shell": "bash"` (see [what you need](#who-it-is-for-and-what-you-need-first)).
+2. **The lead's timers.** The lead runs as an ordinary interactive session that you
+   start and leave open, not through the wrapper. That session holds its timers: a
+   wrapped seat starts its assistant afresh for each message (a Claude Code seat as a
+   one-shot `claude -p` that exits again), so a timer set there never fires. The lead
+   keeps two timers: a check-in, for example every 30 minutes, and a handover note, for
+   example every two hours. In Claude Code these are scheduled prompts (`/loop 30m` and
+   `/loop 2h` with the routine as the prompt; the lead's instructions describe both).
+   They live only in that session and lapse after about seven days, so renew them before
+   then and after every restart of the lead: ask the lead to list its scheduled tasks
+   and re-create the ones that are missing, replacing a timer rather than adding a
+   second one. A Codex lead has
+   no built-in timer; an operating-system scheduled task that reminds it does the same
+   job. agenttalk does not keep these reminders itself yet.
+3. **Stopping a seat.** Stop a seat between turns with
+   `agenttalk release --from <relay> --to <seat> --relay-human -m "<the decision>"`,
+   where the relay is the operator-facing seat (or the lead when the team has none),
+   never by killing its process. If the supervisor runs, put its kill switch in place
+   first, or it starts the seat again
+   ([Operations guide](docs/OPERATIONS.md#pause-stop-and-recover)).
+4. **Optionally, the supervisor.** It watches from outside and restarts a seat after a
+   crash or an outage, within a restart budget. Its scheduled task also starts when you
+   log on, so after the computer restarts it brings back the seats in its settings once
+   someone logs on. Without it, a crashed seat stays down until someone runs its line of
+   the start script again. It needs Windows and PowerShell 7 today
+   ([#356](https://github.com/zoolok17/agenttalk/issues/356) tracks Linux and macOS);
+   [the supervisor tutorial](docs/supervisor-tutorial.md) explains how to start it.
+
+### Leads that report to a lead
+
+One team, meaning one project's `.agenttalk/` store, has one lead: making a second
+seat the lead removes the role from the first. It also has at most one
+**operator-facing** seat, set with `agenttalk roster set-operator-facing <seat>`: the
+seat that speaks for the person. Escalations go to it, it may hand out work orders, and
+when a team has one, only it can relay a person's decision to stand a seat down. A
+chain of leads is built from that rule:
+
+- **Inside one team,** a separate liaison seat can talk to the person while the lead
+  runs the work ([the split-identity setup](docs/AGENT-MANUAL.md#5-the-v0420-split-identity-lead-loop)).
+- **Across teams,** each team has its own project and its own lead. For a team whose
+  lead reports to another lead, add the upper lead to that team's roster and make it
+  that team's operator-facing seat. Escalations from that team then go to the upper
+  lead, and only the upper lead can relay a stand-down there. The upper lead works in
+  that team's store with `agenttalk --root <that team's folder> ...` on the same
+  computer, and its own check-in must cover that team: nothing in its own team's store
+  tells it what happens in the other one.
+- **Only the top of the chain talks to the person.** A person's decision reaches a lower
+  team through the leads above it; a message that only claims to carry one is data, not
+  a decision.
 
 ### What's next
 
@@ -709,9 +833,11 @@ at the start of a session, ordinary handoffs for day-to-day changes,
 and `agenttalk gate` / `agenttalk close` around anything release-shaped.
 For a project that needs to keep working unattended — overnight,
 across an outage, or simply longer than you want to watch a terminal —
-add the supervisor and the `agenttalk wrap` progress wrapper so agents
-try to resume their session context instead of starting over; when a
-session cannot be resumed, the wrapper starts a fresh one. The reply
+run every seat through the `agenttalk wrap` progress wrapper, started by
+a start script, so agents try to resume their session context instead of
+starting over; when a session cannot be resumed, the wrapper starts a
+fresh one. [Run a team unattended](#run-a-team-unattended) shows the
+script, the lead's timers and the optional supervisor. The reply
 command the wrapper prints for each message carries `--from <seat>`, and the
 wrapper sets the seat's `AGENTTALK_SELF` for the assistant it starts, so every
 other agenttalk command the seat runs uses that name too and a seat's reply
@@ -720,13 +846,9 @@ setting is needed for that since 0.100.0
 ([#354](https://github.com/zoolok17/agenttalk/issues/354), fixed; a completion
 record, so that a finished work order is never run twice or lost, is still open,
 [#178](https://github.com/zoolok17/agenttalk/issues/178)). A team that runs
-while you are away also needs something that wakes the lead on a schedule,
-such as the managed lead loop's regular check-in tick
-(`agenttalk wrap --loop --lead-loop --for <agent>`, once that identity is
-registered with `agenttalk managed-lead-loop set <agent>`; see the
-[agent operating manual](docs/AGENT-MANUAL.md#5-the-v0420-split-identity-lead-loop)) or a scheduled job of your own.
-See [docs/supervisor-tutorial.md](docs/supervisor-tutorial.md) for the
-supervisor quick start, and [Technical
+while you are away also needs the lead's timers, which remind it to check on
+the team. See [docs/supervisor-tutorial.md](docs/supervisor-tutorial.md) for
+the optional supervisor, and [Technical
 reference](#5-technical-reference-and-faq) for the assurance-gate
 command tables.
 
