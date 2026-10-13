@@ -268,7 +268,7 @@ These come from the team's own merges and reviews this week. They change how the
 On 2026-10-12 the operator approved this order for the work that comes next. In plain words: switch the maintainers' gateway to the new release, settle the bug that paused the paid gateway, then make "finished" mean something a seat cannot fake, then fix how the README tells people to run a team without anyone watching.
 
 1. **The 0.101.0 switch.** Its step-by-step guide is reviewed and approved.
-2. **#424, the Qwen gateway's LiteLLM stream bug.** It hit a second time on 2026-10-12 and paused all paid gateway work until it was settled by hand.
+2. **#424, the Qwen gateway's LiteLLM stream bug.** It hit a second time on 2026-10-12 and paused all paid gateway work until it was settled by hand. Then #475, step 1 of the item on long conversations added below.
 3. **#178, the completion record, built attempt-bound.** A "done" is tied to one attempt, not to a seat or a ticket (§7.2, item 1).
 4. **A README change.** Present "a start script plus the lead's timers" as the normal way to run a team unattended on any operating system. The supervisor becomes an optional, independent watcher. Add a short section on leads that report to a lead.
 
