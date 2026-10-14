@@ -6955,6 +6955,108 @@ class Store:
             except OSError:
                 return False
 
+    # ------------------------------------------- start-fresh request markers (#475)
+    #
+    # A `state/<agent>.fresh-request` marker asks the agent's OWN wrapper to start the
+    # next turn on a fresh conversation. The wrapper loads its session record once at
+    # start and saves its own copy after turns, so nothing outside edits that record:
+    # the wrapper applies the request itself between turns, then clears the marker BY
+    # request_id. At most one request is pending per agent.
+
+    def _fresh_request_path(self, agent: str):
+        return self.state_dir / f"{agent}.fresh-request"
+
+    def write_fresh_request(self, agent: str, payload: dict) -> bool:
+        """Atomically write the marker; False (nothing written) when one is already pending."""
+        with self._config_lock():
+            if self._fresh_request_path(agent).exists():
+                return False
+            _atomic_write_text(self._fresh_request_path(agent),
+                               json.dumps(payload, ensure_ascii=False))
+            return True
+
+    def read_fresh_request(self, agent: str) -> dict | None:
+        """A valid marker, ``None`` when absent, or the closed unusable fact (same shape as
+        the restart-request one: an unreadable marker is never mistaken for absence)."""
+        try:
+            raw = self._fresh_request_path(agent).read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError):
+            return unusable_restart_request_marker()
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return unusable_restart_request_marker()
+        from agenttalk import ephemeral as _eph
+        if not isinstance(data, dict) or not _eph.is_safe_id(data.get("request_id")):
+            return unusable_restart_request_marker()
+        return data
+
+    def clear_fresh_request(self, agent: str, request_id: str | None = None) -> bool:
+        """Clear the marker only when its request_id matches (a newer request survives).
+        ``request_id=None`` clears an UNUSABLE marker, which has no id to match."""
+        with self._config_lock():
+            marker = self.read_fresh_request(agent)
+            if marker is None:
+                return False
+            if request_id is None:
+                if not is_unusable_restart_request(marker):
+                    return False
+            elif marker.get("request_id") != request_id:
+                return False
+            try:
+                self._fresh_request_path(agent).unlink()
+                return True
+            except OSError:
+                return False
+
+    def read_last_fresh_reset_at(self, agent: str) -> str | None:
+        """When the agent's last APPLIED start-fresh reset was recorded, or None. Read from the
+        session record alone, so a pending marker (a second request, or a clearing that is
+        being retried) never hides it. Never raises."""
+        try:
+            data = json.loads((self.state_dir / f"{agent}.wrapper-session.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or data.get("fresh_request_outcome") != "applied":
+            return None
+        at = data.get("fresh_request_at")
+        return at if isinstance(at, str) and at else None
+
+    def read_fresh_status(self, agent: str) -> dict | None:
+        """What ``status`` shows for a start-fresh request: ``{"pending": {...}}`` or the
+        last outcome the wrapper recorded, ``{"applied": {...}}``; ``None`` when neither.
+        Allow-listed fields only; never raises."""
+        try:
+            marker = self.read_fresh_request(agent)
+        except Exception:  # noqa: BLE001 - optional context
+            marker = None
+        if isinstance(marker, dict) and not is_unusable_restart_request(marker):
+            return {"pending": {"request_id": marker.get("request_id"),
+                                "at": marker.get("at"),
+                                "reason": str(marker.get("reason") or "")[:200],
+                                "requested_by": str(marker.get("requested_by") or "")[:64]}}
+        if is_unusable_restart_request(marker):
+            return {"pending": {"request_id": None, "at": None, "reason": "unreadable request"}}
+        try:
+            data = json.loads((self.state_dir / f"{agent}.wrapper-session.json")
+                              .read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if not isinstance(data, dict) or not data.get("fresh_request_id"):
+            return None
+        turn = data.get("fresh_request_turn")
+        return {"applied": {
+            "request_id": data.get("fresh_request_id"),
+            "outcome": str(data.get("fresh_request_outcome") or "")[:40],
+            "at": data.get("fresh_request_at"),
+            "reason": str(data.get("fresh_request_reason") or "")[:200],
+            "requested_by": str(data.get("fresh_request_by") or "")[:64],
+            "turns_before": turn if isinstance(turn, int) and not isinstance(turn, bool) else None,
+        }}
+
     # ------------------------------------------- launch-request markers
     #
     # Evidence-only ephemeral reviewers are queued by data-only markers under
@@ -7836,6 +7938,7 @@ class Store:
         "runtime_config_changed",   # v0.75.0 model/effort drift forced a fresh session
         "resume_unavailable",       # codex/claude resume gave up (2 session failures)
         "session_full",             # a session-full reset (forward-compat)
+        "fresh_requested",          # #475: a person or the lead asked for a fresh start
     })
 
     @classmethod
@@ -7878,8 +7981,10 @@ class Store:
         if isinstance(effort, str) and effort.strip():
             out["reasoning_effort"] = effort
         turns = d.get("turns")
-        turns = turns if isinstance(turns, int) and not isinstance(turns, bool) else 0
+        turns_known = isinstance(turns, int) and not isinstance(turns, bool) and turns >= 0
+        turns = turns if turns_known else 0
         out["turns"] = turns
+        out["turns_known"] = turns_known  # False: the record does not say (0 here is not a reading)
         thread_id = d.get("codex_thread_id")
         session_id = d.get("claude_session_id")
         has_id = bool(

@@ -49,6 +49,7 @@ from agenttalk.store import (
     validate_rescind,
 )
 from agenttalk import capacity as capmod
+from agenttalk import conversation_size as convsize
 from agenttalk import checkpoint as checkpoint_mod
 from agenttalk import deadman as deadman_mod
 from agenttalk import ephemeral as eph
@@ -734,6 +735,11 @@ def _rate_limit_reason_flag(health: object) -> str | None:
     return None
 
 
+def _known_turns(runtime: dict | None) -> int | None:
+    """The wrapper's turn counter, or None when the record does not say (never a made-up 0)."""
+    return runtime.get("turns") if isinstance(runtime, dict) and runtime.get("turns_known") else None
+
+
 def _gather_status(store: Store) -> dict:
     """Build the structured status payload shared by both output modes."""
     cfg = store.load_config()
@@ -768,6 +774,7 @@ def _gather_status(store: Store) -> dict:
     supervisor_rows, supervisor_warnings = _status_supervisor_summaries(
         store, now.timestamp(), sup_cfg)
     agents = []
+    conv_settings = convsize.load_settings(store.dir)
     capacities = store.read_all_capacities()
     for a in cfg.get("agents", []):
         hb = store.read_heartbeat(a)
@@ -834,9 +841,20 @@ def _gather_status(store: Store) -> dict:
             row["capacity"] = {"state": snap["confidence"],
                                "observed_at": snap.get("observed_at"),
                                "reason": snap.get("reason"), "account": snap.get("account")}
+        fresh_status = store.read_fresh_status(a)
+        size = convsize.conversation_size(
+            convsize.resolve_cli(a, conv_settings, health, capacities.get(a)),
+            capmod.current_view(capacities[a], now=now) if a in capacities else None,
+            _known_turns(store.read_wrapper_runtime(a)),
+            conv_settings,
+            fresh_at=store.read_last_fresh_reset_at(a))  # additive (#475)
+        if size is not None:
+            row["conversation_size"] = size
         journal_label = _turn_journal_label(store, a, health)
         if journal_label is not None:  # additive: absent unless this project uses the journal
             row["turn_events"] = journal_label
+        if fresh_status is not None:  # additive (#475): absent unless a start-fresh request exists
+            row["fresh_request"] = fresh_status
         sup_row = supervisor_rows.get(a)
         sup_decision = sup_row.get("decision") if isinstance(sup_row, dict) else None
         park_view = store.usage_limit_park_view(
@@ -1641,6 +1659,12 @@ def cmd_status(args: argparse.Namespace) -> int:
             seen += f' progress="{text}" ({age_str})'
         if isinstance(a.get("turn_events"), str):
             seen += f" turn_events={a['turn_events']}"
+        fresh = a.get("fresh_request")
+        if isinstance(fresh, dict):
+            if "pending" in fresh:
+                seen += " fresh=pending"
+            elif isinstance(fresh.get("applied"), dict):
+                seen += f" fresh={fresh['applied'].get('outcome') or 'recorded'}"
         parked = _usage_limit_park_flag(a.get("usage_limit_park"))
         if parked:
             seen += f" {parked}"
@@ -1653,6 +1677,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             seen += {"observed": " capacity=current",
                      "stale": f" capacity=stale(last reading {_format_age(age or 0)})"
                      }.get(cap["state"], f" capacity=unknown({cap.get('reason') or 'no signal'})")
+        if isinstance(a.get("conversation_size"), dict):
+            seen += " " + convsize.format_size(a["conversation_size"])
         role = f" role={a['role']}" if a.get("role") else ""
         of = " [operator-facing]" if a.get("operator_facing") else ""
         print(f"  {a['name']:<10}{role}{of} cursor={cursor:<32} unread={a['unread']:<3} {seen}")
@@ -11640,6 +11666,47 @@ def cmd_checkpoint_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_session_fresh(args: argparse.Namespace) -> int:
+    """Ask one agent's wrapper to start its next turn on a fresh conversation (#475).
+
+    Writes a request marker only. The wrapper applies it itself between turns (it owns
+    the session record), so this never edits the record and never stops anything.
+    """
+    store = _get_store(args)
+    roster = store.load_config().get("agents") or []
+    agent = args.agent
+    if agent not in roster:
+        sys.stderr.write(f"agenttalk session fresh: {agent!r} is not in the "
+                         f"roster {sorted(roster)}\n")
+        return 2
+    reason = " ".join((args.reason or "").split())
+    if not reason:
+        sys.stderr.write("agenttalk session fresh: --reason is required\n")
+        return 2
+    requested_by = _resolve_self(args.sender, roster=roster)
+    if requested_by != agent and requested_by not in store.protected_agents():
+        sys.stderr.write("agenttalk session fresh: only the agent itself, a lead or the "
+                         "operator-facing agent may request this\n")
+        return 2
+    rid = "fr-" + uuid.uuid4().hex[:12]
+    marker = {
+        "agent": agent,
+        "request_id": rid,
+        "requested_by": requested_by,
+        "reason": reason[:200],
+        "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        "at_epoch": time.time(),
+    }
+    if not store.write_fresh_request(agent, marker):
+        sys.stderr.write(f"agenttalk session fresh: a request for {agent!r} is already "
+                         "pending; the wrapper has not applied it yet (see `agenttalk status`)\n")
+        return 1
+    print(f"session fresh: queued a fresh start for {agent!r} [{rid}]; its wrapper applies it "
+          "between turns (a turn that is running finishes first). The old conversation is "
+          "not resumed afterwards.")
+    return 0
+
+
 def cmd_request_restart(args: argparse.Namespace) -> int:
     """Queue a MANUAL restart of an agent (the supervisor relaunches + clears).
 
@@ -12500,6 +12567,18 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
         wrapper_generation,
         on_transition=lifecycle_log.runtime_transition,
     )
+
+    # #475: claim the agent once, at start. Only the wrapper that claimed last may consume a
+    # start-fresh request, and no status writer touches this claim.
+    wrapper_run.claim_wrapper_ownership(store, agent, wrapper_generation)
+
+    def _apply_fresh_when_idle() -> None:
+        # #475: on every idle poll (no turn runs), so the outcome shows in `status` without
+        # waiting for a message. Only the ACTIVE wrapper consumes the request: one that a
+        # replacement superseded leaves it for the replacement.
+        wrapper_run._apply_fresh_request(
+            store, agent, state, lambda st: wsession.save_session(store, agent, st),
+            owner_check=lambda: wrapper_run.is_active_wrapper(store, agent, wrapper_generation))
     # The optional turn journal: built here (no I/O), started just before the loop.
     journal = None
     if turn_events and one_shot_request_id is None:
@@ -12606,7 +12685,8 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
             runtime_writer=runtime_writer,
             work_heartbeat=work_heartbeat,
             lifecycle_log=lifecycle_log,
-            lease_lost_exceptions=(_LeadLoopLeaseLost,))
+            lease_lost_exceptions=(_LeadLoopLeaseLost,),
+            wrapper_generation=wrapper_generation)
         cadence_health = _cadence_health_notifier(store, agent)
 
         def _cadence() -> "wloop.CadenceResult":
@@ -12766,6 +12846,7 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
             on_health_contention=health_writer.lock_contention,  # #154
             on_contention_persisting=_on_contention_persisting,  # #154
             on_runtime_idle=runtime_writer.idle,
+            on_idle_poll=_apply_fresh_when_idle,
             on_runtime_dead_letter=_on_runtime_dead_letter,
             capacity_refresh=capacity_refresh,
             wrapper_generation=wrapper_generation,
@@ -17050,6 +17131,23 @@ def build_parser() -> argparse.ArgumentParser:
                           "the supervisor relaunches a still-dead agent on a later "
                           "poll under a fresh budget.")
     prr.set_defaults(func=cmd_request_restart)
+
+    psess = sub.add_parser(
+        "session",
+        help="Manage an agent's conversation (start it fresh by request).",
+    )
+    psess_sub = psess.add_subparsers(dest="session_action", required=True)
+    psess_fresh = psess_sub.add_parser(
+        "fresh",
+        help="Ask an agent's wrapper to start its next turn on a fresh conversation. "
+             "Applied between turns; nothing is stopped and no file is edited.",
+    )
+    psess_fresh.add_argument("--for", dest="agent", required=True, help="Agent to start fresh.")
+    psess_fresh.add_argument("--from", dest="sender",
+                             help="Requester (default: $AGENTTALK_SELF; the agent itself, "
+                                  "the lead or the operator-facing agent).")
+    psess_fresh.add_argument("--reason", required=True, help="Why (kept in the audit record).")
+    psess_fresh.set_defaults(func=cmd_session_fresh)
 
     pcg = sub.add_parser(
         "commit-gate",
