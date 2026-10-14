@@ -16,7 +16,8 @@ import shutil
 import textwrap
 from typing import Any
 
-from agenttalk import web
+from agenttalk import supervisor, web
+from agenttalk.wrapper import usage_park
 
 MAX_ATTENTION = 5
 MAX_THREADS = 6
@@ -51,6 +52,26 @@ def gather(store: Any, *, label: str, enable_budget: bool = False) -> dict:
     return data
 
 
+def _attention_total(attention: dict) -> int | None:
+    """The builder's own count of everything needing attention: ``active_count`` (counted before
+    similar items are grouped for display), with ``count`` (the rows shown) only as a fallback."""
+    for key in ("active_count", "count"):
+        value = attention.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
+def _owners(value: object) -> str:
+    """Who owes the next move: one name, or several (a broadcast) joined into a readable list."""
+    names = [_text(v) for v in value if isinstance(v, str) and v] if isinstance(value, list) else []
+    if isinstance(value, str) and value:
+        names = [_text(value)]
+    if not names:
+        return "nobody's"
+    return names[0] + "'s" if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1] + " (each)"
+
+
 def _age(seconds: object) -> str:
     if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or seconds < 0:
         return "unknown age"
@@ -79,19 +100,36 @@ def _plural(n: int, one: str, many: str) -> str:
     return f"{n} {one if n == 1 else many}"
 
 
+def _health_words(health: dict, verdict: object) -> str:
+    """The agent's state in words, ranked the way ``agenttalk status`` and the dashboard rank it.
+
+    The wrapper reports its own health and cannot see its own CLI child die, so an independent
+    supervisor verdict that does not confirm the child healthy is the primary status, and the
+    wrapper's report is only a labelled aside. A stale report that was normalised to "unknown"
+    keeps what it last said, labelled as old, instead of reading as no information."""
+    state = health.get("state")
+    wrapper = _HEALTH_WORDS.get(state) if isinstance(state, str) else None
+    if state == "unknown" and isinstance(health.get("last_known_state"), str):
+        last = _HEALTH_WORDS.get(health["last_known_state"])
+        if last:
+            wrapper = f"no recent report (it last said: {last})"
+    wrapper = wrapper or "status unknown"
+    vstate = verdict.get("state") if isinstance(verdict, dict) else None
+    if isinstance(vstate, str) and not supervisor.cli_child_verdict_is_healthy(vstate):
+        return f"supervisor says {_text(vstate.replace('_', ' ').lower())} (the wrapper itself reports: {wrapper})"
+    if isinstance(vstate, str):
+        return f"{wrapper}, supervisor: {_text(vstate.replace('_', ' ').lower())}"
+    return wrapper
+
+
 def _seat_line(agent: dict) -> str:
     health = agent.get("health") if isinstance(agent.get("health"), dict) else {}
-    state = health.get("state")
-    words = _HEALTH_WORDS.get(state) if isinstance(state, str) else None
-    parts = [words or "status unknown"]
-    if health.get("stale") is True and state != "unknown":
+    parts = [_health_words(health, agent.get("cli_child_verdict"))]
+    if health.get("stale") is True and health.get("state") != "unknown":
         parts.append("(that status is old)")
-    verdict = agent.get("cli_child_verdict")
-    if isinstance(verdict, dict) and isinstance(verdict.get("state"), str):
-        parts.append(f"supervisor: {_text(verdict['state'].replace('_', ' '))}")
-    park = agent.get("usage_limit_park")
-    if isinstance(park, dict) and park.get("present") is True:
-        parts.append("paused on a usage limit")
+    park = usage_park.park_text(agent.get("usage_limit_park"))
+    if park:  # the shared wording of every console (provider wait, usage limit, wrapper not responding)
+        parts.append(_text(park))
     if isinstance(agent.get("last_seen_age_seconds"), (int, float)):
         parts.append(f"seen {_age(agent['last_seen_age_seconds'])} ago")
     cap = agent.get("capacity")
@@ -123,8 +161,9 @@ def render(data: dict, *, width: int = 100) -> str:
         summary.append(_plural(len(agents), "agent", "agents"))
     if threads_ok and isinstance(counts.get("open_threads"), int):
         summary.append(_plural(counts["open_threads"], "open conversation", "open conversations"))
-    if items_ok and isinstance(attention.get("count"), int):
-        summary.append(_plural(attention["count"], "item needing attention", "items needing attention"))
+    needing = _attention_total(attention)
+    if items_ok and needing is not None:
+        summary.append(_plural(needing, "item needing attention", "items needing attention"))
     if isinstance(gates.get("verdict"), str) and not gates.get("errors"):
         summary.append(f"release checks: {_text(gates['verdict'])}")
     if summary:
@@ -154,8 +193,8 @@ def render(data: dict, *, width: int = 100) -> str:
         lines.append("  No open conversations.")
     for th in threads[:MAX_THREADS]:
         subject = _text(th.get("subject") or th.get("request_id") or "(no subject)")
-        owner = _text(th.get("next_owner") or "nobody")
-        lines.append(f"  {subject}: next move is {owner}'s, open {_age(th.get('age_seconds'))}")
+        owner = _owners(th.get("next_owner"))
+        lines.append(f"  {subject}: next move is {owner}, open {_age(th.get('age_seconds'))}")
     if len(threads) > MAX_THREADS:
         lines.append(f"  ... and {len(threads) - MAX_THREADS} more (agenttalk threads)")
 

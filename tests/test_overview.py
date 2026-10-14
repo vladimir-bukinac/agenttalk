@@ -128,7 +128,7 @@ def test_the_screen_translates_builder_values_and_leaves_missing_fields_out() ->
         "gates": {"verdict": "HOLD", "gates": [{"name": "ci", "blocks": True, "reason": "red"}]},
     }
     text = " ".join(overview.render(data, width=400).split())
-    assert "a (lead): working, (that status is old), paused on a usage limit, seen 5 min ago, " \
+    assert "a (lead): working, (that status is old), parked on a usage limit until restarted, seen 5 min ago, " \
            "limit used 40%, conversation getting long" in text
     assert "b: status unknown" in text
     assert "memory used" not in text            # a null percentage is left out, not shown as 0
@@ -231,3 +231,73 @@ def test_a_real_message_subject_cannot_clear_the_screen(tmp_path: Path, capsys) 
            subject="hi\x1b[2J\x1b[Hthere", meta={"request_id": "q-esc"})
     text = _run(tmp_path, capsys)
     assert "\x1b" not in text and "hi" in text and "there" in text
+
+
+# ------------------------------- the same ranking and wording as status and the dashboard
+
+def _seat(**agent) -> str:
+    data = {"state": {"label": "p", "agents": [{"name": "a", **agent}], "threads": []},
+            "attention": {"items": []}, "gates": {}}
+    return " ".join(overview.render(data, width=400).split())
+
+
+def test_an_adverse_supervisor_verdict_comes_first_not_the_wrapper_report() -> None:
+    """The wrapper cannot see its own CLI child die, so it may still say it is working."""
+    text = _seat(health={"state": "working_turn"}, cli_child_verdict={"state": "CLI_CHILD_MISSING"})
+    assert "a: supervisor says cli child missing (the wrapper itself reports: working)" in text
+    assert "a: working," not in text
+
+
+def test_a_confirmed_healthy_verdict_keeps_the_wrapper_state_first() -> None:
+    from agenttalk import supervisor
+    healthy = sorted(supervisor.CLI_CHILD_HEALTHY_STATES)[0]
+    text = _seat(health={"state": "working_turn"}, cli_child_verdict={"state": healthy})
+    assert f"a: working, supervisor: {healthy.replace('_', ' ').lower()}" in text
+
+
+@pytest.mark.parametrize("state", ["WRAPPER_MISSING", "TURN_FAILED", "STUCK_OR_DEAD", "SOMETHING_NEW"])
+def test_every_verdict_other_than_the_healthy_ones_is_primary(state: str) -> None:
+    assert f"supervisor says {state.replace('_', ' ').lower()}" in _seat(
+        health={"state": "idle_waiting"}, cli_child_verdict={"state": state})
+
+
+def test_a_provider_wait_is_not_called_a_usage_limit() -> None:
+    park = {"present": True, "state": "parked", "kind": "overloaded", "next_try_epoch": None}
+    text = _seat(health={"state": "idle_waiting"}, usage_limit_park=park)
+    assert "waiting for an overloaded AI provider" in text and "usage limit" not in text
+    throttled = dict(park, kind="throttled")
+    assert "waiting on a possible usage limit" in _seat(usage_limit_park=throttled)
+
+
+def test_a_stale_park_says_the_wrapper_is_not_responding() -> None:
+    text = _seat(usage_limit_park={"present": True, "state": "stale", "kind": "usage_limit"})
+    assert "parked on a usage limit, wrapper not responding" in text
+    cooldown = {"present": True, "state": "stale", "kind": "overloaded"}
+    assert "wrapper not responding" in _seat(usage_limit_park=cooldown)
+
+
+def test_a_stale_report_normalised_to_unknown_keeps_what_it_last_said() -> None:
+    text = _seat(health={"state": "unknown", "stale": True, "last_known_state": "working_silent"})
+    assert "no recent report (it last said: working (quiet for a while))" in text
+    assert "status unknown" not in text
+    assert "a: status unknown" in _seat(health={"state": "unknown", "stale": True})
+
+
+def test_the_attention_total_uses_the_active_count_not_the_rows_shown() -> None:
+    data = {"state": {"label": "p", "agents": [], "threads": []},
+            "attention": {"items": [{"severity": "low", "title": "x", "age_unknown": True}],
+                          "count": 1, "active_count": 7}, "gates": {}}
+    assert "7 items needing attention" in overview.render(data)
+    data["attention"].pop("active_count")
+    assert "1 item needing attention" in overview.render(data)
+
+
+def test_a_broadcast_with_several_owners_names_them_all() -> None:
+    threads = [{"request_id": "q-1", "subject": "All hands", "next_owner": ["alpha", "beta", "gamma"],
+                "age_seconds": 5}]
+    text = overview.render({"state": {"label": "p", "agents": [], "threads": threads},
+                            "attention": {"items": []}, "gates": {}})
+    assert "next move is alpha, beta and gamma (each)" in text
+    one = overview.render({"state": {"label": "p", "agents": [], "threads": [dict(threads[0], next_owner="solo")]},
+                           "attention": {"items": []}, "gates": {}})
+    assert "next move is solo's" in one
