@@ -285,3 +285,117 @@ def test_a_wrapper_started_while_the_head_is_still_parked_is_not_stood_down_by_t
          on_idle_poll=lambda: polls.__setitem__("n", polls["n"] + 1))
 
     assert polls["n"] == 9                              # still parked and running: the spent release is not read again
+
+
+# ------------------------------------------------------- review round 1 (PR #489): three P2 cases
+
+
+def _seed_parked(tmp_path: Path):
+    """A head that an earlier wrapper already parked (config_blocked), no wrapper running."""
+    s = _store(tmp_path)
+    head = _send(s, "fake work")
+    s.record_attempt_start("beta", {"id": head.id}, attempt_id="a0a0a0a0a0a0", at="2026-10-14T00:00:00Z")
+    s.record_attempt_result("beta", head.id, failure_class=loop.CLASS_CONFIG_BLOCKED, summary="fake park",
+                            at="2026-10-14T00:00:00Z")
+    return s, head
+
+
+def _valid_release(s: Store):
+    return s.send(sender="lead", recipient="beta", body="maintenance", kind="release",
+                  meta={"release_authority": "human", "operator_decision": "true",
+                        "authority_reason": "maintenance"})
+
+
+def _polls(s: Store, max_polls: int = 5, **kw) -> int:
+    polls: list = []
+
+    def forbidden(_rec):
+        raise AssertionError("a turn was started")
+
+    _run(s, forbidden, max_polls=max_polls, on_idle_poll=lambda: polls.append(1), **kw)
+    return len(polls)
+
+
+def test_a_release_is_seen_when_the_admission_gate_would_wait_first(tmp_path) -> None:
+    from agenttalk.wrapper.obligations import DetectionCommitGate, PolicySnapshot
+
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    policy = PolicySnapshot.from_mapping({"schema_version": 1, "agents": {"beta": {"grade": "security"}}}, "beta")
+    gate = DetectionCommitGate(s, "beta", policy, fence="gate-1")
+
+    polls = _polls(s, commit_gate=gate, generation="gate-1")
+
+    assert polls == 1                    # it stood down at once; the gate waits are not reached
+    assert s.stand_down_honoured("beta", rel.id)
+    assert recv_api.next_record(s, "beta")["id"] == head.id
+
+
+def test_a_write_that_landed_before_fsync_raised_still_stands_the_agent_down(tmp_path, monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from agenttalk import _atomic
+    from agenttalk import store as store_mod
+
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    original = store_mod._atomic_write_text
+
+    def fsync_fails(*_a, **_k):
+        raise OSError("injected fsync failure after the final file was written and flushed")
+
+    def partial(path, text, **kw):
+        if path.name.endswith(".stand-down.json"):
+            with patch.object(_atomic, "_sandbox_direct_write", True), patch.object(_atomic.os, "fsync", fsync_fails):
+                return original(path, text, **kw)
+        return original(path, text, **kw)
+
+    monkeypatch.setattr(store_mod, "_atomic_write_text", partial)
+
+    polls = _polls(s)
+
+    assert polls == 1                                    # it left: the record is on disk, so the stand-down is real
+    assert s.stand_down_honoured("beta", rel.id)
+    assert recv_api.next_record(s, "beta")["id"] == head.id
+
+
+def test_a_write_that_really_failed_leaves_nothing_marked_and_the_agent_running(tmp_path, monkeypatch) -> None:
+    from agenttalk import store as store_mod
+
+    s, _head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+
+    original = store_mod._atomic_write_text
+
+    def broken(path, text, **kw):
+        if path.name.endswith(".stand-down.json"):
+            raise OSError("disk full")
+        return original(path, text, **kw)
+
+    monkeypatch.setattr(store_mod, "_atomic_write_text", broken)
+
+    assert _polls(s) == 5                                # fail closed: no stand-down, no false mark
+    assert not s.stand_down_honoured("beta", rel.id)
+
+
+def test_many_waiting_releases_are_all_remembered_not_only_the_latest_twenty(tmp_path) -> None:
+    s, head = _seed_parked(tmp_path)
+    releases = [_valid_release(s) for _ in range(25)]
+
+    counts = [_polls(s) for _ in range(4)]
+
+    assert counts == [1, 5, 5, 5]      # the first run stands down once; no later run is stopped by an old release
+    assert all(s.stand_down_honoured("beta", r.id) for r in releases)
+    assert recv_api.next_record(s, "beta")["id"] == head.id
+
+
+def test_honoured_releases_are_forgotten_only_after_the_agent_has_read_past_them(tmp_path) -> None:
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    _polls(s)
+    assert s.read_stand_down_status("beta")["release_id"] == rel.id
+    s.advance_cursor("beta", rel.id)                       # the head was resolved and the agent read past the release
+    again = _valid_release(s)
+    assert s.record_stand_down_honoured("beta", [again.id])
+    ids = [r["id"] for r in s._read_stand_down("beta")]
+    assert ids == [again.id]                                # the passed release was dropped, the new one is kept

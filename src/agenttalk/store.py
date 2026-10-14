@@ -7018,8 +7018,6 @@ class Store:
     # later wrapper that reaches the release consumes it without standing down again. Single writer (the wrapper
     # of that agent), bounded, never raises on read.
 
-    _STAND_DOWN_KEEP = 20
-
     def _stand_down_path(self, agent: str):
         return self.state_dir / f"{agent}.stand-down.json"
 
@@ -7037,16 +7035,25 @@ class Store:
         return isinstance(release_id, str) and any(r["id"] == release_id for r in self._read_stand_down(agent))
 
     def record_stand_down_honoured(self, agent: str, release_ids: list[str], *, at: str = "") -> bool:
-        """Durably record the releases an agent stood down for. False when it could not be written."""
-        rows = self._read_stand_down(agent)
+        """Durably record the releases an agent stood down for. False when they are not on disk afterwards.
+
+        Every release recorded stays until the agent's cursor has passed it (an honoured release is only
+        relevant while it is unread, and the unread inbox bounds the list), so a release is never forgotten
+        while it can still stop a later wrapper. A write that raised AFTER the data landed (the Windows
+        direct-write fallback can flush the file and then fail on fsync) is judged by what is on disk: if every
+        id is there, it is recorded.
+        """
+        cursor = self.cursor(agent) or ""
+        rows = [r for r in self._read_stand_down(agent) if r["id"] > cursor]
         known = {r["id"] for r in rows}
         rows += [{"id": rid, "at": at} for rid in release_ids if rid not in known]
         try:
             _atomic_write_text(self._stand_down_path(agent),
-                               json.dumps({"honoured": rows[-self._STAND_DOWN_KEEP:]}, ensure_ascii=False))
+                               json.dumps({"honoured": rows}, ensure_ascii=False))
         except OSError:
-            return False
-        return True
+            pass
+        on_disk = {r["id"] for r in self._read_stand_down(agent)}
+        return all(rid in on_disk for rid in release_ids)
 
     def read_stand_down_status(self, agent: str) -> dict | None:
         """The honoured release that is still unread (the agent has stood down behind a held head), or None."""

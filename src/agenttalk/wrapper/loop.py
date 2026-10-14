@@ -1636,6 +1636,13 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             _commit(record)
             continue
 
+        # #488: a release behind a HELD head is looked for here, before the admission gate's early waiting
+        # branches (which `continue` before the park decisions below), before any re-probe and before any drive:
+        # between turns, and no turn is started after the stand-down is accepted.
+        if (_head_is_held(record, store.attempt_record(agent, record.get("id")) or {})
+                and _stand_down_behind_held_head(record)):
+            return turns
+
         legacy_gate_resolution = None
         if commit_gate is not None:
             from .obligations import GateError, ResolverState
@@ -2129,9 +2136,6 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         # attempts_started already counted the crashed attempt toward the K_escalate ceiling.
         store.reconcile_crash_in_progress(agent, head_id, at=now_iso())
         rec = store.attempt_record(agent, head_id) or {}
-        if _head_is_held(record, rec) and _stand_down_behind_held_head(record):
-            # #488: between turns, before any park decision, re-probe or drive: no turn is started after this.
-            return turns
         usage_probe: dict | None = None
         if rec.get("park_state") in usage_park.PARK_STATES and not usage_limit_park:
             # Stopping retries is switched off but this head carries a park: drive it as
