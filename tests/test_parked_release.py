@@ -399,3 +399,182 @@ def test_honoured_releases_are_forgotten_only_after_the_agent_has_read_past_them
     assert s.record_stand_down_honoured("beta", [again.id])
     ids = [r["id"] for r in s._read_stand_down("beta")]
     assert ids == [again.id]                                # the passed release was dropped, the new one is kept
+
+
+# ------------------------------------------------------- review round 2 (PR #489): two P1 and two P2 cases
+
+
+class _LeaseLost(Exception):
+    pass
+
+
+def test_a_controller_that_lost_its_lease_does_not_consume_the_stand_down(tmp_path) -> None:
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+
+    def lost() -> None:
+        raise _LeaseLost("the mailbox lease was taken over")
+
+    with pytest.raises(_LeaseLost):
+        _polls(s, pre_commit=lost)
+
+    assert not s.stand_down_honoured("beta", rel.id)      # the replacement owner still sees the release
+    assert recv_api.next_record(s, "beta")["id"] == head.id
+
+
+def test_the_ownership_check_runs_before_the_stand_down_is_recorded(tmp_path) -> None:
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    seen: list[bool] = []
+
+    def check() -> None:
+        seen.append(s.stand_down_honoured("beta", rel.id))
+
+    assert _polls(s, pre_commit=check) == 1               # it still stands down when it owns the mailbox
+    assert seen == [False]                                # and the check came first
+    assert s.stand_down_honoured("beta", rel.id)
+
+
+def _gateway_held() -> loop.DriveOutcome:
+    return loop.DriveOutcome(ok=False, failure_class=loop.CLASS_GATEWAY_HELD, summary="gateway held (ledger_not_ready)")
+
+
+def test_a_replacement_wrapper_knows_the_head_was_gateway_held_and_starts_no_turn(tmp_path) -> None:
+    s = _store(tmp_path)
+    head = _send(s)
+    _run(s, _Drive(_gateway_held), max_polls=3, generation="gen-a")
+    rel = _release(tmp_path)
+
+    # The first wrapper is gone (restart or crash). The gateway has recovered, so a drive would now succeed and
+    # spend a paid turn: the replacement must stand down for the waiting release instead.
+    recovered = _Drive(lambda: loop.DriveOutcome(ok=True))
+    _run(s, recovered, max_polls=6, generation="gen-b")
+
+    assert recovered.calls == []
+    assert s.stand_down_honoured("beta", rel)
+    assert recv_api.next_record(s, "beta")["id"] == head.id
+
+
+def test_the_remembered_gateway_hold_is_forgotten_when_the_head_is_gone(tmp_path) -> None:
+    s = _store(tmp_path)
+    head = _send(s)
+    _run(s, _Drive(_gateway_held), max_polls=3, generation="gen-a")
+    assert s.read_gateway_held("beta") == head.id
+
+    recovered = _Drive(lambda: loop.DriveOutcome(ok=True))
+    _run(s, recovered, max_polls=4, generation="gen-b")   # no release: the head is driven, consumed, then idle
+
+    assert recovered.calls == [head.id]
+    assert s.read_gateway_held("beta") is None
+
+
+def test_a_read_back_that_fails_after_a_write_that_returned_still_stands_the_agent_down(tmp_path, monkeypatch) -> None:
+    from agenttalk import store as store_mod
+
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    original_write = store_mod._atomic_write_text
+    original_read = Store._read_stand_down
+    state = {"written": False}
+
+    def write(path, text, **kw):
+        result = original_write(path, text, **kw)
+        if path.name.endswith(".stand-down.json"):
+            state["written"] = True
+        return result
+
+    def read(self, agent, **kw):
+        if state["written"]:
+            return []                                      # a transient read error looks like an empty file
+        return original_read(self, agent, **kw)
+
+    monkeypatch.setattr(store_mod, "_atomic_write_text", write)
+    monkeypatch.setattr(Store, "_read_stand_down", read)
+
+    assert _polls(s) == 1                                  # the write returned: it is recorded, the agent leaves
+
+    state["written"] = False
+    assert s.stand_down_honoured("beta", rel.id)
+    assert recv_api.next_record(s, "beta")["id"] == head.id
+
+
+def test_a_raised_write_is_checked_again_when_the_first_read_back_fails(tmp_path, monkeypatch) -> None:
+    from agenttalk import store as store_mod
+
+    s, head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    original_write = store_mod._atomic_write_text
+    original_read = Store._read_stand_down
+    state = {"reads": 0}
+
+    def write_then_raise(path, text, **kw):
+        original_write(path, text, **kw)
+        if path.name.endswith(".stand-down.json"):
+            raise OSError("raised after the data landed")
+
+    def flaky_read(self, agent, *, strict=False):
+        if strict and state["reads"] == 0:
+            state["reads"] += 1
+            raise OSError("transient read error")
+        return original_read(self, agent, strict=strict)
+
+    monkeypatch.setattr(store_mod, "_atomic_write_text", write_then_raise)
+    monkeypatch.setattr(Store, "_read_stand_down", flaky_read)
+
+    assert _polls(s) == 1                                  # the second read back sees the row: recorded
+    monkeypatch.undo()
+    assert s.stand_down_honoured("beta", rel.id)
+
+
+def test_a_raised_write_that_can_never_be_read_back_leaves_nothing_marked(tmp_path, monkeypatch) -> None:
+    from agenttalk import store as store_mod
+
+    s, _head = _seed_parked(tmp_path)
+    rel = _valid_release(s)
+    original_write = store_mod._atomic_write_text
+    original_read = Store._read_stand_down
+    calls = {"writes": 0}
+
+    def write(path, text, **kw):
+        original_write(path, text, **kw)
+        if path.name.endswith(".stand-down.json"):
+            calls["writes"] += 1
+            raise OSError("raised after the data landed")      # every write, the row-taking-back one included
+
+    def read(self, agent, *, strict=False):
+        if strict:
+            raise OSError("the file cannot be read")
+        return original_read(self, agent, strict=strict)
+
+    monkeypatch.setattr(store_mod, "_atomic_write_text", write)
+    monkeypatch.setattr(Store, "_read_stand_down", read)
+
+    assert _polls(s) == 5                                  # cannot tell: the agent keeps running
+    monkeypatch.undo()
+    assert not s.stand_down_honoured("beta", rel.id)       # and the row was taken back, so no later skip
+
+
+def test_the_honoured_file_is_read_a_fixed_number_of_times_however_many_releases_wait(tmp_path, monkeypatch) -> None:
+    original_read = Store._read_stand_down
+
+    def reads_for(n: int) -> int:
+        s, _head = _seed_parked(tmp_path / f"n{n}")
+        for _ in range(n):
+            _valid_release(s)
+        counter = {"n": 0}
+
+        def counting(self, agent, **kw):
+            counter["n"] += 1
+            return original_read(self, agent, **kw)
+
+        monkeypatch.setattr(Store, "_read_stand_down", counting)
+        try:
+            _polls(s, max_polls=1)
+        finally:
+            monkeypatch.setattr(Store, "_read_stand_down", original_read)
+        return counter["n"]
+
+    few, many = reads_for(2), reads_for(20)
+
+    assert many == few                                     # one read per scan, not one per waiting release
+    assert many <= 3
