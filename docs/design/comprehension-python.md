@@ -101,7 +101,7 @@ The readiness tables are merged when the module is loaded, and a reason code wit
 `adapters/java.py` is not edited. A thin converter turns its result into `FileClaims` and back. The builders change to take `dict[str, FileClaims]` plus the rules registry, and the Java-only parts of the builders move into the Java rules object as they are. Two checks must hold before any Python code is added:
 
 - converting Java results to the shared form and back gives exactly what the reader produced, for every Java source the comprehension tests use;
-- on every existing Java fixture, and on one real Java repository, the published artifacts have the same canonical content digest as on master, and the existing comprehension tests (about 1,368) pass unchanged.
+- on every existing Java fixture, and on one real Java repository, the published artifacts have the same canonical content digest as on master, and the existing comprehension tests pass unchanged: 1,518 tests in 22 files at master `233b496a`, counted with `python -m pytest --collect-only -q tests/*comprehension*.py`.
 
 This interface is also what `docs/COMPREHENSION-LIMITATIONS.md` calls "the adapter interface": its plan to replace the regex Java reader with tree-sitter needs the same thing.
 
@@ -129,9 +129,9 @@ The reader works on one file at a time, inside the existing worker. It never imp
 
 **Import roots.** A dotted module name depends on which folder Python starts from. The reader works out the candidates in this order:
 1. the package folders that `setup.py`, `setup.cfg` or `pyproject.toml` declare;
-2. the parent of the top-most folder in each unbroken chain of `__init__.py` files.
+2. the parent of the top-most folder in each unbroken chain of `__init__.py` files. A chain stops at the scan root: an `__init__.py` in the scanned folder itself never counts, so an import root is never above the scanned folder.
 
-For Satchmo, both give `satchmo/apps`: its `setup.py` declares that folder, and `satchmo/apps` itself has no `__init__.py`. An import that still matches nothing is tried as a suffix of an in-scan path. If that matches, the edge is marked `ambiguous`; it is never presented as resolved.
+For Satchmo, both give `satchmo/apps`: its `setup.py` declares that folder, and `satchmo/apps` itself has no `__init__.py`. Satchmo's source package also has a stray `__init__.py` at its top; without the stop, the chain from `satchmo/__init__.py` would run past the scanned folder. An import that still matches nothing is tried as a suffix of an in-scan path. If that matches, the edge is marked `ambiguous`; it is never presented as resolved.
 
 **External targets.** A top-level name in `sys.stdlib_module_names` (Python 3.10 and later; 297 names on 3.14) is the standard library. Python 2's own standard-library names (`urllib2`, `cPickle`, `StringIO` and others) are not on that list, so the reader carries a short fixed list of them. Anything else outside the scan is external, under its top-level package name. Mapping a package name to the distribution that provides it is a named limit.
 
@@ -174,18 +174,27 @@ For Satchmo, both give `satchmo/apps`: its `setup.py` declares that folder, and 
   | `raise X, message` | 20 | 7 |
   | `<>` | 6 | 5 |
   | the `L` suffix on numbers | 2 | 1 |
-  | a tuple parameter in a lambda | 1 | 1 |
+  | a tuple parameter in a lambda (no repair: step 4) | 1 | 1 |
 
   The same count finds none of them in Shuup's 1,638 files.
 - **The files that fail matter.** On Python 3.14 they include a `models.py`, three view modules and seven of Satchmo's ten management commands.
-- **"It parses" is not a test for Python 3.** Python 3.14 accepts `except X, e:` (PEP 758), but reads it as "catch X or e" with no variable. 17 Satchmo files fail on 3.10 and parse on 3.14 for this reason alone. So the same file reads differently depending on the Python that runs the scan.
+- **"It parses" is not a test for Python 3.** Python 3.14 accepts `except X, e:` (PEP 758), but reads it as "catch X or e" with no variable. 17 Satchmo files fail on 3.10 and parse on 3.14, 15 of them for this reason alone. The other two also contain the Python 2 statement `print >>sys.stderr, '...'`, which every Python 3 version parses without complaint as a different expression (a shift inside a tuple). So the same file can read differently depending on the Python that runs the scan, and a file can parse on every Python 3 and still be Python 2.
 
 ### The approach
 
-1. **Decide the dialect from evidence, not from whether the parse succeeds.**
-   - **For the project:** the classifiers and `python_requires` in its packaging files; a Django pin that allows only versions below 2.0 (Django 1.11 is the last release that runs on Python 2); `from __future__` imports.
-   - **For each file:** a token-level scan for the constructs in the table above, plus backticks, `exec` statements, old octal numbers such as `0777`, and `ur''` strings.
-   - A print statement, `<>` or a backtick marks a file as Python 2 on its own. `except X, e:` on its own is ambiguous, because Python 3.14 code may legitimately write `except A, B:`, so it follows the project's dialect.
+1. **Decide the dialect from evidence, not from whether the parse succeeds.** Two kinds of marker count as evidence:
+   - **Python 2 only**, found in the token stream: print statements (including `print >>f, x`), `<>`, backticks, `exec` statements, `raise X, message`, the `L` suffix, old octal numbers such as `0777`, and `ur''` strings. No Python 3 accepts any of them with that meaning.
+   - **Python 3 only**, found in the parse tree: f-strings, annotations, keyword-only and positional-only parameters, `async` and `await`, `nonlocal`, `yield from`, `:=` and `match`. No Python 2 accepts any of them.
+
+   `except X, e:` is in neither list: Python 2 reads it as "catch X, call it e", Python 3.14 as "catch X or e". It always takes the project's dialect, which is decided by the first of these rules that applies:
+   1. **Packaging:** `python_requires`, or Python-version classifiers, in `setup.py`, `setup.cfg` or `pyproject.toml`.
+   2. **One kind of marker:** if the files carry markers of only one kind, that is the dialect.
+   3. **Both kinds:** the project is mixed. A file with markers follows its own; any other file follows the kind found in more files; the run records a `dialect_mixed` problem.
+   4. **No markers at all:** `except X, e:` is read as Python 2, with a `dialect_assumed` problem on each such file. Code written for the Python 3.14 form almost always carries Python 3 markers too, so a codebase with none is far more likely old Python 2. Imports in such a project are resolved both ways, and one that resolves only as a Python 2 sibling import is marked `ambiguous`.
+
+   A Django version pin is not used: Django 1.11 runs on both Python 2 and 3. `from __future__` lines do not choose the dialect either; `absolute_import` only changes how imports resolve (below).
+
+   **Measured:** Satchmo has no packaging evidence: its classifiers name no Python version, it has no `python_requires`, and no file has a `from __future__` line. Rule 2 decides it: 33 files carry Python 2 markers and none carries a Python 3 marker, so it is Python 2, and its 15 files whose only sign of Python 2 is `except X, e:` are read as Python 2. Shuup is decided by rule 1 (`python_requires=">=3.6"`), and its files agree: 96 carry Python 3 markers and none carries a Python 2 marker.
 2. **Read Python 3 files with `ast`.** The reader is `python-ast`.
 3. **Repair, then parse, for Python 2 files.** A fixed list of token-level rewrites runs first, each keeping its text on its original lines, so every line number in a claim still points at the right line:
    - print statements become calls;
@@ -198,13 +207,17 @@ For Satchmo, both give `satchmo/apps`: its `setup.py` declares that folder, and 
    - backticks become `repr(...)`;
    - `exec code in names` becomes a call.
 
-   Then `ast` parses the result. The reader is `python-ast-repaired`, and the file gets a problem record naming each kind of repair applied, so the change is visible.
-4. **Outline from tokens when a file still fails.** One Satchmo file uses a lambda with a tuple parameter; newer syntax than the running Python also lands here. The reader takes what tokens alone can show: imports, class and function names with their nesting, and line numbers. The reader is `python-tokens`, and readiness reads the file as partly understood (section 6).
+   There is no repair for a tuple parameter (`lambda (k, v): ...`, or `def f(a, (b, c)):`). Undoing one needs new unpacking lines inside the body, which would move code to other lines, so such a file goes to step 4.
+
+   Then `ast` parses the result. The reader is `python-ast-repaired`, and the file gets a problem record naming each kind of repair applied, so the change is visible. A Python 2 file with nothing to repair is read as `python-ast`; its dialect still decides how its imports resolve.
+4. **Outline from tokens when a file still fails.** One Satchmo file uses a lambda with a tuple parameter (`satchmo/apps/product/tests.py`, line 199); newer syntax than the running Python also lands here. The reader takes what tokens alone can show: imports, class and function names with their nesting, and line numbers. The reader is `python-tokens`, and readiness reads the file as partly understood (section 6).
 5. **Unreadable.** If even tokenising fails, the file gets an `unreadable` problem and degrades the run. On both practice codebases this does not happen.
+
+**Source encodings.** The reader decodes a file the way Python does: a UTF-8 byte-order mark, or a coding declaration in the first two lines (PEP 263), and otherwise UTF-8. The standard library's `tokenize.detect_encoding` applies exactly this rule, and `ast.parse` follows it when given bytes. A Python 2 file without a declaration had to be ASCII, which UTF-8 reads unchanged. A file that names an unknown encoding, or whose bytes do not decode in the encoding found, is not read at all. It gets the reason code the Java reader already uses for this, `encoding_undecodable`, which degrades the run, and readiness treats it as a whole-file gap, as for Java. **Measured:** Satchmo has 34 files that declare UTF-8 and 458 that rely on the default; Shuup has 1,201 and 437. Neither has a byte-order mark, a file that fails to decode, or a file with non-ASCII bytes and no declaration.
 
 **Python 2 import meaning.** In a Python 2 file inside a package, `import models` first means the sibling module `models`, unless the file has `from __future__ import absolute_import`. Satchmo has 97 such import lines and no `absolute_import`. The Python resolver therefore tries the sibling first in a Python 2 file, and records which rule resolved each edge.
 
-**Which Python ran the scan becomes part of the record.** Even after the dialect rule, `ast` is the grammar of the Python that runs the worker: Python 3.10 cannot read syntax added later. DESIGN-55 already lets a producer record a "grammar/indexer version", so the Python reader records the interpreter's minor version there. Scans on 3.10 and 3.14 may then differ, and the record says why. The spike checks that on these two codebases they do not.
+**Which Python ran the scan becomes part of the record.** Even after the dialect rule, `ast` is the grammar of the Python that runs the worker: Python 3.10 cannot read syntax added later. DESIGN-55 already lets a producer record a "grammar/indexer version", so the Python reader records the interpreter's minor version there. Scans on 3.10 and 3.14 may then differ, and the record says why. The spike checks that on these two codebases they differ only in that field.
 
 **Rejected:**
 - a vendored copy of lib2to3, which we would maintain, and for code it does not need;
@@ -220,6 +233,7 @@ For Satchmo, both give `satchmo/apps`: its `setup.py` declares that folder, and 
 
 **The worker** (`worker.py`):
 - **A real registry.** The `.java`-only entry becomes the rules registry: `.py` goes to the Python reader, and Python's packaging files are recognised by name.
+- **Encodings:** files are decoded as Python decodes them, and an undecodable file gets `encoding_undecodable` (section 5).
 - **`requirements*.txt` gets read.** Today it counts as harmless text, so nothing is recorded about it at all; the Python rules read it.
 - **The new wire format** (`FileClaims`, schema version 2).
 - **Warnings stay quiet.** The worker's standard output carries its JSON result, so parser warnings must never reach it. Parsing Shuup on 3.14 prints `SyntaxWarning`s for invalid escape sequences; the reader turns warnings off around each parse.
@@ -265,8 +279,8 @@ Django templates (`.html` and Jinja files) are not read by either language. A `{
 
 | # | Question | Pass mark |
 |---|---|---|
-| S1 | Can every file be read? | Satchmo: at least 97% of `.py` files read fully (`python-ast` or `python-ast-repaired`) on both 3.10 and 3.14, and none unreadable. Shuup: 100%. The claims for each codebase are identical on 3.10 and 3.14 |
-| S2 | Do imports resolve? | At least 90% of imports that point inside the scan are resolved. A hand check of 20 random edges per codebase finds no wrong resolution. Satchmo's implicit relative imports resolve to the sibling |
+| S1 | Can every file be read? | Satchmo: at least 97% of `.py` files read fully (`python-ast` or `python-ast-repaired`) on both 3.10 and 3.14, and none unreadable. Shuup: 100%. The claims for each codebase are identical on 3.10 and 3.14, except the field that records the interpreter's version |
+| S2 | Do imports resolve? | Which imports point inside the scan is decided before the spike runs, without the resolver: an import whose first name is one of the project's own top-level packages (Satchmo: `satchmo` and the packages under `satchmo/apps` that its `setup.py` declares; Shuup: `shuup`), a relative import, or a Python 2 import of a name that exists as a sibling file or package folder. At least 90% of those resolve to a unit in the scan. A hand check of 20 random edges per codebase finds no wrong resolution. Satchmo's implicit relative imports resolve to the sibling. Every import the resolver places inside the scan that this list puts outside it is listed with the reason |
 | S3 | Are routes found? | For five URL modules per codebase, the local patterns found equal a hand count. The report gives composed versus local-only routes, with the reason for each local-only chain |
 | S4 | Does Java fit without loss? | Converting to `FileClaims` and back gives exactly the original, for every Java source the comprehension tests use |
 | S5 | What does it cost? | Worker time and artifact sizes for both codebases, on 3.10 and 3.14 |
@@ -275,6 +289,8 @@ Django templates (`.html` and Jinja files) are not read by either language. A `{
 **What gets attached:** a short report on the PR with the counts, the samples (as file and line pointers, not source text) and the timings. The scanned source itself is never committed.
 
 **What stops the work:** if S1 or S4 fails, the base of this design is wrong. The spike reports that and stops, and nothing is built.
+
+**If time runs out:** the questions are dropped in this order: S6, then S5, then S3, then S2. S1 and S4 are never dropped, because they decide whether to stop. A dropped question is reported as not answered, never as passed.
 
 ## 9. What it costs
 
@@ -322,6 +338,8 @@ Code read at master `233b496a`. Measurements were taken on 2026-10-14 with read-
 - **Satchmo:** the PyPI source package `Satchmo-0.9.2.tar.gz`.
 - **Shuup:** a shallow clone of `github.com/shuup/shuup` at `25f78cfe`.
 - **Interpreters:** Python 3.10.11 and 3.14.6. Python 3.13 was not available on that machine.
+- **Dialect markers** were counted per file on Python 3.14: Python 2 markers from the token stream, Python 3 markers from the parse tree of the files that parse. Satchmo: 33 files with Python 2 markers (print statement 20, `raise X, message` 7, `<>` 5, `L` suffix 1), none with Python 3 markers. Shuup: none with Python 2 markers, 96 with Python 3 markers (annotations 87, f-strings 10, `yield from` 3, keyword-only parameters 1).
+- **Encodings** were read with `tokenize.detect_encoding`.
 
 **Where the Java coupling is:**
 - **The result types.** `adapters/java.py` defines `JavaFileResult` (units, edges, entry points, problems, plus `declared_module_paths`, `descriptor_name_conflicts`, `web_servlet_declared_names`, `web_filter_declared_names` and `package`), `JavaUnitClaim`, `JavaEdgeClaim`, `JavaEntryPointClaim` and `JavaAdapterProblem`. Its worker wire format is `file_result_to_json` / `file_result_from_json`.
