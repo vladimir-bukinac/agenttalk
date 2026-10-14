@@ -63,9 +63,16 @@ def _age(seconds: object) -> str:
     return f"{int(seconds // 86400)} d"
 
 
+def _safe(text: str) -> str:
+    """Only printable ASCII survives. Everything else (escape and other control characters, a
+    DEL, any non-ASCII character) becomes ``?``, so no text from a message or a config can move
+    the cursor, clear the screen or otherwise steer the operator's terminal."""
+    return "".join(ch if 32 <= ord(ch) < 127 else "?" for ch in text)
+
+
 def _text(value: object) -> str:
-    """One line of plain ASCII (the builders' text may hold any character)."""
-    return " ".join(str(value).split()).encode("ascii", "replace").decode("ascii")
+    """One line of plain, printable ASCII (the builders' text may hold any character)."""
+    return _safe(" ".join(str(value).split()))
 
 
 def _plural(n: int, one: str, many: str) -> str:
@@ -81,7 +88,7 @@ def _seat_line(agent: dict) -> str:
         parts.append("(that status is old)")
     verdict = agent.get("cli_child_verdict")
     if isinstance(verdict, dict) and isinstance(verdict.get("state"), str):
-        parts.append(f"supervisor: {verdict['state'].replace('_', ' ')}")
+        parts.append(f"supervisor: {_text(verdict['state'].replace('_', ' '))}")
     park = agent.get("usage_limit_park")
     if isinstance(park, dict) and park.get("present") is True:
         parts.append("paused on a usage limit")
@@ -102,25 +109,35 @@ def render(data: dict, *, width: int = 100) -> str:
     """The screen as text. Every number and name comes straight from ``data``."""
     state, attention, gates = data["state"], data["attention"], data["gates"]
     lines: list[str] = []
-    agents = state.get("agents") if isinstance(state.get("agents"), list) else []
+    # A list counts as "known" only when the builder returned it and reported no error for that part.
+    # Otherwise the screen says it could not read it; it never turns "unknown" into "none".
+    agents_ok = isinstance(state.get("agents"), list) and not state.get("errors")
+    threads_ok = isinstance(state.get("threads"), list) and not state.get("errors")
+    items_ok = isinstance(attention.get("items"), list) and not attention.get("errors")
+    agents = state["agents"] if isinstance(state.get("agents"), list) else []
     counts = state.get("counts") if isinstance(state.get("counts"), dict) else {}
 
     lines.append(f"agenttalk overview - {_text(state.get('label', ''))}")
-    summary = [_plural(len(agents), "agent", "agents")]
-    if isinstance(counts.get("open_threads"), int):
+    summary = []
+    if agents_ok:
+        summary.append(_plural(len(agents), "agent", "agents"))
+    if threads_ok and isinstance(counts.get("open_threads"), int):
         summary.append(_plural(counts["open_threads"], "open conversation", "open conversations"))
-    if isinstance(attention.get("count"), int):
+    if items_ok and isinstance(attention.get("count"), int):
         summary.append(_plural(attention["count"], "item needing attention", "items needing attention"))
-    if isinstance(gates.get("verdict"), str):
-        summary.append(f"release checks: {gates['verdict']}")
-    lines.append(", ".join(summary))
+    if isinstance(gates.get("verdict"), str) and not gates.get("errors"):
+        summary.append(f"release checks: {_text(gates['verdict'])}")
+    if summary:
+        lines.append(", ".join(summary))
     for source, what in ((state, "the team"), (attention, "attention items"), (gates, "release checks")):
         for err in source.get("errors") or []:
             lines.append(f"Could not read {what}: {_text(err)}")
 
     items = attention.get("items") if isinstance(attention.get("items"), list) else []
     lines += ["", "NEEDS ATTENTION"]
-    if not items:
+    if not items_ok and not items:
+        lines.append("  Could not be read, so this may not be empty.")
+    elif not items:
         lines.append("  Nothing right now.")
     for it in items[:MAX_ATTENTION]:
         who = f" ({_text(it['agent'])})" if it.get("agent") else ""
@@ -131,7 +148,9 @@ def render(data: dict, *, width: int = 100) -> str:
 
     threads = state.get("threads") if isinstance(state.get("threads"), list) else []
     lines += ["", "WHO IS WAITING FOR WHOM"]
-    if not threads:
+    if not threads_ok and not threads:
+        lines.append("  Could not be read, so this may not be empty.")
+    elif not threads:
         lines.append("  No open conversations.")
     for th in threads[:MAX_THREADS]:
         subject = _text(th.get("subject") or th.get("request_id") or "(no subject)")
@@ -141,7 +160,9 @@ def render(data: dict, *, width: int = 100) -> str:
         lines.append(f"  ... and {len(threads) - MAX_THREADS} more (agenttalk threads)")
 
     lines += ["", "TEAM"]
-    if not agents:
+    if not agents_ok and not agents:
+        lines.append("  Could not be read, so this may not be empty.")
+    elif not agents:
         lines.append("  No agents.")
     for a in agents:
         role = f" ({_text(a['role'])})" if a.get("role") else ""
@@ -159,7 +180,7 @@ def render(data: dict, *, width: int = 100) -> str:
         lines += _budget_lines(data["budget"])
 
     lines += ["", "More detail: agenttalk dashboard (a web page), agenttalk threads, agenttalk attention."]
-    return "\n".join(_wrap(line, width) for line in lines) + "\n"
+    return "\n".join(_wrap(_safe(line), width) for line in lines) + "\n"
 
 
 def _budget_lines(budget: object) -> list[str]:

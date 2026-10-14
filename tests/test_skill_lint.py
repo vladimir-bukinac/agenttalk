@@ -373,3 +373,17 @@ def test_codex_side_includes_name_field() -> None:
             f"Codex {subdir}/SKILL.md name field must equal {subdir!r}, "
             f"got {fm.get('name')!r}"
         )
+
+
+def test_every_shipped_codex_skill_dir_passes_the_sandbox_invocation_lint() -> None:
+    """The same fenced-command lint, over EVERY shipped Codex bus skill folder (not only the
+    listed ones), so a new skill cannot ship a bare `agenttalk ...` line."""
+    subdirs = sorted(p.name for p in (SKILLS_ROOT / "codex").iterdir() if p.is_dir())
+    assert "agenttalk" in subdirs
+    for subdir in subdirs:
+        text = (SKILLS_ROOT / "codex" / subdir / "SKILL.md").read_text(encoding="utf-8")
+        missing = [s for s in CODEX_SANDBOX_INVOCATION_REQUIRED if s not in text]
+        assert not missing, f"{subdir}/SKILL.md missing sandbox invocation section: {missing}"
+        assert not _fenced_bare_agenttalk_lines(text), f"{subdir}/SKILL.md has bare agenttalk lines"
+        assert not _inline_bare_agenttalk_snippets(text), f"{subdir}/SKILL.md has bare inline snippets"
+        assert not _fenced_source_checkout_bus_fixes(text), f"{subdir}/SKILL.md has source-checkout fixes"

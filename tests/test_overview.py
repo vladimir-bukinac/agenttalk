@@ -165,3 +165,68 @@ def test_the_terminal_text_uses_no_programmer_words_beyond_commands(tmp_path: Pa
     _store(tmp_path)
     text = _run(tmp_path, capsys)
     assert not re.search(r"\b(json|schema|epoch|cursor|nonce|hmac)\b", text, re.I)
+
+
+# ------------------------------------------- unreadable data is not an empty team
+
+def test_an_unreadable_team_is_not_reported_as_empty(tmp_path: Path, capsys) -> None:
+    s = _store(tmp_path)
+    s.config_path.write_text("{ not valid json", encoding="utf-8")
+    text = _run(tmp_path, capsys)
+    assert "Could not read the team" in text
+    for claim in ("0 agents", "No agents.", "No open conversations.", "Nothing right now.",
+                  "0 open conversations", "0 items needing attention"):
+        assert claim not in text, claim
+    assert text.count("Could not be read, so this may not be empty.") == 2  # team and conversations
+
+
+def test_a_real_empty_team_still_says_so() -> None:
+    text = overview.render({"state": {"label": "p", "agents": [], "threads": [], "counts": {"open_threads": 0}},
+                            "attention": {"items": [], "count": 0}, "gates": {"verdict": "GO"}})
+    assert "0 agents" in text and "No agents." in text and "No open conversations." in text
+    assert "Nothing right now." in text
+
+
+def test_a_source_that_reports_an_error_is_not_shown_as_none() -> None:
+    text = overview.render({"state": {"label": "p", "agents": [], "threads": []},
+                            "attention": {"items": [], "count": 0, "errors": ["boom"]}, "gates": {}})
+    assert "Could not read attention items: boom" in text
+    assert "Nothing right now." not in text and "0 items needing attention" not in text
+
+
+# ------------------------------------------------ terminal control characters
+
+_EVIL = "A\x1b[2J\x1b[H\x07\x08\x00\x7f\r‮é\x9b2J B"
+
+
+def test_no_printed_field_can_carry_a_control_character() -> None:
+    """Every field the screen prints, each filled with escape and other control characters."""
+    e = _EVIL
+    data = {
+        "state": {"label": e, "errors": [e], "counts": {"open_threads": 1}, "agents": [
+            {"name": e, "role": e, "health": {"state": "working_turn", "stale": True},
+             "cli_child_verdict": {"state": e}, "usage_limit_park": {"present": True},
+             "last_seen_age_seconds": 5, "capacity": {"rate_used_pct": 5, "context_used_pct": 6},
+             "conversation_size": {"warn": True}}],
+         "threads": [{"request_id": e, "subject": e, "next_owner": e, "age_seconds": 5}]},
+        "attention": {"count": 1, "errors": [e], "items": [
+            {"severity": e, "title": e, "agent": e, "age_seconds": 5}]},
+        "gates": {"verdict": e, "errors": [e], "gates": [{"name": e, "blocks": True, "reason": e}]},
+        "budget": {"status": e},
+    }
+    text = overview.render(data)
+    assert "\x1b" not in text
+    assert all(ch == "\n" or 32 <= ord(ch) < 127 for ch in text), [c for c in text if not (c == "\n" or 32 <= ord(c) < 127)]
+    # and the same, field by field, for the ones that did not go through the old filter
+    for part in ({"verdict": e}, ):
+        assert overview.render({"state": {"label": "p", "agents": [], "threads": []},
+                                "attention": {"items": []}, "gates": part}).isascii()
+
+
+def test_a_real_message_subject_cannot_clear_the_screen(tmp_path: Path, capsys) -> None:
+    s = Store(tmp_path)
+    s.init(["lead", "claude-a"])
+    s.send(sender="lead", recipient="claude-a", body="x", kind="question",
+           subject="hi\x1b[2J\x1b[Hthere", meta={"request_id": "q-esc"})
+    text = _run(tmp_path, capsys)
+    assert "\x1b" not in text and "hi" in text and "there" in text
