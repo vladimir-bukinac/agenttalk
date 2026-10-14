@@ -216,7 +216,8 @@ def test_no_printed_field_can_carry_a_control_character() -> None:
     }
     text = overview.render(data)
     assert "\x1b" not in text
-    assert all(ch == "\n" or 32 <= ord(ch) < 127 for ch in text), [c for c in text if not (c == "\n" or 32 <= ord(c) < 127)]
+    bad = [c for c in text if not (c == "\n" or 32 <= ord(c) < 127)]
+    assert not bad, bad
     # and the same, field by field, for the ones that did not go through the old filter
     for part in ({"verdict": e}, ):
         assert overview.render({"state": {"label": "p", "agents": [], "threads": []},
