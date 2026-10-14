@@ -64,11 +64,13 @@ def test_bundled_skills_exist_in_package() -> None:
         "agenttalk.handoff.md",
         "agenttalk.lead.md",
         "agenttalk.listen.md",
+        "agenttalk.md",
         "agenttalk.propose.md",
         "agenttalk.send.md",
     ]
     codex_subdirs = sorted(p.name for p in codex_dir.iterdir() if p.is_dir())
     assert codex_subdirs == [
+        "agenttalk",
         "agenttalk-challenge",
         "agenttalk-consult",
         "agenttalk-handoff",
