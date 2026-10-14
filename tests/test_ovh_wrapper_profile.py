@@ -40,7 +40,8 @@ def test_non_profile_child_environment_is_unchanged(tmp_path, monkeypatch) -> No
         "UNRELATED_SECRET": "still-historical",
         "ANTHROPIC_API_KEY": "still-historical",
         "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "still-historical",
-        "AGENTTALK_PY": str(run.Path(run.sys.executable).resolve()),
+        "AGENTTALK_PY": (str(run.Path(run.sys.executable).resolve()) if run.os.name == "nt"
+                         else run.os.path.abspath(run.sys.executable)),  # platform contract (#493)
         "AGENTTALK_ROOT": str(tmp_path.resolve()),
     }
 

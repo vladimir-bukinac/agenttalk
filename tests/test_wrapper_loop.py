@@ -10,6 +10,7 @@ import errno
 import gc
 import json
 import math
+import os
 from pathlib import Path
 import re
 import sys
@@ -2685,7 +2686,9 @@ def test_agenttalk_runtime_preflight_uses_workspace_cwd_and_reports_bad_source(
 def test_child_env_stamps_pin_root_and_strips_lease(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("AGENTTALK_LEAD_LOOP_LEASE", "secret")
     env = run._child_env(tmp_path)
-    assert env["AGENTTALK_PY"] == str(Path(sys.executable).resolve())
+    # platform contract (#493): Windows resolves; elsewhere the path as started (a linked venv keeps its link)
+    expected = str(Path(sys.executable).resolve()) if os.name == "nt" else os.path.abspath(sys.executable)
+    assert env["AGENTTALK_PY"] == expected
     assert env["AGENTTALK_ROOT"] == str(tmp_path.resolve())
     assert "AGENTTALK_LEAD_LOOP_LEASE" not in env
 
