@@ -77,8 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Technical details: `_agenttalk_py()` and the owed-action dispatch pin (`_pinned_executable`) now use the
   interpreter path as the process was started (made absolute, not resolved through links) via the new
   `interpreter_path.launch_path`. Windows keeps the resolved path. The dispatch pin still checks that the
-  target is a regular file. Other uses of `sys.executable` (supervisor, gateway, comprehension worker)
-  already pass it unresolved.
+  target is a regular file. The supervisor, the comprehension worker and the doctor fallback already pass
+  `sys.executable` unresolved. The gateway service identity (`ovh_gateway_service`, used for the scheduled
+  task and the systemd unit) still resolves its executable; that is unchanged here.
 
 ## [0.101.1] - 2026-10-13
 

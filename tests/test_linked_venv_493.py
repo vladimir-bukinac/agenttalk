@@ -71,9 +71,9 @@ def test_the_wrapper_names_the_environments_own_python(linked_venv: Path, tmp_pa
     assert got != str(linked_venv.resolve())
 
 
-def test_the_launch_self_check_passes_from_a_linked_environment(isolated_venv: Path, tmp_path: Path) -> None:
-    """The real preflight (`<python> -m agenttalk --version`) run from inside the environment."""
-    linked_venv = isolated_venv
+def test_the_launch_self_check_passes_from_a_linked_environment(linked_venv: Path, tmp_path: Path) -> None:
+    """Positive check, always run on POSIX: the real preflight (`<python> -m agenttalk --version`)
+    from inside the environment is not blocked. It needs no negative control to mean something."""
     code = (
         "import sys, pathlib\n"
         "from agenttalk.wrapper import run\n"
@@ -87,14 +87,18 @@ def test_the_launch_self_check_passes_from_a_linked_environment(isolated_venv: P
     assert done.stdout.strip().endswith("BLOCKED=None"), done.stdout + done.stderr
 
 
-def test_the_probe_command_itself_runs_from_the_link(isolated_venv: Path, tmp_path: Path) -> None:
-    linked_venv = isolated_venv
+def test_the_probe_command_runs_from_the_link(linked_venv: Path, tmp_path: Path) -> None:
+    """Positive check, always run on POSIX: the pinned command the wrapper probes works."""
     pinned = _run_in_venv(linked_venv, "from agenttalk.wrapper import run; print(run._agenttalk_py())", tmp_path)
     done = subprocess.run([pinned, "-m", "agenttalk", "--version"], capture_output=True, text=True,
                           env=_env_without_python_paths(), cwd=tmp_path, timeout=120)
     assert done.returncode == 0, done.stdout + done.stderr
-    # and the old answer (the followed link) is exactly what fails
-    old = subprocess.run([str(linked_venv.resolve()), "-m", "agenttalk", "--version"], capture_output=True,
+
+
+def test_negative_control_the_followed_link_has_no_agenttalk(isolated_venv: Path, tmp_path: Path) -> None:
+    """Negative control (skips where agenttalk is also installed into the base Python): the path the
+    old code used, the link followed to the system Python, cannot run agenttalk."""
+    old = subprocess.run([str(isolated_venv.resolve()), "-m", "agenttalk", "--version"], capture_output=True,
                          text=True, env=_env_without_python_paths(), cwd=tmp_path, timeout=120)
     assert old.returncode != 0 and "No module named agenttalk" in old.stderr
 
