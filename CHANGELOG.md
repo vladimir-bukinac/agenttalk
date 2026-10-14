@@ -61,6 +61,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The outcome is recorded in the session record (`fresh_request_*`) and projected by
   `Store.read_fresh_status` and, as the reset reason `fresh_requested`, by the dashboard reader.
 
+### Fixed
+
+- **A background agent now starts from a normal virtual environment on Linux and macOS (#493).**
+  The wrapper looked up its own Python by following the environment's link to the system Python, which
+  does not have agenttalk installed, so it refused to start.
+
+  What you will notice: if you install agenttalk into a standard virtual environment (`python3 -m venv`)
+  on Linux or macOS, `agenttalk wrap` now starts the agent instead of stopping with "No module named
+  agenttalk". The agent's own `agenttalk` commands use the same environment. Windows is unchanged.
+
+  What you need to do: nothing. If you worked around this with `python3 -m venv --copies`, you can go
+  back to a normal environment.
+
+  Technical details: `_agenttalk_py()` and the owed-action dispatch pin (`_pinned_executable`) now use the
+  interpreter path as the process was started (made absolute, not resolved through links) via the new
+  `interpreter_path.launch_path`. Windows keeps the resolved path. The dispatch pin still checks that the
+  target is a regular file. Other uses of `sys.executable` (supervisor, gateway, comprehension worker)
+  already pass it unresolved.
+
 ## [0.101.1] - 2026-10-13
 
 **In short:** one fix for the paid gateway. When the model pauses for a long time in the middle
