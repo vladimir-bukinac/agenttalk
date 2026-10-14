@@ -6,6 +6,10 @@ master 2112cec (the code before the journal) by ``tests/make_off_golden.py`` (se
 code, with no journal and no observer, and compare the durable outputs: the project
 store's files (ledger, state, cursor, dead letters), the loop's result and sleeps,
 the exception raised, and the lifecycle log lines, with volatile values replaced.
+
+#489 (the gateway-hold marker) deliberately updated the golden for ONE scenario, ``gateway_hold``: it gained the
+file ".agenttalk/state/beta.gateway-held.json" (``{"head_id": "<MSG1>"}``), the marker #489 now keeps so a gateway
+hold survives a restart. Every other file and captured field of that scenario is unchanged (compared one by one).
 """
 
 from __future__ import annotations

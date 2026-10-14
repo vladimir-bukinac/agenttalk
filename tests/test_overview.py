@@ -301,3 +301,16 @@ def test_a_broadcast_with_several_owners_names_them_all() -> None:
     one = overview.render({"state": {"label": "p", "agents": [], "threads": [dict(threads[0], next_owner="solo")]},
                            "attention": {"items": []}, "gates": {}})
     assert "next move is solo's" in one
+
+
+# ------------------------------------ the supervisor's list of agenttalk commands (#483 / #491 CI)
+
+def test_the_supervisor_knows_overview_so_a_word_inside_an_argument_is_not_taken_for_it() -> None:
+    from agenttalk import supervisor as sup
+
+    assert "overview" in sup._AGENTTALK_SUBCOMMANDS
+    inv = sup._agenttalk_invocation("agenttalk --root D:/p overview --json", "D:/p")
+    assert inv["subcommand"] == "overview" and inv["args"] == ["--json"]
+    # "overview" as the value of another command's option stays that command's value
+    inv = sup._agenttalk_invocation("agenttalk --root D:/p wait --for beta --to-request overview", "D:/p")
+    assert inv["subcommand"] == "wait"

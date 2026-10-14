@@ -386,7 +386,8 @@ def test_the_taught_commands_run_as_written_under_a_fake_home_and_write_only_whe
         else:
             allowed = (str(home_claude.relative_to(tmp_path)), str(home_codex.relative_to(tmp_path)))
             assert changed and all(k.startswith(allowed) for k in changed), f"{label}: wrote {sorted(changed)}"
-            assert len(changed) == 14 and all("agenttalk" in k for k in changed), f"{label}: {sorted(changed)}"
+            # 8 Claude commands and 8 Codex skills: the seven bus skills plus the overview skill (#491)
+            assert len(changed) == 16 and all("agenttalk" in k for k in changed), f"{label}: {sorted(changed)}"
         ran += 1
     assert ran >= 4
 
