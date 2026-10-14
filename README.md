@@ -1251,6 +1251,7 @@ typed-evidence shape at the milestone level.
 | --- | --- |
 | `escalate` | Route a question to the operator-facing liaison. |
 | `attention` | Operator attention queue. |
+| `overview [--json] [--enable-budget]` | One read-only screen, in plain words: what needs attention, who is waiting for whom, and how each agent is doing, built from the same data as the dashboard. It never moves a cursor, changes the store or starts work. Paid-model spend appears only with `--enable-budget`. In a seat, `/agenttalk` (Claude Code) or `$agenttalk` (Codex) runs it. |
 | `rescind` | Supersede a request so a stale answer can't quietly close it. |
 | `barrier` | Epoch barrier operations. |
 | `relay` | Relay between agents/liaison. |

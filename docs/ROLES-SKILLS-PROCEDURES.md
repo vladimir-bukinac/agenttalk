@@ -205,6 +205,7 @@ Each bus skill comes in a Claude Code file and a Codex copy that do the same job
 
 | Skill (Claude Code, Codex) | Use it when |
 | --- | --- |
+| `agenttalk` | You want the one-screen, read-only overview of the team: what needs attention, who is waiting for whom, and how each agent is doing. It runs as `/agenttalk` in Claude Code and `$agenttalk` in Codex, and only calls `agenttalk overview`. |
 | `agenttalk.send`, `agenttalk-send` | You send one message to one agent, or a note or question to a group, and do not need to wait for a reply. |
 | `agenttalk.listen`, `agenttalk-listen` | A seat should sit and wait for messages and handle reviews, proposals, questions, consults and wake signals as they come. |
 | `agenttalk.handoff`, `agenttalk-handoff` | You hand finished work, usually for review, to a named agent and wait for the result. |

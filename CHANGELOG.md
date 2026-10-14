@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`agenttalk overview` shows how the team is doing on one screen, and `/agenttalk` and `$agenttalk` run it for you.**
+  It is the terminal's version of the dashboard's Overview.
+
+  What you will notice: a new command, `agenttalk overview`, prints about one screen in plain words:
+  what needs attention, who is waiting for whom, how each agent is doing, and whether the release
+  checks are holding anything up. In a Claude Code seat you can type `/agenttalk`, and in a Codex
+  seat `$agenttalk`; both only run the command. It is read-only: it never moves a message cursor,
+  changes anything, wakes an agent or calls a model. The paid-model spend is left out unless you
+  add `--enable-budget`, because that ledger covers the whole machine and any seat can run the
+  command.
+
+  What you need to do: nothing. Run `agenttalk install-skills` to get the two new skills.
+
+  Technical details: new `overview.py` renders only what the dashboard's own builders return
+  (`web.build_state`, `web.build_attention`, `web.build_gates`), derives nothing, and leaves out a
+  field the builders leave out. `--json` prints those three payloads (plus `budget` with the flag).
+  Output is plain ASCII, so it reads the same on Windows, Linux and macOS.
+
 - **`agenttalk status` and the dashboard now show how large each agent's conversation is, and warn
   before it gets expensive (#475, part 1).** An agent that runs in the background keeps one
   conversation for as long as it lives, and every turn sends all of it again, so a long
