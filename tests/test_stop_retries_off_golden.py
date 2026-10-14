@@ -20,6 +20,13 @@ Three scenarios were ADDED for the cool-down kinds (``made_up_529_retries``, ``m
 ``unknown_status_retries``): made-up streams that the park rules now treat as an overload or a throttle. Their
 records were captured from agenttalk 93988c06, the code before the cool-down existed (the same file run there, the
 existing entries merged in untouched), and with the switch at 0 the loop must still retry them exactly as it did.
+
+#489 (the gateway-hold marker) deliberately updated the golden for ONE scenario, ``gateway_hold``: it gained
+the file ".agenttalk/state/beta.gateway-held.json" (``{"head_id": "<MSG1>"}``), the marker #489 now keeps so a
+gateway hold survives a restart. Every other file and every other captured field of that scenario (attempt
+records, dead letters, cursors, messages, health, log, sleeps, stamps, turns) is unchanged byte for byte; checked
+by comparing each one against the old golden. The switch-off and switch-on comparisons still pin what #311
+wrote them for: the retry count and dead-letter behaviour.
 """
 
 from __future__ import annotations

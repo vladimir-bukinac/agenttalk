@@ -1517,8 +1517,12 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         dead-letter). It is unavoidable: preserving history via record_attempt_result would let the
         write-ahead attempts_started climb into the K_escalate dispose, dead-lettering the held
         head - exactly what park-indefinitely forbids."""
-        nonlocal last_hb, fail_sleep
+        nonlocal last_hb, fail_sleep, held_head_id, held_head_persisted
         head_id = record.get("id")
+        held_head_id = head_id if isinstance(head_id, str) else None
+        if held_head_id is not None and held_head_id != held_head_persisted:
+            store.write_gateway_held(agent, held_head_id)     # a replacement wrapper must still know the head is held
+            held_head_persisted = held_head_id
         if isinstance(head_id, str) and head_id not in gateway_held_escalated:
             gateway_held_escalated.add(head_id)
             try:                              # a notification must never crash the loop
@@ -1532,6 +1536,52 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         sleep(fail_sleep)
         fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
 
+    # ---- a stand-down behind a HELD head (#488). The wrapper reads only its oldest unread message, and a held head
+    # (a sticky config_blocked park, a usage-limit or provider park, a gateway hold that is re-driven every poll) is
+    # not consumed, so a `release` queued behind it was never read and the wrapper never left. The cursor is one
+    # position: reading the release would also consume the head. So the release is NOT consumed here. It is looked
+    # at, validated by the same rules as any other release, recorded as honoured (durably, before the loop exits), and
+    # the loop returns between turns without touching the head. The release stays unread until the head is resolved; a
+    # later wrapper that reaches it consumes it WITHOUT standing down again (it was honoured already).
+    # set by _hold_park: the gateway-hold park leaves no attempt record behind. It is also kept on disk, so a wrapper
+    # that replaces this one (a restart, a crash) starts with the same knowledge and looks for a queued release
+    # before it re-drives the head.
+    held_head_id: str | None = store.read_gateway_held(agent)
+    held_head_persisted: str | None = held_head_id
+
+    def _head_is_held(record: dict, rec: dict) -> bool:
+        head_id = record.get("id")
+        return bool(
+            rec.get("last_failure_class") == CLASS_CONFIG_BLOCKED
+            or usage_park.is_parked(rec)
+            or rec.get("park_state") in usage_park.PARK_STATES
+            or (isinstance(head_id, str) and held_head_id == head_id))
+
+    def _stand_down_behind_held_head(record: dict) -> bool:
+        """True when a valid, not yet honoured release addressed to this agent waits behind the held head and
+        was recorded as honoured. Fails closed: any doubt (the inbox cannot be read, the record cannot be
+        written) is False and the head stays held, as before."""
+        try:
+            head_id = record.get("id")
+            honoured = store.stand_down_honoured_ids(agent)      # read once, not once per inbox record
+            found = [r["id"] for r in recv_api.records(store, agent, include_control=True)
+                     if isinstance(r.get("id"), str) and r["id"] != head_id
+                     and r.get("kind") in LOOP_CONTROL_KINDS
+                     and r["id"] not in honoured
+                     and classify_loop_control(store, r) == "stop"]
+        except Exception:  # noqa: BLE001 - a doubt never stands the wrapper down
+            return False
+        if not found:
+            return False
+        # Ownership first, OUTSIDE the broad except above and before anything is recorded: a managed controller
+        # that lost its lease must not consume the operator's stand-down. The check raises and the loop exits
+        # lease-lost, exactly as at every other boundary that advances the cursor.
+        _guard_advance()
+        try:
+            return bool(store.record_stand_down_honoured(agent, found, at=now_iso()))
+        except Exception:  # noqa: BLE001 - a doubt never stands the wrapper down
+            return False
+
     while True:
         if max_polls is not None and polls >= max_polls:
             return turns
@@ -1544,6 +1594,11 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         now = clock()
         if marker_head is not None and (record is None or record.get("id") != marker_head):
             _drop_marker()                  # the parked head was consumed or is gone
+        if held_head_id is not None and (record is None or record.get("id") != held_head_id):
+            held_head_id = None             # the held head was consumed or is gone
+            if held_head_persisted is not None:
+                store.write_gateway_held(agent, None)
+                held_head_persisted = None
         if on_idle_poll is not None:
             # Between turns by construction (no turn runs on this thread), on EVERY poll:
             # a head that is parked (usage limit, sticky config failure, blocked gate) must
@@ -1583,6 +1638,11 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             continue
         control = classify_loop_control(store, record)
         if control == "stop":
+            if store.stand_down_honoured(agent, record.get("id")):
+                # #488: an earlier wrapper already stood down for this release while a held head sat in front of
+                # it. The release is spent: consume it and keep running (the operator started this wrapper after it).
+                _commit(record)
+                continue
             # a VALID, authorized, human/emergency-marked release/end: the wrapper
             # owns loop-exit (the model is a pure handler). Consume it + STAND DOWN.
             _commit(record)
@@ -1593,6 +1653,13 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             # driven into the model, then KEEP LISTENING (idle stays listening).
             _commit(record)
             continue
+
+        # #488: a release behind a HELD head is looked for here, before the admission gate's early waiting
+        # branches (which `continue` before the park decisions below), before any re-probe and before any drive:
+        # between turns, and no turn is started after the stand-down is accepted.
+        if (_head_is_held(record, store.attempt_record(agent, record.get("id")) or {})
+                and _stand_down_behind_held_head(record)):
+            return turns
 
         legacy_gate_resolution = None
         if commit_gate is not None:

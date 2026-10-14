@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`agenttalk overview` shows how the team is doing on one screen, and `/agenttalk` and `$agenttalk` run it for you.**
+  It is the terminal's version of the dashboard's Overview.
+
+  What you will notice: a new command, `agenttalk overview`, prints about one screen in plain words:
+  what needs attention, who is waiting for whom, how each agent is doing, and whether the release
+  checks are holding anything up. In a Claude Code seat you can type `/agenttalk`, and in a Codex
+  seat `$agenttalk`; both only run the command. It is read-only: it never moves a message cursor,
+  changes anything, wakes an agent or calls a model. The paid-model spend is left out unless you
+  add `--enable-budget`, because that ledger covers the whole machine and any seat can run the
+  command.
+
+  What you need to do: nothing. Run `agenttalk install-skills` to get the two new skills.
+
+  Technical details: new `overview.py` renders only what the dashboard's own builders return
+  (`web.build_state`, `web.build_attention`, `web.build_gates`), derives nothing, and leaves out a
+  field the builders leave out. `--json` prints those three payloads (plus `budget` with the flag).
+  Output is plain ASCII, so it reads the same on Windows, Linux and macOS.
+
 - **`agenttalk status` and the dashboard now show how large each agent's conversation is, and warn
   before it gets expensive (#475, part 1).** An agent that runs in the background keeps one
   conversation for as long as it lives, and every turn sends all of it again, so a long
@@ -60,6 +78,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the reset, and only then clears the marker, which is what makes it apply once even after a crash.
   The outcome is recorded in the session record (`fresh_request_*`) and projected by
   `Store.read_fresh_status` and, as the reset reason `fresh_requested`, by the dashboard reader.
+
+### Fixed
+
+- **A parked agent can now be stood down with `agenttalk release` (#488).** An agent whose next message it
+  cannot run is "parked": it keeps that message at the front of its queue and waits. Until now a `release`
+  sent to a parked agent was never read, so the agent kept running, and the only way to stop it was to kill
+  its process, which cannot be done safely from outside (it may be starting a paid model call at that
+  moment). Now the agent notices a valid release waiting behind the parked message
+  and stands itself down between turns, the same as an idle agent. It starts no turn after it has accepted
+  the stand-down. The parked message itself is not touched: it stays first in the queue and unread until
+  something resolves it. The release also stays unread for now (an agent has one reading position, so
+  reading the release would also have read the parked message); `agenttalk status` shows
+  `stand_down=honoured` for it until it is reached. When the agent is started again, it does not stand down a
+  second time for that release: it consumes it silently and runs.
+  Technical detail: `wrapper/loop.py` `_stand_down_behind_held_head` runs right after the head's attempt
+  record is read and before any park, re-probe or drive. It applies when the head is held (a sticky
+  `config_blocked`, a usage-limit or provider park, or a gateway hold that is re-driven every poll, which is
+  remembered in `held_head_id`). It validates the release with `classify_loop_control` (same authority rules
+  as an idle release), records its id with `Store.record_stand_down_honoured` (`state/<agent>.stand-down.json`,
+  20 entries, written before the loop returns; if it cannot be written the agent keeps running), and returns
+  without consuming or reordering the head. A later loop that reaches an honoured release consumes it without
+  exiting. Covers both drives and a new wrapper generation that meets the same parked head (it stands down
+  before the one re-probe).
+
+- **A background agent now starts from a normal virtual environment on Linux and macOS (#493).**
+  The wrapper looked up its own Python by following the environment's link to the system Python, which
+  does not have agenttalk installed, so it refused to start.
+
+  What you will notice: if you install agenttalk into a standard virtual environment (`python3 -m venv`)
+  on Linux or macOS, `agenttalk wrap` now starts the agent instead of stopping with "No module named
+  agenttalk". The agent's own `agenttalk` commands use the same environment. Windows is unchanged.
+
+  What you need to do: nothing. If you worked around this with `python3 -m venv --copies`, you can go
+  back to a normal environment.
+
+  Technical details: `_agenttalk_py()` and the owed-action dispatch pin (`_pinned_executable`) now use the
+  interpreter path as the process was started (made absolute, not resolved through links) via the new
+  `interpreter_path.launch_path`. Windows keeps the resolved path. The dispatch pin still checks that the
+  target is a regular file. The supervisor, the comprehension worker and the doctor fallback already pass
+  `sys.executable` unresolved. The gateway service identity (`ovh_gateway_service`, used for the scheduled
+  task and the systemd unit) still resolves its executable; that is unchanged here.
 
 ## [0.101.1] - 2026-10-13
 

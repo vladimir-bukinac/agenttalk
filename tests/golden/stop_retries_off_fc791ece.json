@@ -45,6 +45,7 @@
    ".agenttalk/messages/<MSG1>.json": "{\n  \"id\": \"<MSG1>\",\n  \"ts\": \"<TS>\",\n  \"kind\": \"message\",\n  \"subject\": \"\",\n  \"body\": \"one\",\n  \"meta\": {},\n  \"from\": \"alpha\",\n  \"to\": \"beta\"\n}",
    ".agenttalk/state/alpha.cursor": "",
    ".agenttalk/state/beta.cursor": "<MSG1>",
+   ".agenttalk/state/beta.gateway-held.json": "{\n  \"head_id\": \"<MSG1>\"\n}",
    ".agenttalk/state/beta.health.json": "{\n  \"schema_version\": 1,\n  \"agent\": \"beta\",\n  \"cli\": \"claude\",\n  \"mode\": \"wrapper-loop\",\n  \"state\": \"idle_waiting\",\n  \"updated_at\": \"<TS>\",\n  \"since\": \"<TS>\",\n  \"last_progress_at\": \"<TS>\",\n  \"reason_code\": \"turn_completed\",\n  \"source\": \"wrapper\",\n  \"warnings\": [],\n  \"agenttalk_version\": \"<VERSION>\"\n}",
    ".agenttalk/state/dead-letter-attempts/beta.json": "{\n  \"schema_version\": 1,\n  \"agent\": \"beta\",\n  \"messages\": {}\n}",
    ".agenttalk/state/message-publication-order.anchor.json": "{\n  \"schema_version\": 1,\n  \"append_sequence\": 1,\n  \"chain_digest\": \"<HASH>\"\n}",

@@ -853,6 +853,9 @@ def _gather_status(store: Store) -> dict:
         journal_label = _turn_journal_label(store, a, health)
         if journal_label is not None:  # additive: absent unless this project uses the journal
             row["turn_events"] = journal_label
+        stand_down = store.read_stand_down_status(a)
+        if stand_down is not None:  # additive (#488): the agent stood down behind a held message
+            row["stand_down"] = stand_down
         if fresh_status is not None:  # additive (#475): absent unless a start-fresh request exists
             row["fresh_request"] = fresh_status
         sup_row = supervisor_rows.get(a)
@@ -1569,6 +1572,20 @@ def cmd_threads(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_overview(args: argparse.Namespace) -> int:
+    """One read-only screen: what the dashboard's Overview shows, in plain words (or --json)."""
+    from agenttalk import overview as overview_mod
+
+    store = _get_store(args)
+    data = overview_mod.gather(store, label=store.root.name or str(store.root),
+                               enable_budget=args.enable_budget)
+    if args.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+    else:
+        sys.stdout.write(overview_mod.render(data, width=overview_mod.terminal_width()))
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     store = _get_store(args)
     payload = _gather_status(store)
@@ -1659,6 +1676,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             seen += f' progress="{text}" ({age_str})'
         if isinstance(a.get("turn_events"), str):
             seen += f" turn_events={a['turn_events']}"
+        if isinstance(a.get("stand_down"), dict):
+            seen += " stand_down=honoured(release unread behind a held message)"
         fresh = a.get("fresh_request")
         if isinstance(fresh, dict):
             if "pending" in fresh:
@@ -15539,6 +15558,15 @@ def build_parser() -> argparse.ArgumentParser:
     ps.add_argument("--json", action="store_true",
                     help="Emit structured JSON instead of human-readable text.")
     ps.set_defaults(func=cmd_status)
+
+    pov = sub.add_parser(
+        "overview",
+        help="One read-only screen: what needs attention, who waits for whom, and how the team is doing.")
+    pov.add_argument("--json", action="store_true",
+                     help="Emit the dashboard's own data as JSON instead of text.")
+    pov.add_argument("--enable-budget", action="store_true",
+                     help="Also show this machine's paid-model ledger figures. Off by default.")
+    pov.set_defaults(func=cmd_overview)
 
     psview = sub.add_parser(
         "supervisor",

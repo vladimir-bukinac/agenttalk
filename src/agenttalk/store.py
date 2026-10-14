@@ -7011,6 +7011,107 @@ class Store:
             except OSError:
                 return False
 
+    # ------------------------------------------- honoured stand-downs (#488)
+    #
+    # A `release` that a wrapper stood down for while a HELD head sat in front of it. The release cannot be consumed
+    # then (one cursor: reading it would consume the head), so the wrapper records its id here before it exits. A
+    # later wrapper that reaches the release consumes it without standing down again. Single writer (the wrapper
+    # of that agent), bounded, never raises on read.
+
+    def _stand_down_path(self, agent: str):
+        return self.state_dir / f"{agent}.stand-down.json"
+
+    def _read_stand_down(self, agent: str, *, strict: bool = False) -> list[dict]:
+        """The honoured rows. Never raises, unless `strict`: then a file that exists but cannot be read (a
+        transient OSError, a half-written file) raises, so a caller can tell "nothing there" from "cannot tell"."""
+        try:
+            data = json.loads(self._stand_down_path(agent).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return []
+        except (OSError, ValueError):
+            if strict:
+                raise
+            return []
+        rows = data.get("honoured") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return []
+        return [r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)]
+
+    def stand_down_honoured(self, agent: str, release_id: object) -> bool:
+        return isinstance(release_id, str) and any(r["id"] == release_id for r in self._read_stand_down(agent))
+
+    def stand_down_honoured_ids(self, agent: str) -> set[str]:
+        """Every honoured release id, read once (so a scan of the inbox does not read the file per message)."""
+        return {r["id"] for r in self._read_stand_down(agent)}
+
+    def record_stand_down_honoured(self, agent: str, release_ids: list[str], *, at: str = "") -> bool:
+        """Durably record the releases an agent stood down for. False when they are not on disk afterwards.
+
+        Every release recorded stays until the agent's cursor has passed it (an honoured release is only
+        relevant while it is unread, and the unread inbox bounds the list), so a release is never forgotten
+        while it can still stop a later wrapper. A write that returned is recorded: it is not read back (a read
+        back that hit a transient error would look like "not written", the wrapper would keep running, and the
+        release would later be skipped as already honoured). A write that raised AFTER the data landed (the
+        Windows direct-write fallback can flush the file and then fail on fsync) is judged by what is on disk,
+        read again a few times; if the file cannot be read at all the old rows are put back (best effort) and the
+        answer is False, so nothing stays marked for a stand-down that did not happen.
+        """
+        cursor = self.cursor(agent) or ""
+        previous = [r for r in self._read_stand_down(agent) if r["id"] > cursor]
+        known = {r["id"] for r in previous}
+        rows = previous + [{"id": rid, "at": at} for rid in release_ids if rid not in known]
+        path = self._stand_down_path(agent)
+        try:
+            _atomic_write_text(path, json.dumps({"honoured": rows}, ensure_ascii=False))
+            return True
+        except OSError:
+            pass
+        for _attempt in range(3):
+            try:
+                on_disk = {r["id"] for r in self._read_stand_down(agent, strict=True)}
+            except (OSError, ValueError):
+                continue
+            return all(rid in on_disk for rid in release_ids)
+        with contextlib.suppress(OSError):
+            _atomic_write_text(path, json.dumps({"honoured": previous}, ensure_ascii=False))
+        return False
+
+    # A transient gateway HOLD of the head (CLASS_GATEWAY_HELD) leaves no attempt record behind, so the wrapper
+    # writes the held head's id here: a wrapper that replaces it (a restart or a crash) still knows the head is held
+    # and looks for a queued release before it re-drives the head. Single writer, one id, never raises on read.
+
+    def _gateway_held_path(self, agent: str):
+        return self.state_dir / f"{agent}.gateway-held.json"
+
+    def read_gateway_held(self, agent: str) -> str | None:
+        try:
+            data = json.loads(self._gateway_held_path(agent).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        head = data.get("head_id") if isinstance(data, dict) else None
+        return head if isinstance(head, str) and head else None
+
+    def write_gateway_held(self, agent: str, head_id: str | None) -> None:
+        """Remember `head_id` as the gateway-held head, or forget it when None. Best effort: a failure only
+        means a replacement wrapper does not know about the hold, which is how it behaved before."""
+        path = self._gateway_held_path(agent)
+        try:
+            if head_id is None:
+                path.unlink(missing_ok=True)
+            else:
+                _atomic_write_text(path, json.dumps({"head_id": head_id}, ensure_ascii=False))
+        except OSError:
+            pass
+
+    def read_stand_down_status(self, agent: str) -> dict | None:
+        """The honoured release that is still unread (the agent has stood down behind a held head), or None."""
+        cursor = self.cursor(agent) or ""
+        rows = [r for r in self._read_stand_down(agent) if r["id"] > cursor]
+        if not rows:
+            return None
+        last = rows[-1]
+        return {"release_id": last["id"], "at": str(last.get("at") or "")[:40]}
+
     def read_last_fresh_reset_at(self, agent: str) -> str | None:
         """When the agent's last APPLIED start-fresh reset was recorded, or None. Read from the
         session record alone, so a pending marker (a second request, or a clearing that is

@@ -24,6 +24,7 @@ from typing import Callable
 
 from agenttalk import threads
 from agenttalk._atomic import write_text as _atomic_write_text
+from agenttalk.interpreter_path import launch_path
 from agenttalk.store import (
     CONTROL_KINDS,
     OPENER_KINDS,
@@ -4558,11 +4559,12 @@ class DetectionCommitGate:
             resolved = executable.resolve(strict=True)
         except (OSError, RuntimeError) as exc:
             raise DispatchRefused("AGENTTALK_PY executable is unavailable") from exc
-        # POSIX Python launchers are commonly symlinks. Returning the canonical
-        # regular-file path keeps dispatch argv stable if the launcher is retargeted.
         if not resolved.is_file():
             raise DispatchRefused("AGENTTALK_PY must resolve to a regular file")
-        return str(resolved)
+        # The target is checked above, but the path handed on is the launcher as named (#493): a
+        # linked virtual environment's python only finds agenttalk when started through its own
+        # link, so the resolved system Python would fail. Windows keeps the resolved path.
+        return launch_path(executable)
 
     def dispatch_exhausted(self, key: ObligationKey) -> bool:
         try:

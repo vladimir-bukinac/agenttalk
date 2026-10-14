@@ -37,6 +37,7 @@ from datetime import datetime, timezone
 
 from agenttalk import health as health_model
 from agenttalk import launch_admission
+from agenttalk.interpreter_path import launch_path
 from agenttalk.redaction import normalize_child_output_tail
 from agenttalk.store import LEAD_LOOP_LEASE_ENV
 
@@ -435,7 +436,9 @@ def _bus_command_verb_from_tokens(tokens: list[str], depth: int = 0) -> str | No
 
 
 def _agenttalk_py() -> str:
-    return str(Path(sys.executable).resolve())
+    # As the process was started, not resolved through links (#493): a linked virtual environment
+    # on Linux/macOS only finds agenttalk when its own python path is used. Windows is unchanged.
+    return launch_path()
 
 
 def _ovh_qwen_claude_config_dir(workspace: Path) -> str:

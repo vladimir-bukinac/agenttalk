@@ -1128,7 +1128,7 @@ def test_dispatch_record_rejects_a_tampered_permit_draft_path(tmp_path: Path) ->
     assert not tampered.draft_path.exists()
 
 
-def test_dispatch_record_pins_regular_python_symlink_target(
+def test_dispatch_record_keeps_the_launcher_and_checks_its_target(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1145,8 +1145,10 @@ def test_dispatch_record_pins_regular_python_symlink_target(
 
     dispatched = gate.dispatch_record(record, permit)
 
-    assert dispatched["owed_action"]["argv"][0] == str(target)
-    assert dispatched["owed_action"]["composing_argv"][0] == str(target)
+    # the target is validated, but the launcher as named is what runs (#493); Windows resolves
+    expected = str(target) if os.name == "nt" else str(launcher)
+    assert dispatched["owed_action"]["argv"][0] == expected
+    assert dispatched["owed_action"]["composing_argv"][0] == expected
 
 
 @pytest.mark.parametrize(
