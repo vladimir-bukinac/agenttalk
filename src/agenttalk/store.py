@@ -7011,6 +7011,52 @@ class Store:
             except OSError:
                 return False
 
+    # ------------------------------------------- honoured stand-downs (#488)
+    #
+    # A `release` that a wrapper stood down for while a HELD head sat in front of it. The release cannot be consumed
+    # then (one cursor: reading it would consume the head), so the wrapper records its id here before it exits. A
+    # later wrapper that reaches the release consumes it without standing down again. Single writer (the wrapper
+    # of that agent), bounded, never raises on read.
+
+    _STAND_DOWN_KEEP = 20
+
+    def _stand_down_path(self, agent: str):
+        return self.state_dir / f"{agent}.stand-down.json"
+
+    def _read_stand_down(self, agent: str) -> list[dict]:
+        try:
+            data = json.loads(self._stand_down_path(agent).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        rows = data.get("honoured") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return []
+        return [r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)]
+
+    def stand_down_honoured(self, agent: str, release_id: object) -> bool:
+        return isinstance(release_id, str) and any(r["id"] == release_id for r in self._read_stand_down(agent))
+
+    def record_stand_down_honoured(self, agent: str, release_ids: list[str], *, at: str = "") -> bool:
+        """Durably record the releases an agent stood down for. False when it could not be written."""
+        rows = self._read_stand_down(agent)
+        known = {r["id"] for r in rows}
+        rows += [{"id": rid, "at": at} for rid in release_ids if rid not in known]
+        try:
+            _atomic_write_text(self._stand_down_path(agent),
+                               json.dumps({"honoured": rows[-self._STAND_DOWN_KEEP:]}, ensure_ascii=False))
+        except OSError:
+            return False
+        return True
+
+    def read_stand_down_status(self, agent: str) -> dict | None:
+        """The honoured release that is still unread (the agent has stood down behind a held head), or None."""
+        cursor = self.cursor(agent) or ""
+        rows = [r for r in self._read_stand_down(agent) if r["id"] > cursor]
+        if not rows:
+            return None
+        last = rows[-1]
+        return {"release_id": last["id"], "at": str(last.get("at") or "")[:40]}
+
     def read_last_fresh_reset_at(self, agent: str) -> str | None:
         """When the agent's last APPLIED start-fresh reset was recorded, or None. Read from the
         session record alone, so a pending marker (a second request, or a clearing that is

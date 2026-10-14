@@ -1517,8 +1517,9 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         dead-letter). It is unavoidable: preserving history via record_attempt_result would let the
         write-ahead attempts_started climb into the K_escalate dispose, dead-lettering the held
         head - exactly what park-indefinitely forbids."""
-        nonlocal last_hb, fail_sleep
+        nonlocal last_hb, fail_sleep, held_head_id
         head_id = record.get("id")
+        held_head_id = head_id if isinstance(head_id, str) else None
         if isinstance(head_id, str) and head_id not in gateway_held_escalated:
             gateway_held_escalated.add(head_id)
             try:                              # a notification must never crash the loop
@@ -1532,6 +1533,40 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         sleep(fail_sleep)
         fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
 
+    # ---- a stand-down behind a HELD head (#488). The wrapper reads only its oldest unread message, and a held head
+    # (a sticky config_blocked park, a usage-limit or provider park, a gateway hold that is re-driven every poll) is
+    # not consumed, so a `release` queued behind it was never read and the wrapper never left. The cursor is one
+    # position: reading the release would also consume the head. So the release is NOT consumed here. It is looked
+    # at, validated by the same rules as any other release, recorded as honoured (durably, before the loop exits), and
+    # the loop returns between turns without touching the head. The release stays unread until the head is resolved; a
+    # later wrapper that reaches it consumes it WITHOUT standing down again (it was honoured already).
+    held_head_id: str | None = None         # set by _hold_park: the gateway-hold park leaves no attempt record behind
+
+    def _head_is_held(record: dict, rec: dict) -> bool:
+        head_id = record.get("id")
+        return bool(
+            rec.get("last_failure_class") == CLASS_CONFIG_BLOCKED
+            or usage_park.is_parked(rec)
+            or rec.get("park_state") in usage_park.PARK_STATES
+            or (isinstance(head_id, str) and held_head_id == head_id))
+
+    def _stand_down_behind_held_head(record: dict) -> bool:
+        """True when a valid, not yet honoured release addressed to this agent waits behind the held head and
+        was recorded as honoured. Fails closed: any doubt (the inbox cannot be read, the record cannot be
+        written) is False and the head stays held, as before."""
+        try:
+            head_id = record.get("id")
+            found = [r["id"] for r in recv_api.records(store, agent, include_control=True)
+                     if isinstance(r.get("id"), str) and r["id"] != head_id
+                     and r.get("kind") in LOOP_CONTROL_KINDS
+                     and classify_loop_control(store, r) == "stop"
+                     and not store.stand_down_honoured(agent, r["id"])]
+            if not found:
+                return False
+            return bool(store.record_stand_down_honoured(agent, found, at=now_iso()))
+        except Exception:  # noqa: BLE001 - a doubt never stands the wrapper down
+            return False
+
     while True:
         if max_polls is not None and polls >= max_polls:
             return turns
@@ -1544,6 +1579,8 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         now = clock()
         if marker_head is not None and (record is None or record.get("id") != marker_head):
             _drop_marker()                  # the parked head was consumed or is gone
+        if held_head_id is not None and (record is None or record.get("id") != held_head_id):
+            held_head_id = None             # the held head was consumed or is gone
         if on_idle_poll is not None:
             # Between turns by construction (no turn runs on this thread), on EVERY poll:
             # a head that is parked (usage limit, sticky config failure, blocked gate) must
@@ -1583,6 +1620,11 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             continue
         control = classify_loop_control(store, record)
         if control == "stop":
+            if store.stand_down_honoured(agent, record.get("id")):
+                # #488: an earlier wrapper already stood down for this release while a held head sat in front of
+                # it. The release is spent: consume it and keep running (the operator started this wrapper after it).
+                _commit(record)
+                continue
             # a VALID, authorized, human/emergency-marked release/end: the wrapper
             # owns loop-exit (the model is a pure handler). Consume it + STAND DOWN.
             _commit(record)
@@ -2087,6 +2129,9 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         # attempts_started already counted the crashed attempt toward the K_escalate ceiling.
         store.reconcile_crash_in_progress(agent, head_id, at=now_iso())
         rec = store.attempt_record(agent, head_id) or {}
+        if _head_is_held(record, rec) and _stand_down_behind_held_head(record):
+            # #488: between turns, before any park decision, re-probe or drive: no turn is started after this.
+            return turns
         usage_probe: dict | None = None
         if rec.get("park_state") in usage_park.PARK_STATES and not usage_limit_park:
             # Stopping retries is switched off but this head carries a park: drive it as

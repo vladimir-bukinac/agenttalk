@@ -853,6 +853,9 @@ def _gather_status(store: Store) -> dict:
         journal_label = _turn_journal_label(store, a, health)
         if journal_label is not None:  # additive: absent unless this project uses the journal
             row["turn_events"] = journal_label
+        stand_down = store.read_stand_down_status(a)
+        if stand_down is not None:  # additive (#488): the agent stood down behind a held message
+            row["stand_down"] = stand_down
         if fresh_status is not None:  # additive (#475): absent unless a start-fresh request exists
             row["fresh_request"] = fresh_status
         sup_row = supervisor_rows.get(a)
@@ -1659,6 +1662,8 @@ def cmd_status(args: argparse.Namespace) -> int:
             seen += f' progress="{text}" ({age_str})'
         if isinstance(a.get("turn_events"), str):
             seen += f" turn_events={a['turn_events']}"
+        if isinstance(a.get("stand_down"), dict):
+            seen += " stand_down=honoured(release unread behind a held message)"
         fresh = a.get("fresh_request")
         if isinstance(fresh, dict):
             if "pending" in fresh:

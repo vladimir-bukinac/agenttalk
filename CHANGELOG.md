@@ -61,6 +61,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The outcome is recorded in the session record (`fresh_request_*`) and projected by
   `Store.read_fresh_status` and, as the reset reason `fresh_requested`, by the dashboard reader.
 
+### Fixed
+
+- **A parked agent can now be stood down with `agenttalk release` (#488).** An agent whose next message it
+  cannot run is "parked": it keeps that message at the front of its queue and waits. Until now a `release`
+  sent to a parked agent was never read, so the agent kept running, and the only way to stop it was to kill
+  its process, which cannot be done safely from outside (it may be starting a paid model call at that
+  moment). Now the agent notices a valid release waiting behind the parked message
+  and stands itself down between turns, the same as an idle agent. It starts no turn after it has accepted
+  the stand-down. The parked message itself is not touched: it stays first in the queue and unread until
+  something resolves it. The release also stays unread for now (an agent has one reading position, so
+  reading the release would also have read the parked message); `agenttalk status` shows
+  `stand_down=honoured` for it until it is reached. When the agent is started again, it does not stand down a
+  second time for that release: it consumes it silently and runs.
+  Technical detail: `wrapper/loop.py` `_stand_down_behind_held_head` runs right after the head's attempt
+  record is read and before any park, re-probe or drive. It applies when the head is held (a sticky
+  `config_blocked`, a usage-limit or provider park, or a gateway hold that is re-driven every poll, which is
+  remembered in `held_head_id`). It validates the release with `classify_loop_control` (same authority rules
+  as an idle release), records its id with `Store.record_stand_down_honoured` (`state/<agent>.stand-down.json`,
+  20 entries, written before the loop returns; if it cannot be written the agent keeps running), and returns
+  without consuming or reordering the head. A later loop that reaches an honoured release consumes it without
+  exiting. Covers both drives and a new wrapper generation that meets the same parked head (it stands down
+  before the one re-probe).
+
 ## [0.101.1] - 2026-10-13
 
 **In short:** one fix for the paid gateway. When the model pauses for a long time in the middle
