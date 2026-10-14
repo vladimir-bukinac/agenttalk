@@ -1,0 +1,11 @@
+{
+  "distinct_results": 516,
+  "failed": 0,
+  "failures": [],
+  "checks_by_boundary": {
+    "checked_at_parse_java_source": 928,
+    "checked_at_file_result_to_json": 1941,
+    "checked_at_file_result_from_json": 873
+  },
+  "pytest_exit_status": 0
+}

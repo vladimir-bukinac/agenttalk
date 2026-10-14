@@ -1,0 +1,319 @@
+{
+  "S1": {
+    "canonical_digest_without_interpreter": "1f010580f6e787ea3710c4be8a48d39305de0da380717a6133bcf41fb0ec44ec",
+    "dialect": "python2",
+    "dialect_rule": "one_marker_kind",
+    "fully_read_share": 0.998,
+    "marker_counts": {
+      "files_with_python2_markers": 33,
+      "files_with_python3_markers": 0
+    },
+    "packaging": {
+      "dialect": null,
+      "python_classifiers": [],
+      "python_requires": null
+    },
+    "readers": {
+      "python-ast": 443,
+      "python-ast-repaired": 48,
+      "python-tokens": 1
+    },
+    "repairs": {
+      "except_comma": 24,
+      "long_suffix": 1,
+      "ne_diamond": 5,
+      "print_statement": 20,
+      "raise_comma": 7
+    },
+    "token_outline_files": [
+      "satchmo/apps/product/tests.py"
+    ],
+    "unreadable_files": []
+  },
+  "S2": {
+    "oracle_inside": 1005,
+    "oracle_inside_not_resolved": [],
+    "oracle_inside_resolved": 1005,
+    "resolver_inside_oracle_outside": [
+      [
+        "setup.py",
+        6,
+        "ez_setup"
+      ]
+    ],
+    "resolver_inside_oracle_outside_count": 1,
+    "share": 1.0
+  },
+  "S3": {
+    "composed_sample": [
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^accounts/address/edit/(?P<id>\\d+)/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/satchmo_store/contact/urls.py:16",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^history/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/satchmo_store/shop/urls.py:22",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^checkout/mustlogin/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/payment/urls.py:19",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^accounts/ajax_state/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/satchmo_store/contact/urls.py:18",
+        "view": "function"
+      },
+      {
+        "computed_prefix": true,
+        "conditional": false,
+        "pattern": "<computed>(?P<product_slug>[-\\w]+)/prices/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/product/urls/products.py:8",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^checkout/balance/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/payment/urls.py:17",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^cart/remove/ajax/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/satchmo_store/shop/urls.py:19",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^admin/(?P<product_id>\\d+)/variations/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/product/urls/base.py:19",
+        "view": "function"
+      },
+      {
+        "computed_prefix": true,
+        "conditional": false,
+        "pattern": "<computed>(?P<product_slug>[-\\w]+)/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/product/urls/products.py:6",
+        "view": "function"
+      },
+      {
+        "computed_prefix": true,
+        "conditional": false,
+        "pattern": "<computed>view/recent/$",
+        "root": "simple.urls",
+        "source": "satchmo/apps/product/urls/products.py:15",
+        "view": "function"
+      }
+    ],
+    "five_modules": {
+      "payment.modules.authorizenet.urls": 3,
+      "payment.modules.sagepay.urls": 4,
+      "payment.modules.sermepa.urls": 6,
+      "product.urls": 2,
+      "product.urls.products": 5
+    },
+    "local_only_reasons": {
+      "named by a string (loaded at run time, e.g. a provides registry)": 2,
+      "no static include chain from any ROOT_URLCONF found": 17
+    }
+  },
+  "S5": {
+    "full_claims_bytes": 1488742,
+    "interpreter": "3.10",
+    "timings_s": {
+      "prescan_s": 2.354,
+      "read_s": 1.54,
+      "resolve_s": 0.213,
+      "total_s": 4.249,
+      "walk_s": 0.135
+    }
+  },
+  "S6": {
+    "by_name_edges": 747,
+    "files": 126,
+    "sample": [
+      {
+        "line": 125,
+        "path": "satchmo/apps/satchmo_store/shop/migrations/0001_initial.py",
+        "value": "satchmo_utils.fields.CurrencyField"
+      },
+      {
+        "line": 60,
+        "path": "satchmo/apps/product/migrations/0013_add_pricelookup_index.py",
+        "value": "product.categoryimagetranslation"
+      },
+      {
+        "line": 14,
+        "path": "satchmo/apps/l10n/utils.py",
+        "value": "l10n.utils"
+      },
+      {
+        "line": 160,
+        "path": "satchmo/apps/product/migrations/0010_add_discountable_categories.py",
+        "value": "product.optiongrouptranslation"
+      },
+      {
+        "line": 21,
+        "path": "satchmo/apps/satchmo_utils/thumbnail/utils.py",
+        "value": "satchmo_utils.thumbnail"
+      },
+      {
+        "line": 64,
+        "path": "satchmo/apps/product/migrations/0009_add_categoryattributes.py",
+        "value": "satchmo_utils.thumbnail.field.ImageWithThumbnailField"
+      },
+      {
+        "line": 144,
+        "path": "satchmo/apps/product/migrations/0009_add_categoryattributes.py",
+        "value": "product.option"
+      },
+      {
+        "line": 138,
+        "path": "satchmo/apps/product/migrations/0004_remove_productattribute_name.py",
+        "value": "product.optiongroup"
+      },
+      {
+        "line": 274,
+        "path": "satchmo/apps/product/migrations/0003_add_productattribute_option.py",
+        "value": "product.subscriptionproduct"
+      },
+      {
+        "line": 192,
+        "path": "satchmo/apps/product/modules/downloadable/migrations/0002_update_contenttypes.py",
+        "value": "satchmo_utils.fields.CurrencyField"
+      },
+      {
+        "line": 33,
+        "path": "satchmo/apps/product/migrations/0007_add_discount_valid_products_field.py",
+        "value": "product.attributeoption"
+      },
+      {
+        "line": 66,
+        "path": "satchmo/apps/product/migrations/0008_remove_discount_validproducts_field.py",
+        "value": "product.categorytranslation"
+      },
+      {
+        "line": 16,
+        "path": "satchmo/apps/tax/modules/us_sst/config.py",
+        "value": "tax.modules.us_sst"
+      },
+      {
+        "line": 53,
+        "path": "satchmo/apps/product/modules/custom/migrations/0001_split.py",
+        "value": "product.category"
+      },
+      {
+        "line": 13,
+        "path": "satchmo/apps/shipping/config.py",
+        "value": "shipping.modules.per"
+      },
+      {
+        "line": 294,
+        "path": "satchmo/apps/product/migrations/0001_initial.py",
+        "value": "product.Product"
+      },
+      {
+        "line": 265,
+        "path": "satchmo/apps/product/migrations/0006_custom_textfield_add_constraint.py",
+        "value": "product.subscriptionproduct"
+      },
+      {
+        "line": 228,
+        "path": "satchmo/apps/product/migrations/0007_add_discount_valid_products_field.py",
+        "value": "satchmo_utils.thumbnail.field.ImageWithThumbnailField"
+      },
+      {
+        "line": 101,
+        "path": "satchmo/apps/product/modules/configurable/migrations/0001_split.py",
+        "value": "product.taxclass"
+      },
+      {
+        "line": 113,
+        "path": "satchmo/apps/product/migrations/0004_remove_productattribute_name.py",
+        "value": "satchmo_utils.fields.CurrencyField"
+      }
+    ]
+  },
+  "found": {
+    "classes": 553,
+    "entry_points": {
+      "cli_command": 10,
+      "cli_main": 14,
+      "http_filter": 18
+    },
+    "import_rules_resolved": {
+      "absolute": 889,
+      "py2_sibling": 118
+    },
+    "imports": {
+      "external": 1206,
+      "external_stdlib": 454,
+      "resolved": 1007
+    },
+    "include_outcomes": {
+      "computed_pattern": 3,
+      "include_by_suffix_ambiguous": 1,
+      "include_outside_scan_or_unresolved": 5,
+      "static_include_followed": 5
+    },
+    "local_classes_skipped": 0,
+    "models": {
+      "direct": 91,
+      "no": 458,
+      "via_scan": 4
+    },
+    "module_level_functions": 510,
+    "modules_named": 491,
+    "packages": 105,
+    "problems": {
+      "dynamic_import_unresolved": 6,
+      "partial_read": 1,
+      "python2_no_repair": 1,
+      "python2_repaired": 48,
+      "unsupported_entry_point_shape": 112
+    },
+    "python_files": 492,
+    "root_urlconfs": [
+      "simple.urls"
+    ],
+    "routes_composed": 60,
+    "routes_local_only": 64,
+    "settings_modules": 2,
+    "test_files": 22,
+    "unsupported_shapes": {
+      "admin_register": 52,
+      "signal_receiver": 46,
+      "template_tag": 14
+    },
+    "url_modules": 33,
+    "views": {
+      "external": 15,
+      "function": 108,
+      "module_only": 1
+    }
+  },
+  "interpreter": "3.10",
+  "label": "satchmo"
+}

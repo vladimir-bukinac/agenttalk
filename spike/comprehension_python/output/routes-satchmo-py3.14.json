@@ -1,0 +1,870 @@
+{
+ "composed": [
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/contact/urls.py:13",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/update/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/contact/urls.py:14",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/address/create/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/contact/urls.py:15",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/address/edit/(?P<id>\\d+)/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/contact/urls.py:16",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/address/delete/(?P<id>\\d+)/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/contact/urls.py:17",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/ajax_state/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/contact/urls.py:18",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/activate/(?P<activation_key>\\w+)/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:26",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/login/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:27",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/register/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:28",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/secure/login/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:29",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/logout/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:33",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/register/complete/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:39",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/password_reset/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:53",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/password_reset/done/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:54",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/password_change/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:55",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/password_change/done/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:56",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/reset/(?P<uidb36>[0-9A-Za-z]+)-(?P<token>.+)/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:57",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^accounts/reset/done/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/accounts/urls.py:58",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^admin/product/configurableproduct/(?P<id>\\d+)/getoptions/",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/base.py:5",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^admin/inventory/edit/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/base.py:11",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^inventory/export/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/base.py:13",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^inventory/import/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/base.py:15",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^admin/(?P<product_id>\\d+)/variations/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/base.py:19",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^admin/variations/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/base.py:21",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^admin/print/(?P<doc>[-\\w]+)/(?P<id>\\d+)",
+   "view": "function",
+   "source": "satchmo/apps/shipping/urls.py:5",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:10",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^add/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:11",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:12",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/accept/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:13",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/add/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:14",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/add/ajax/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:15",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/qty/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:16",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/qty/ajax/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:17",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/remove/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:18",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^cart/remove/ajax/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:19",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/$",
+   "view": "module_only",
+   "source": "satchmo/apps/payment/urls.py:12",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/success/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:13",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/custom/charge/(?P<orderitem_id>\\d+)/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:14",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/custom/charge/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:15",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/balance/(?P<order_id>\\d+)/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:16",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/balance/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:17",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/cron/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:18",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^checkout/mustlogin/$",
+   "view": "function",
+   "source": "satchmo/apps/payment/urls.py:19",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^contact/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:21",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^history/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:22",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^quickorder/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:23",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^tracking/(?P<order_id>\\d+)/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:24",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^search/$",
+   "view": "function",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:25",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>(?P<product_slug>[-\\w]+)/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/products.py:6",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>(?P<product_slug>[-\\w]+)/prices/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/products.py:8",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>(?P<product_slug>[-\\w]+)/price_detail/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/products.py:10",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>view/recent/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/products.py:15",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>view/bestsellers/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/products.py:17",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>(?P<parent_slugs>([-\\w]+/)*)?(?P<slug>[-\\w]+)/$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/category.py:4",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>$",
+   "view": "function",
+   "source": "satchmo/apps/product/urls/category.py:6",
+   "computed_prefix": true,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^contact/thankyou/$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:32",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^sitemap\\.xml$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/shop/urls.py:34",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "<computed>",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/urls/default.py:27",
+   "computed_prefix": true,
+   "conditional": true
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "^site_media/(.*)$",
+   "view": "external",
+   "source": "satchmo/apps/satchmo_store/urls/default.py:30",
+   "computed_prefix": false,
+   "conditional": true
+  },
+  {
+   "root": "simple.urls",
+   "pattern": "test/example/",
+   "view": "external",
+   "source": "satchmo/projects/simple/localsite/urls.py:5",
+   "computed_prefix": false,
+   "conditional": false
+  }
+ ],
+ "local_only": [
+  {
+   "module": "l10n.urls",
+   "pattern": "^setlang/$",
+   "view": "external",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.authorizenet.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.authorizenet.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.authorizenet.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.autosuccess.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.autosuccess.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.cod.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.cod.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.cod.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.cybersource.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.cybersource.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.cybersource.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.dummy.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.dummy.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.dummy.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.giftcertificate.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.giftcertificate.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.giftcertificate.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.giftcertificate.urls",
+   "pattern": "^balance/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.google.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.google.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.google.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.google.urls",
+   "pattern": "^notification/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.google.urls",
+   "pattern": "^confirmorder/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.paypal.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.paypal.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.paypal.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.paypal.urls",
+   "pattern": "^ipn/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.paypal.urls",
+   "pattern": "^confirmorder/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.purchaseorder.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.purchaseorder.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.purchaseorder.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sagepay.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sagepay.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sagepay.urls",
+   "pattern": "^secure3d/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sagepay.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sermepa.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sermepa.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sermepa.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sermepa.urls",
+   "pattern": "^failure/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sermepa.urls",
+   "pattern": "^notify/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.sermepa.urls",
+   "pattern": "^confirmorder/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.trustcommerce.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.trustcommerce.urls",
+   "pattern": "^confirm/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "payment.modules.trustcommerce.urls",
+   "pattern": "^success/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo.projects.skeleton.localsite.urls",
+   "pattern": "example/",
+   "view": "external",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.brand.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.brand.urls",
+   "pattern": "^(?P<brandname>.*)/(?P<catname>.*)/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.brand.urls",
+   "pattern": "^(?P<brandname>.*)/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.newsletter.urls",
+   "pattern": "^subscribe/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.newsletter.urls",
+   "pattern": "^subscribe/ajah/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.newsletter.urls",
+   "pattern": "^unsubscribe/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.newsletter.urls",
+   "pattern": "^unsubscribe/ajah/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.newsletter.urls",
+   "pattern": "^update/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.product_feeds.urls",
+   "pattern": "atom/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.product_feeds.urls",
+   "pattern": "atom/(?P<category>([-\\w])*)/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.product_feeds.urls",
+   "pattern": "products.csv$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.productratings.urls",
+   "pattern": "^view/bestrated/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "satchmo_ext.wishlist.urls",
+   "pattern": "^$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.wishlist.urls",
+   "pattern": "^add/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.wishlist.urls",
+   "pattern": "^add/ajax/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.wishlist.urls",
+   "pattern": "^remove/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.wishlist.urls",
+   "pattern": "^remove/ajax$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "satchmo_ext.wishlist.urls",
+   "pattern": "^add_cart/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  }
+ ]
+}

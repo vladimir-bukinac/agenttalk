@@ -1,0 +1,613 @@
+{
+  "S1": {
+    "canonical_digest_without_interpreter": "996d50d2c71cf0808243211867431f4f3986eebfc3c30fdb4f80ce3dd04cbfb4",
+    "dialect": "python3",
+    "dialect_rule": "packaging",
+    "fully_read_share": 1.0,
+    "marker_counts": {
+      "files_with_python2_markers": 0,
+      "files_with_python3_markers": 96
+    },
+    "packaging": {
+      "dialect": "python3",
+      "python_classifiers": [],
+      "python_requires": ">=3.6"
+    },
+    "readers": {
+      "python-ast": 1638
+    },
+    "repairs": {},
+    "token_outline_files": [],
+    "unreadable_files": []
+  },
+  "S2": {
+    "oracle_inside": 8547,
+    "oracle_inside_not_resolved": [
+      [
+        "shuup/front/views/order.py",
+        40,
+        "shuup.shop.views.activation_views|OneShotActivationForm",
+        "unresolved_internal"
+      ]
+    ],
+    "oracle_inside_resolved": 8546,
+    "resolver_inside_oracle_outside": [
+      [
+        "setup.py",
+        11,
+        "shuup_setup_utils"
+      ],
+      [
+        "_misc/check_sanity.py",
+        32,
+        "sanity_utils|find_files"
+      ],
+      [
+        "_misc/doccov.py",
+        18,
+        "sanity_utils|find_files"
+      ],
+      [
+        "_misc/ensure_code_style.py",
+        14,
+        "sanity_utils|IGNORED_DIRS"
+      ],
+      [
+        "_misc/ensure_code_style.py",
+        14,
+        "sanity_utils|XNodeVisitor"
+      ],
+      [
+        "_misc/ensure_code_style.py",
+        14,
+        "sanity_utils|dotify_ast_name"
+      ],
+      [
+        "_misc/ensure_code_style.py",
+        14,
+        "sanity_utils|find_files"
+      ],
+      [
+        "_misc/ensure_code_style.py",
+        14,
+        "sanity_utils|get_assign_first_target"
+      ],
+      [
+        "_misc/ensure_license_headers.py",
+        15,
+        "sanity_utils"
+      ],
+      [
+        "_misc/ensure_unicode_literals.py",
+        11,
+        "sanity_utils|XNodeVisitor"
+      ],
+      [
+        "_misc/ensure_unicode_literals.py",
+        11,
+        "sanity_utils|find_files"
+      ],
+      [
+        "doc/conf.py",
+        44,
+        "shuup_introspection_helper"
+      ],
+      [
+        "shuup_tests/conftest.py",
+        21,
+        "shuup_tests.utils.fixtures|*"
+      ],
+      [
+        "shuup_tests/admin/test_active_shop_and_supplier.py",
+        14,
+        "shuup_tests.utils|SmartClient"
+      ],
+      [
+        "shuup_tests/admin/test_authentication.py",
+        13,
+        "shuup_tests.utils|SmartClient"
+      ],
+      [
+        "shuup_tests/admin/test_category_module.py",
+        24,
+        "shuup_tests.utils|empty_iterable"
+      ],
+      [
+        "shuup_tests/admin/test_category_module.py",
+        25,
+        "shuup_tests.utils.forms|get_form_data"
+      ],
+      [
+        "shuup_tests/admin/test_contact_edit.py",
+        25,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_contact_group_edit.py",
+        23,
+        "shuup_tests.utils.forms|get_form_data"
+      ],
+      [
+        "shuup_tests/admin/test_contact_module.py",
+        25,
+        "shuup_tests.utils|empty_iterable"
+      ],
+      [
+        "shuup_tests/admin/test_contact_price_display.py",
+        30,
+        "shuup_tests.utils.fixtures|regular_user"
+      ],
+      [
+        "shuup_tests/admin/test_login_with_email.py",
+        14,
+        "shuup_tests.utils.fixtures|REGULAR_USER_PASSWORD"
+      ],
+      [
+        "shuup_tests/admin/test_login_with_email.py",
+        14,
+        "shuup_tests.utils.fixtures|regular_user"
+      ],
+      [
+        "shuup_tests/admin/test_mass_actions.py",
+        27,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_media_module.py",
+        28,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        27,
+        "shuup_tests.admin.fixtures.test_module|ARestrictedTestModule"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        27,
+        "shuup_tests.admin.fixtures.test_module|ATestModule"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        28,
+        "shuup_tests.utils|empty_iterable"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        29,
+        "shuup_tests.utils.faux_users|AnonymousUser"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        29,
+        "shuup_tests.utils.faux_users|AuthenticatedUser"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        29,
+        "shuup_tests.utils.faux_users|StaffUser"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        29,
+        "shuup_tests.utils.faux_users|SuperUser"
+      ],
+      [
+        "shuup_tests/admin/test_modules.py",
+        30,
+        "shuup_tests.utils.templates|get_templates_setting_for_specific_directories"
+      ],
+      [
+        "shuup_tests/admin/test_object_select_view.py",
+        36,
+        "shuup_tests.utils.fixtures|regular_user"
+      ],
+      [
+        "shuup_tests/admin/test_order_creator.py",
+        37,
+        "shuup_tests.utils|assert_contains"
+      ],
+      [
+        "shuup_tests/admin/test_order_creator.py",
+        37,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_order_mass_actions.py",
+        25,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_password_reset.py",
+        15,
+        "shuup_tests.utils.fixtures|REGULAR_USER_EMAIL"
+      ],
+      [
+        "shuup_tests/admin/test_password_reset.py",
+        15,
+        "shuup_tests.utils.fixtures|REGULAR_USER_PASSWORD"
+      ],
+      [
+        "shuup_tests/admin/test_permission_groups_module.py",
+        18,
+        "shuup_tests.admin.fixtures.test_module|ARestrictedTestModule"
+      ],
+      [
+        "shuup_tests/admin/test_permission_groups_module.py",
+        19,
+        "shuup_tests.utils.fixtures|regular_user"
+      ],
+      [
+        "shuup_tests/admin/test_permissions.py",
+        36,
+        "shuup_tests.admin.fixtures.test_module|ARestrictedTestModule"
+      ],
+      [
+        "shuup_tests/admin/test_permissions.py",
+        37,
+        "shuup_tests.utils.faux_users|StaffUser"
+      ],
+      [
+        "shuup_tests/admin/test_picotable.py",
+        31,
+        "shuup_tests.utils|empty_iterable"
+      ],
+      [
+        "shuup_tests/admin/test_picotable.py",
+        32,
+        "shuup_tests.utils.fixtures|regular_user"
+      ],
+      [
+        "shuup_tests/admin/test_product_attributes_form.py",
+        17,
+        "shuup_tests.utils.forms|get_form_data"
+      ],
+      [
+        "shuup_tests/admin/test_product_create.py",
+        19,
+        "shuup_tests.utils|SmartClient"
+      ],
+      [
+        "shuup_tests/admin/test_product_mass_edit.py",
+        16,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_product_module.py",
+        42,
+        "shuup_tests.admin.utils|admin_only_urls"
+      ],
+      [
+        "shuup_tests/admin/test_product_module.py",
+        43,
+        "shuup_tests.utils|empty_iterable"
+      ],
+      [
+        "shuup_tests/admin/test_product_package.py",
+        19,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_product_package.py",
+        20,
+        "shuup_tests.utils.forms|get_form_data"
+      ],
+      [
+        "shuup_tests/admin/test_product_validation.py",
+        13,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_select_view.py",
+        29,
+        "shuup_tests.utils.fixtures|regular_user"
+      ],
+      [
+        "shuup_tests/admin/test_shop_edit.py",
+        25,
+        "shuup_tests.utils|SmartClient"
+      ],
+      [
+        "shuup_tests/admin/test_shop_edit.py",
+        25,
+        "shuup_tests.utils|printable_gibberish"
+      ],
+      [
+        "shuup_tests/admin/test_shop_edit.py",
+        26,
+        "shuup_tests.utils.forms|get_form_data"
+      ],
+      [
+        "shuup_tests/admin/test_tax_module.py",
+        15,
+        "shuup_tests.admin.utils|admin_only_urls"
+      ],
+      [
+        "shuup_tests/admin/test_urls.py",
+        16,
+        "shuup_tests.admin.utils|admin_only_urls"
+      ],
+      [
+        "shuup_tests/admin/test_user_module.py",
+        45,
+        "shuup_tests.utils|printable_gibberish"
+      ]
+    ],
+    "resolver_inside_oracle_outside_count": 313,
+    "share": 0.9999
+  },
+  "S3": {
+    "composed_sample": [
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^order/payment/(?P<pk>.+?)/(?P<key>.+?)/$",
+        "root": "shuup_workbench.test_urls",
+        "source": "shuup/front/urls.py:69",
+        "view": "class"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^stop-impersonating/$",
+        "root": "shuup_workbench.test_urls",
+        "source": "shuup/front/urls.py:67",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^stop-impersonating/$",
+        "root": "shuup_workbench.urls",
+        "source": "shuup/front/urls.py:67",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^order/get-attachment/(?P<order_pk>\\d+)/(?P<key>.+?)/(?P<att_pk>\\d+)/",
+        "root": "shuup_workbench.test_urls",
+        "source": "shuup/front/urls.py:89",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^c/$",
+        "root": "shuup_workbench.test_urls",
+        "source": "shuup/front/urls.py:100",
+        "view": "class"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^force-company-contact/$",
+        "root": "shuup_workbench.urls",
+        "source": "shuup/front/urls.py:65",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^order/get-attachment/(?P<order_pk>\\d+)/(?P<key>.+?)/(?P<att_pk>\\d+)/",
+        "root": "shuup_workbench.urls",
+        "source": "shuup/front/urls.py:89",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^toggle-allseeing/$",
+        "root": "shuup_workbench.test_urls",
+        "source": "shuup/front/urls.py:63",
+        "view": "function"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^c/$",
+        "root": "shuup_workbench.urls",
+        "source": "shuup/front/urls.py:100",
+        "view": "class"
+      },
+      {
+        "computed_prefix": false,
+        "conditional": false,
+        "pattern": "^s/(?P<supplier_pk>\\d+)-(?P<pk>\\d+)-(?P<slug>.*)/$",
+        "root": "shuup_workbench.test_urls",
+        "source": "shuup/front/urls.py:95",
+        "view": "class"
+      }
+    ],
+    "five_modules": {
+      "shuup.front.apps.auth.urls": 6,
+      "shuup.front.urls": 24,
+      "shuup.testing.single_page_checkout_test_urls": 5,
+      "shuup.xtheme.urls": 7,
+      "shuup_workbench.test_urls": 3
+    },
+    "local_only_reasons": {
+      "named by a string (loaded at run time, e.g. a provides registry)": 9,
+      "no static include chain from any ROOT_URLCONF found": 4
+    }
+  },
+  "S5": {
+    "full_claims_bytes": 5870199,
+    "interpreter": "3.10",
+    "timings_s": {
+      "prescan_s": 10.053,
+      "read_s": 7.532,
+      "resolve_s": 2.888,
+      "total_s": 20.779,
+      "walk_s": 0.286
+    }
+  },
+  "S6": {
+    "by_name_edges": 1770,
+    "files": 338,
+    "sample": [
+      {
+        "line": 18,
+        "path": "shuup_tests/customer_group_pricing/test_form.py",
+        "value": "shuup.customer_group_pricing"
+      },
+      {
+        "line": 21,
+        "path": "shuup/importer/apps.py",
+        "value": "shuup.importer.admin_module:ImportAdminModule"
+      },
+      {
+        "line": 3788,
+        "path": "shuup/core/migrations/0001_squashed_0039_alter_names.py",
+        "value": "shuup.servicebehaviorcomponent"
+      },
+      {
+        "line": 93,
+        "path": "shuup/admin/utils/product.py",
+        "value": "shuup.core.catalog.tasks.index_shop_product"
+      },
+      {
+        "line": 302,
+        "path": "shuup_tests/admin/test_content.py",
+        "value": "shuup.simple_cms"
+      },
+      {
+        "line": 60,
+        "path": "shuup/front/apps/registration/__init__.py",
+        "value": "shuup.front.apps.registration.notify_events:CompanyActivatedEmailScriptTemplate"
+      },
+      {
+        "line": 309,
+        "path": "shuup/xtheme/models.py",
+        "value": "shuup.Shop"
+      },
+      {
+        "line": 613,
+        "path": "shuup/core/migrations/0001_squashed_0039_alter_names.py",
+        "value": "shuup.ContactGroup"
+      },
+      {
+        "line": 26,
+        "path": "shuup_tests/front/test_auth.py",
+        "value": "shuup.front.apps.auth"
+      },
+      {
+        "line": 79,
+        "path": "shuup/discounts/migrations/0001_initial.py",
+        "value": "shuup.Category"
+      },
+      {
+        "line": 240,
+        "path": "shuup_tests/admin/test_object_select_view.py",
+        "value": "shuup.product"
+      },
+      {
+        "line": 356,
+        "path": "shuup/core/migrations/0001_initial.py",
+        "value": "shuup.ImmutableAddress"
+      },
+      {
+        "line": 24,
+        "path": "shuup_tests/xtheme/test_extenders.py",
+        "value": "shuup_tests.xtheme.test_extenders:TestExtender"
+      },
+      {
+        "line": 50,
+        "path": "shuup/front/__init__.py",
+        "value": "shuup.front.forms.product_list_modifiers.ProductPriceFilter"
+      },
+      {
+        "line": 44,
+        "path": "shuup/testing/migrations/0001_squashed_0003_update_managers.py",
+        "value": "shuup.ServiceBehaviorComponent"
+      },
+      {
+        "line": 24,
+        "path": "shuup/simple_supplier/admin_module/__init__.py",
+        "value": "shuup.simple_supplier.admin_module.views.process_stock_adjustment"
+      },
+      {
+        "line": 29,
+        "path": "shuup/campaigns/migrations/0018_help-text-improvements.py",
+        "value": "shuup.Supplier"
+      },
+      {
+        "line": 31,
+        "path": "shuup_tests/reports/test_admin_permissions.py",
+        "value": "shuup.default_reports.reports.sales_per_hour:SalesPerHour"
+      },
+      {
+        "line": 65,
+        "path": "shuup_tests/admin/test_admin_menu_arrange_supplier.py",
+        "value": "shuup.testing.shop_provider.TestingAdminShopProvider"
+      },
+      {
+        "line": 68,
+        "path": "shuup/core/migrations/0039_alter_names.py",
+        "value": "shuup.Contact"
+      }
+    ]
+  },
+  "found": {
+    "classes": 2188,
+    "entry_points": {
+      "cli_command": 11,
+      "cli_main": 11,
+      "http_filter": 24
+    },
+    "import_rules_resolved": {
+      "absolute": 8138,
+      "relative": 721
+    },
+    "imports": {
+      "ambiguous_suffix": 7,
+      "external": 4111,
+      "external_stdlib": 1351,
+      "resolved": 8859,
+      "unresolved_internal": 1
+    },
+    "include_outcomes": {
+      "static_include_followed": 4
+    },
+    "local_classes_skipped": 17,
+    "models": {
+      "direct": 55,
+      "no": 2038,
+      "via_external_base": 53,
+      "via_scan": 42
+    },
+    "module_level_functions": 3078,
+    "modules_named": 1638,
+    "packages": 234,
+    "problems": {
+      "base_not_static": 13,
+      "dynamic_import_unresolved": 7,
+      "settings_value_not_static": 1,
+      "unsupported_entry_point_shape": 250
+    },
+    "python_files": 1638,
+    "root_urlconfs": [
+      "shuup_workbench.test_urls",
+      "shuup_workbench.urls"
+    ],
+    "routes_composed": 49,
+    "routes_local_only": 50,
+    "settings_modules": 33,
+    "test_files": 400,
+    "unsupported_shapes": {
+      "appconfig_ready": 14,
+      "route_helper:admin_url": 144,
+      "signal_receiver": 91,
+      "wsgi_application": 1
+    },
+    "url_modules": 17,
+    "views": {
+      "class": 61,
+      "dynamic": 1,
+      "external": 10,
+      "function": 27
+    }
+  },
+  "interpreter": "3.10",
+  "label": "shuup"
+}

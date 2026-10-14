@@ -1,0 +1,698 @@
+{
+ "composed": [
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^admin/",
+   "view": "external",
+   "source": "shuup_workbench/test_urls.py:17",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^set-language/$",
+   "view": "external",
+   "source": "shuup/front/urls.py:57",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^i18n.js$",
+   "view": "function",
+   "source": "shuup/front/urls.py:58",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^checkout/$",
+   "view": "external",
+   "source": "shuup/front/urls.py:59",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^checkout/(?P<phase>.+)/$",
+   "view": "external",
+   "source": "shuup/front/urls.py:60",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^basket/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:61",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^dashboard/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:62",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^toggle-allseeing/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:63",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^force-anonymous-contact/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:64",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^force-company-contact/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:65",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^force-person-contact/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:66",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^stop-impersonating/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:67",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^upload-media/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:68",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^order/payment/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:69",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^order/process-payment/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:75",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^order/payment-canceled/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:81",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^order/complete/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:87",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^order/verification/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:88",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^order/get-attachment/(?P<order_pk>\\d+)/(?P<key>.+?)/(?P<att_pk>\\d+)/",
+   "view": "function",
+   "source": "shuup/front/urls.py:89",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^p/(?P<pk>\\d+)-(?P<slug>.*)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:94",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^s/(?P<supplier_pk>\\d+)-(?P<pk>\\d+)-(?P<slug>.*)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:95",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^c/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:100",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^c/(?P<pk>\\d+)-(?P<slug>.*)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:101",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^tz/",
+   "view": "class",
+   "source": "shuup/front/urls.py:102",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.test_urls",
+   "pattern": "^$",
+   "view": "class",
+   "source": "shuup/front/urls.py:119",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^set-language/$",
+   "view": "external",
+   "source": "shuup/front/urls.py:57",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^i18n.js$",
+   "view": "function",
+   "source": "shuup/front/urls.py:58",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^checkout/$",
+   "view": "external",
+   "source": "shuup/front/urls.py:59",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^checkout/(?P<phase>.+)/$",
+   "view": "external",
+   "source": "shuup/front/urls.py:60",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^basket/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:61",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^dashboard/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:62",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^toggle-allseeing/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:63",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^force-anonymous-contact/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:64",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^force-company-contact/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:65",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^force-person-contact/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:66",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^stop-impersonating/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:67",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^upload-media/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:68",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^order/payment/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:69",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^order/process-payment/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:75",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^order/payment-canceled/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:81",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^order/complete/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:87",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^order/verification/(?P<pk>.+?)/(?P<key>.+?)/$",
+   "view": "function",
+   "source": "shuup/front/urls.py:88",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^order/get-attachment/(?P<order_pk>\\d+)/(?P<key>.+?)/(?P<att_pk>\\d+)/",
+   "view": "function",
+   "source": "shuup/front/urls.py:89",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^p/(?P<pk>\\d+)-(?P<slug>.*)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:94",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^s/(?P<supplier_pk>\\d+)-(?P<pk>\\d+)-(?P<slug>.*)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:95",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^c/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:100",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^c/(?P<pk>\\d+)-(?P<slug>.*)/$",
+   "view": "class",
+   "source": "shuup/front/urls.py:101",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^tz/",
+   "view": "class",
+   "source": "shuup/front/urls.py:102",
+   "computed_prefix": false,
+   "conditional": false
+  },
+  {
+   "root": "shuup_workbench.urls",
+   "pattern": "^$",
+   "view": "class",
+   "source": "shuup/front/urls.py:119",
+   "computed_prefix": false,
+   "conditional": false
+  }
+ ],
+ "local_only": [
+  {
+   "module": "shuup.front.apps.auth.urls",
+   "pattern": "^login/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.auth.urls",
+   "pattern": "^logout/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.auth.urls",
+   "pattern": "^recover-password/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.auth.urls",
+   "pattern": "^recover-password/(?P<uidb64>.+)/(?P<token>.+)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.auth.urls",
+   "pattern": "^recover-password/sent/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.auth.urls",
+   "pattern": "^recover-password/complete/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^address-book/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^address-book/edit/(?P<pk>\\d+)$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^address-book/edit/new$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^address-book/delete/(?P<pk>\\d+)$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^customer/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^customer/change-password/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.customer_information.urls",
+   "pattern": "^company/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.personal_order_history.urls",
+   "pattern": "^order-history/re-order/(?P<pk>.+)/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.personal_order_history.urls",
+   "pattern": "^order-history/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.personal_order_history.urls",
+   "pattern": "^order-history/(?P<pk>.+)/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.registration.urls",
+   "pattern": "^activate/complete/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.registration.urls",
+   "pattern": "^activate/(?P<activation_key>\\w+)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.registration.urls",
+   "pattern": "^register/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.registration.urls",
+   "pattern": "^register/company/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.registration.urls",
+   "pattern": "^register/complete/$",
+   "view": "function",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.front.apps.saved_carts.urls",
+   "pattern": "^saved-carts/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.saved_carts.urls",
+   "pattern": "^saved-carts/save/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.saved_carts.urls",
+   "pattern": "^saved-carts/(?P<pk>\\d+)/add/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.saved_carts.urls",
+   "pattern": "^saved-carts/(?P<pk>\\d+)/delete/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.saved_carts.urls",
+   "pattern": "^saved-carts/(?P<pk>.+)/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.front.apps.simple_search.urls",
+   "pattern": "^search/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.gdpr.urls",
+   "pattern": "^gdpr/policy-consent/(?P<page_id>\\d+)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.gdpr.urls",
+   "pattern": "^gdpr/consent/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.gdpr.urls",
+   "pattern": "^gdpr/download_data/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.gdpr.urls",
+   "pattern": "^gdpr/anonymize/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.gdpr.urls",
+   "pattern": "^gdpr/customer/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.simple_cms.urls",
+   "pattern": "^(?P<url>.*)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.checkout_with_login_and_register_urls",
+   "pattern": "^checkout/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.checkout_with_login_and_register_urls",
+   "pattern": "^checkout/(?P<phase>.+)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.checkout_with_login_and_register_urls",
+   "pattern": "admin/",
+   "view": "external",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.single_page_checkout_test_urls",
+   "pattern": "^checkout/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.single_page_checkout_test_urls",
+   "pattern": "^checkout/(?P<phase>.+)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.single_page_checkout_test_urls",
+   "pattern": "admin/",
+   "view": "external",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.single_page_checkout_with_login_and_register_conf",
+   "pattern": "^checkout/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.single_page_checkout_with_login_and_register_conf",
+   "pattern": "^checkout/(?P<phase>.+)/$",
+   "view": "class",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.testing.single_page_checkout_with_login_and_register_conf",
+   "pattern": "admin/",
+   "view": "external",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "^xtheme/editor/$",
+   "view": "class",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "^xtheme/(?P<view>.+)/?$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "^xtheme/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "^xtheme-prod-hl/(?P<plugin_type>.*)/(?P<cutoff_days>\\d+)/(?P<count>\\d+)/(?P<cache_timeout>\\d+)/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "<computed>",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "^xtheme-cat-products-hl/(?P<category_id>\\d+)/(?P<count>\\d+)/(?P<cache_timeout>\\d+)/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup.xtheme.urls",
+   "pattern": "^xtheme-prod-selections-hl/(?P<product_ids>.*)/(?P<cache_timeout>\\d+)/$",
+   "view": "function",
+   "reason": "no static include chain from any ROOT_URLCONF found"
+  },
+  {
+   "module": "shuup_tests.notify.notification_test_urls",
+   "pattern": "test/(?P<arg>.+)/$",
+   "view": "dynamic",
+   "reason": "named by a string (loaded at run time, e.g. a provides registry)"
+  }
+ ]
+}

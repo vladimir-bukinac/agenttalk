@@ -1,0 +1,1 @@
+l10n,payment,product,satchmo_ext,satchmo_store,satchmo_utils,shipping,tax,satchmo
