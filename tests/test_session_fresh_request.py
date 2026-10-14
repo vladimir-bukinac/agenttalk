@@ -556,3 +556,59 @@ def test_a_failed_save_that_did_not_land_still_restores_the_old_session(tmp_path
         session.apply_fresh_request(s, "beta", state, lambda st: session.save_session(s, "beta", st))
 
     assert state.claude_session_id == OLD_ID and s.read_fresh_request("beta") is not None
+
+
+# ------------------------------------------- the supervisor's list and the store's lock order (#483 CI)
+
+
+def test_the_supervisor_knows_session_so_a_reason_word_is_not_taken_for_the_command() -> None:
+    from agenttalk import supervisor as sup
+
+    # "reset" is a real agenttalk command; inside --reason it must not become the subcommand
+    line = "agenttalk --root D:/p session fresh --for beta --reason reset"
+    inv = sup._agenttalk_invocation(line, "D:/p")
+    assert inv["subcommand"] == "session" and inv["args"][:2] == ["fresh", "--for"]
+    assert "session" in sup._AGENTTALK_SUBCOMMANDS
+
+
+def test_the_request_marker_locks_keep_the_store_lock_order(tmp_path) -> None:
+    from agenttalk import lock_order
+
+    s = _store(tmp_path)
+    marker = {"agent": "beta", "request_id": "fr-cccccccccccc", "reason": "x", "requested_by": "lead"}
+    assert s.write_fresh_request("beta", marker)  # nothing held: allowed
+    assert not s.write_fresh_request("beta", marker)
+    # a lock ranked above the config lock may not be held when the marker lock is taken: the order is enforced
+    with lock_order.hold(s.dir, s.dir / "message-publication"):
+        with pytest.raises(TimeoutError, match="lock order inversion"):
+            s.clear_fresh_request("beta", "fr-cccccccccccc")
+        with pytest.raises(TimeoutError, match="lock order inversion"):
+            s.write_fresh_request("gamma", marker)
+    assert s.read_fresh_request("beta") is not None  # the refused clear changed nothing
+    assert s.clear_fresh_request("beta", "fr-cccccccccccc")
+    assert not getattr(lock_order._local, "held", None)  # nothing is left held
+
+
+def test_the_wrapper_applies_a_request_with_no_store_lock_held(tmp_path) -> None:
+    from agenttalk import lock_order
+
+    s = _store(tmp_path)
+    state = _claude_state()
+    held_at_save: list = []
+
+    def persist(st) -> None:
+        held_at_save.append(dict(getattr(lock_order._local, "held", None) or {}))
+        session.save_session(s, "beta", st)
+
+    _request(s)
+    loop.run_loop(s, "beta", lambda rec: True, clock=lambda: 0.0, sleep=lambda d: None, max_polls=2,
+                  on_idle_poll=lambda: run._apply_fresh_request(s, "beta", state, persist))
+    _request(s, rid="fr-dddddddddddd")
+    s.send(sender="lead", recipient="beta", body="work", kind="message", meta={})
+    spawn_calls: list = []
+    drive = run.make_drive(s, "beta", "claude", state, ["claude"], clock=lambda: 0.0, render=False,
+                           persist=persist, spawn=lambda a, i: spawn_calls.append(a) or _ok_lines())
+    loop.run_loop(s, "beta", drive, clock=lambda: 0.0, sleep=lambda d: None, max_turns=1)
+
+    assert held_at_save and all(not h for h in held_at_save)  # idle path and turn-start path
+    assert s.read_fresh_request("beta") is None
