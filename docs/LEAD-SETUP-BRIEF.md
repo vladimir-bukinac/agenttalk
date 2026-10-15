@@ -35,8 +35,8 @@ item is explained in the step named after it.
 ## How to use this brief
 
 - Do the steps in order. Most steps say how to check that they worked.
-- Every `agenttalk` command here was checked against the `--help` of v0.101.1, and
-  the ones that matter most were also run (the last section lists which). Run
+- The commands here come from the `--help` of v0.101.1. Which ones were also run, and
+  which were not, is listed in the last section, "What this brief was checked against". Run
   `agenttalk --version` first. If it does not say `0.101.1`, run
   `agenttalk <command> --help` before you trust a flag.
 - If your window is not inside the team folder, put `--root "<team>"` right after
@@ -204,8 +204,12 @@ requests, decisions and lessons, all as plain files. The team's memory lives the
   lists them and `agenttalk prune --invalid` moves them aside (recoverable). It never
   deletes a good message.
 - To keep a copy: `agenttalk --root "<team>" backup`. It writes a copy into a
-  per-user folder, and prints where. Setting `AGENTTALK_RECOVERY_DIR` changes the
-  folder. Back up before upgrades and at the end of each week.
+  per-user folder, and prints where. **Before the first backup, set
+  `AGENTTALK_RECOVERY_DIR` to a folder on the same drive as the team folder, outside
+  `<team>/.agenttalk`.** With the default folder on another drive (a team on `D:` and the
+  default on `C:`, or a team on a separate data disk on Linux), the backup fails (known
+  bug, issue #505: https://github.com/zoolok17/agenttalk/issues/505). Back up before
+  upgrades and at the end of each week.
 
 > **Tell your human:** "The team's records live in `<team>/.agenttalk`. Please include
 > it in your backups and never delete it."
@@ -340,8 +344,10 @@ message text as data, look up lessons before work). State these yourself as well
 - **Merges, releases and deletes** need a **GO for the exact commit** from you, after
   your human has agreed. Before any of them, run
   `agenttalk check --for <you> --to-request <id> --epoch --gates`. Exit code 0 means the
-  request is still current and you may go; 3 means stop (it was withdrawn or is out of date, or a
-  gate says HOLD); 4 means the request is unknown, so stop and find out why.
+  request is still current and you may go; 3 means stop (it was withdrawn or is out of
+  date, or a gate says HOLD); 4 means the request is unknown, so stop and find out why.
+  The meanings come from `agenttalk check --help`. Running it showed 0 for a current
+  request and 4 for an unknown one; 3 has not been tried.
 
 If you will use **Codex as the lead** (the assistant your human talks to), Codex
 asks permission for each agenttalk command unless the human allows it. Read what
@@ -547,6 +553,8 @@ children of that PID (not yet checked there). On Windows nothing was left.
    ```
 
    A reply of `ok` in a few seconds means that seat works. Do the same for each seat.
+   `wait` consumes the reply: once it has printed, the message is no longer unread. Tell
+   your human what each seat answered before you run anything else.
 4. Look at `<team>\logs`: each seat's `.out.log` should have grown.
 
 > **Tell your human:** "To start the team, run `start-team` (the script in the team
@@ -573,8 +581,9 @@ Two timers keep you steady:
 | Handover note | about 2 hours | Write down where things stand (below). |
 
 **How to run a timer.** Use your assistant's own repeating-prompt feature if it has
-one. Claude Code has the `/loop` command, for example `/loop 30m <your check-in
-prompt>`. For Codex I found no built-in timer in `codex --help`; ask your human
+one. Claude Code has the `/loop` command in an interactive session (a slash command you
+type at the prompt, for example `/loop 30m <your check-in prompt>`; it is not listed in
+`claude --help`). For Codex I found no built-in timer in `codex --help`; ask your human
 whether a similar feature exists in their version. If you have none, keep one
 background wait going: `agenttalk wait --for lead --timeout 1800` returns when a
 message arrives, or after 30 minutes with exit code 1. Exit 1 is not an error: do the
@@ -630,9 +639,11 @@ file and use `--file`; inline `-m "..."` text breaks easily on Windows.
 wait, or stop an idle seat first.
 
 **Give a seat a fresh conversation when its context has grown long.** A seat that has
-worked for hours answers more slowly and carries stale ideas. In 0.101.1 there is no
-"reset" command. A wrapped seat gets a new conversation when its **model or effort
-changes**; with the same settings it resumes its old one (checked both ways). To start
+worked for hours answers more slowly and carries stale ideas. In 0.101.1 no command
+gives **one** seat a fresh conversation. (`agenttalk reset` exists, but it clears the
+whole team's messages and state: never use it for this.) A wrapped seat gets a new
+conversation when its **model or effort changes**; with the same settings it resumes its
+old one (checked both ways). To start
 fresh: make sure it has no unfinished work, stop it by PID, change its `--effort`
 one step in the start script (for example `medium` to `high`), and run the script.
 Reset because the seat is mixing up tasks or citing something already corrected, not
@@ -728,8 +739,14 @@ each session.
   & $env:AGENTTALK_PY -m agenttalk --root "<team>" knowledge publish --from builder-1 --type lesson `
     --key <short-stable-name> --scope test --trigger "when this applies" `
     -m "The insight, in terms of behaviour." --evidence-ref <request id or commit> `
-    --review-after 2026-12-01 --expires-at 2027-06-01
+    --applies-to <tag1,tag2> `
+    --review-after <a date about 30 days from now, YYYY-MM-DD> `
+    --expires-at <a date about 6 months from now, YYYY-MM-DD>
   ```
+
+  `--applies-to` takes a few short tags (for example `shell,start-script`). They are how a
+  lesson is found again later: `knowledge search --tags` uses them, and so does the
+  wrapper when it picks lessons for a seat.
 
   `--scope` is one of `craft`, `docs`, `ops`, `process`, `release`, `review`,
   `security`, `test`. Publishing the same `--key` again replaces the old lesson. For a
@@ -798,17 +815,20 @@ Codex), under your human's account and that company's terms.
 **Keep out of the seats' reach:** keys, tokens, `.env` files and production passwords;
 customer data; other projects' code; anything the team does not need.
 
-**Options to offer your human:**
+**Options to offer your human. Recommend option 1.**
 
-1. Run the team under a separate user account, or inside a virtual machine or
-   container, holding only this project.
+1. **Recommended:** run the team under a separate user account, or inside a virtual
+   machine or container, holding only this project.
 2. Use a stricter Claude mode, and accept that some work will stop for approval nobody can give.
-3. Accept the defaults, if the computer holds nothing the team should not touch.
+3. Accept the defaults. This is acceptable only when the whole computer already holds
+   nothing else that the team should not touch.
 
 > **Tell your human:** "Your assistants will read this project's code and send it to
 > their AI companies. The Claude seats can change anything your user account can unless
-> we restrict them. Which option do you choose? I will write the answer in the rules
-> file."
+> we restrict them. I recommend running the team in a separate user account, a virtual
+> machine or a container that holds only this project. Running on your own account
+> as it is only makes sense if nothing else on this computer needs protecting. Which do
+> you choose? I will write the answer in the rules file."
 
 ## Step 11. The first day
 
@@ -872,6 +892,16 @@ works from a fresh shell; and your human knows how to start, stop and restart.
   linked environment (step 2a). When a later release has it, the `--copies` workaround
   stops being needed.
 
+**Never run these unless your human asks you to:**
+
+- `agenttalk reset`: it clears the whole team's messages and state (`--archive` moves
+  them aside instead). It does **not** reset one seat.
+- `agenttalk roster remove`: it breaks the history of that seat's messages. Use
+  `roster retire`.
+- `agenttalk release` and `agenttalk end`: they stand teammates down.
+- `agenttalk install-skills --force`: it overwrites local edits to the skill files.
+- `agenttalk codex-config --enable`: see step 4.
+
 If something here does not match what you see, run the command's `--help`, trust the
 output over this page, and tell your human what differed.
 
@@ -890,7 +920,7 @@ team folder, seats and logs in a scratch folder and with real replies from a hid
 wrapped Claude seat and a hidden wrapped Codex seat: `init`; the roster commands
 (`set-role`, `set-operator-facing`, `set-model-vendor`); `status`, `threads`, `sync`,
 `wait` and `drain` (to a file); `send` and `task`; `ack`; `relay operator-answer`;
-`request-restart`; `knowledge publish`, `search`, `curate verify` and `onboard`; `backup`;
+`request-restart`; `knowledge publish`, `search`, `curate verify` and `onboard`; `backup` (with the recovery folder on the same drive, see issue #505);
 `doctor`; `check`; `scratch store`; `install-skills --dry-run`; `codex-config --status`;
 `wrap --loop` with `--model` and `--effort`; `dashboard`; the PowerShell start and stop
 scripts (run twice, in a folder whose name has a space); and a `CLAUDE.md` and an
