@@ -10,7 +10,9 @@ guarantees worth pinning.
 
 from __future__ import annotations
 
+import errno
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -257,6 +259,87 @@ def test_backup_falls_back_to_copy_when_hardlinks_unsupported(
     live_file.write_text(original + "\n// tampered\n", encoding="utf-8")
     for rel, expected_hash in result.files.items():
         assert recovery._hash_file(result.destination / rel) == expected_hash
+
+
+# ------------------------------------- a store and a backup folder on different filesystems (#505)
+
+def _link_that_cannot_cross_devices(
+    monkeypatch: pytest.MonkeyPatch, store_root: Path, dest_root: Path, *, only: str | None = None,
+) -> list[str]:
+    """Make os.link behave as it does between two drives: a link from the store into the backup
+    folder fails (EXDEV; Windows says WinError 17), while a link inside either side still works.
+    With `only`, just the store files whose name contains it fail. Returns the refused sources."""
+    from agenttalk.store import STORE_FENCE_ENV
+    monkeypatch.delenv(STORE_FENCE_ENV, raising=False)  # the fence forces copies, hiding the link path
+    real_link = os.link
+    refused: list[str] = []
+
+    def link(src, dst, *args, **kwargs):
+        crossing = str(src).startswith(str(store_root)) and str(dst).startswith(str(dest_root))
+        if crossing and (only is None or only in Path(src).name):
+            refused.append(str(src))
+            raise OSError(errno.EXDEV, "Invalid cross-device link", str(src))
+        return real_link(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(recovery.os, "link", link)
+    return refused
+
+
+def test_backup_works_when_the_store_and_the_backup_folder_are_on_different_drives(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store_root = tmp_path / "project"
+    dest_root = tmp_path / "recovery"
+    s = _store(store_root, n_seed_messages=3)
+    refused = _link_that_cannot_cross_devices(monkeypatch, store_root, dest_root)
+
+    result = recovery.create_backup(s, dest_root=dest_root)
+
+    assert result.hardlink_used is False  # nothing was linked, and the manifest says so
+    assert json.loads(result.manifest_path.read_text())["hardlink_used"] is False
+    assert result.file_count > 0
+    for rel, expected_hash in result.files.items():
+        assert recovery._hash_file(result.destination / rel) == expected_hash
+    assert refused, "the test must really have refused the links from the store"
+
+
+def test_backup_copies_a_file_whose_link_fails_after_the_probe_passed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A probe is a guess about one file. If a later link still fails, that file is copied, the
+    backup completes, and the manifest does not claim every file was hardlinked."""
+    store_root = tmp_path / "project"
+    dest_root = tmp_path / "recovery"
+    s = _store(store_root, n_seed_messages=3)
+    refused = _link_that_cannot_cross_devices(monkeypatch, store_root, dest_root, only=".json")
+    monkeypatch.setattr(recovery, "_probe_hardlink_support", lambda *_a, **_kw: True)
+
+    result = recovery.create_backup(s, dest_root=dest_root)
+
+    assert refused, "the test must really have refused some links"
+    assert result.hardlink_used is False
+    for rel, expected_hash in result.files.items():
+        assert recovery._hash_file(result.destination / rel) == expected_hash
+
+
+def test_backup_still_hardlinks_when_the_store_and_the_backup_folder_share_a_filesystem(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Positive control: the fix must not turn hardlinks off where they work."""
+    from agenttalk.store import STORE_FENCE_ENV
+    monkeypatch.delenv(STORE_FENCE_ENV, raising=False)
+    store_root = tmp_path / "project"
+    s = _store(store_root, n_seed_messages=2)
+    probe = tmp_path / "probe"
+    probe.write_bytes(b"x")
+    try:
+        os.link(probe, tmp_path / "probe.link")
+    except OSError:
+        pytest.skip("this filesystem has no hard links")
+
+    result = recovery.create_backup(s, dest_root=tmp_path / "recovery")
+
+    assert result.hardlink_used is True
 
 
 # ------------------------------------------------ concurrent-send load test (#154)
