@@ -16,6 +16,22 @@ that cannot be undone.
 **Leaves out on purpose:** the supervisor (it needs Windows today) and the managed
 model gateway.
 
+## The first-hour checklist (for your human)
+
+Show this list to your human at the start, and tick items off as you finish them. Each
+item is explained in the step named after it.
+
+- [ ] The tools are installed and both assistants are signed in (step 1)
+- [ ] agenttalk is installed and the team's folder is set up (step 2)
+- [ ] The team's seats and roles are agreed (step 3)
+- [ ] The rules the seats follow are written, and the safety choice is made (steps 4 and 10)
+- [ ] The accounts that pay for the seats, and what they will cost, are agreed (step 1)
+- [ ] The start script has been run once, and every seat shows as alive (step 5)
+- [ ] The dashboard opens (step 9)
+- [ ] One small task went through build, a review by the other company's assistant, a fix and a final read (step 11)
+- [ ] The first lesson is written down and checked (steps 8 and 11)
+- [ ] Your human knows how to stop the team and how to start it again (step 5)
+
 ## How to use this brief
 
 - Do the steps in order. Most steps say how to check that they worked.
@@ -68,9 +84,28 @@ What the checks mean:
 
 > **Tell your human:** "I checked what is installed. Missing: *(list)*. Installing
 > these changes your computer for every program, not just this team. May I install
-> them, or do you want to? agenttalk does not provide AI models or pay for them: every
-> seat uses your Claude or Codex account, so more seats mean more usage on that
-> account."
+> them, or do you want to?"
+
+**Who pays for the model use.** agenttalk supplies no AI models and pays for none. Every
+seat uses your human's own subscription or pay-per-use account with its AI company, so
+more seats mean more usage on that account. Agree on the accounts **before you start any
+seat**, and recommend this (the README gives the same advice):
+
+- **Keep the team's subscriptions separate from the people's.** The usage reading for a
+  Claude seat covers the whole account. If a person uses the same account, their own
+  use eats into the team's allowance, and nobody can tell who used what.
+- **Give each team its own pay-per-use key.** Then the bill can be compared with that
+  team's own record of what it spent.
+- **A seat at its limit stops, and its work waits.** A Claude seat that has used up its
+  5-hour or weekly allowance parks its message, which stays queued, and carries on after
+  the reset; `agenttalk status` shows `usage_limit_parked(until=<time>)` (UTC). Codex
+  seats do not do this in 0.101.1. `agenttalk capacity` shows how full each account is.
+
+> **Tell your human:** "Which accounts will the team use? I recommend accounts only the
+> team uses (a separate subscription for the assistants, or one pay-per-use key for this
+> team), not your personal ones. The team's use will count against whichever you choose,
+> and a seat that hits its limit waits until the allowance resets. I will not start
+> any seat before you have answered."
 
 Check how much memory is free, because every running seat holds an assistant:
 
@@ -574,6 +609,17 @@ consumer. Only you need a timer: wrapped seats wait for their messages by themse
    it with `agenttalk --root "<team>" relay operator-answer --from lead --to-request <the esc- id> --file answer.md`.
 4. Tell your human only what needs them (a decision, a blocker, a risk). Do not report
    routine progress.
+
+**Report to your human in plain words.** Make this a habit in every message you write to
+your human:
+
+- Say **what changed, why it matters, and what they must decide**, in words a person who
+  does not program follows. Put technical detail last.
+- Say plainly **what was checked and what was not.** Never say something exists or works
+  unless you checked it yourself.
+- **Interrupt only for decisions that are theirs:** money, deleting anything, releases,
+  product direction, and anything that cannot be undone. Everything else, decide and
+  carry on, and say so in the next report.
 
 **One bus publication per command.** Send one message, or publish one lesson, per
 command. If you chain several in one shell call and one fails, you cannot tell what
