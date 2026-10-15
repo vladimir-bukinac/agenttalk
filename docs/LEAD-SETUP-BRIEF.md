@@ -21,6 +21,7 @@ model gateway.
 Show this list to your human at the start, and tick items off as you finish them. Each
 item is explained in the step named after it.
 
+- [ ] The place the team runs (its own account, a virtual machine or a container, or your own account) is chosen (steps 1 and 10)
 - [ ] The tools are installed and both assistants are signed in (step 1)
 - [ ] agenttalk is installed and the team's folder is set up (step 2)
 - [ ] The team's seats and roles are agreed (step 3)
@@ -65,9 +66,20 @@ item is explained in the step named after it.
   is one that agenttalk runs for you in the background (`agenttalk wrap --loop`): it
   waits for a message, gives it to the assistant, and goes back to waiting.
 
-## Step 1. Check what is installed, and what is missing
+## Step 1. Decide where the team runs, then check what is installed
 
-Run each check and write down the result.
+**First, ask where the team will run, before you install or sign in to anything.** Every
+install, sign-in and clone below goes into one user account on one computer. If your
+human wants the team kept apart (a separate user account, a virtual machine or a
+container that holds only this project, which step 10 recommends), the whole of steps 1
+and 2 must be done inside that place, or they have to be done again.
+
+> **Tell your human:** "Where should the team run: in its own user account, a virtual
+> machine or a container that holds only this project (I recommend this), or in your own
+> account on this computer? I need to know before I install anything, because the
+> installs and sign-ins go into whichever one we choose. Step 10 explains why."
+
+Then, **inside the place they chose**, run each check and write down the result.
 
 | Need | Check | If it is missing |
 |---|---|---|
@@ -341,10 +353,17 @@ instead. The settings go into the start script (step 5) as `--model` and `--effo
   project has one. **You** fetch the builder's branch into the reviewer's clone before you
   send the review request, from your own (unsandboxed) shell, which leaves the builder's
   folder untouched:
-  `git -C "<team>/seats/reviewer" fetch "<team>/seats/builder-1" <branch>`. The reviewer
-  then only reads (`git show <commit>`, `git log FETCH_HEAD`). Do not ask a Codex reviewer
-  to fetch itself: its sandbox keeps `.git` read-only (checked: `error: cannot open
-  '.git/FETCH_HEAD': Permission denied`).
+  `git -C "<team>/seats/reviewer" fetch "<team>/seats/builder-1" <branch>`, **and then**
+  `git -C "<team>/seats/reviewer" checkout --detach FETCH_HEAD`. The fetch only downloads
+  the commits; the checkout puts the builder's files into the reviewer's clone, so that
+  any test or file check the reviewer runs is on the new work and not on the old files.
+  Do both again after every fix (step 7d). Do not ask a Codex reviewer to do either itself:
+  its sandbox keeps `.git` read-only (checked: `error: cannot open '.git/FETCH_HEAD':
+  Permission denied`).
+- **What the reviewer reads.** A builder may make several commits, and `git show` shows
+  only the last. Give the reviewer the **base** (the commit the work order started from, its
+  `work_head`) and the builder's final **head**, and ask it to read `git log <base>..<head>`
+  and `git diff <base> <head>`.
 
 ```sh
 # the same commands work on Windows, Linux and macOS
@@ -488,8 +507,12 @@ before you decide.
 `-a never` stops Codex asking for approval, which nobody is there to give.
 `-s workspace-write` lets it write only inside its folder. **Add
 `--add-dir <team>/.agenttalk`.** Without it, a Codex seat in its own clone cannot
-write its reply into the store, and it parks with "Permission denied". Add the
-scratch folder too (`--add-dir <scratch>`) if the seat will run tests there.
+write its reply into the store, and it parks with "Permission denied". **Add the
+scratch folder too** (`--add-dir <team-parent>/atk-scratch`): rule 2 of step 4 has the seat
+run `agenttalk scratch store`, and agenttalk puts a seat's scratch folder in a folder named
+`atk-scratch` next to the team folder, which is outside the Codex sandbox. Checked: without
+the extra folder a Codex seat got `Access is denied` for it; with it, `scratch root`
+worked. Create the folder before the seat starts (the scripts below do).
 
 **Codex on Windows and git.** The Codex sandbox runs the seat as a different Windows
 account, so git can refuse every command in the seat's own clone with "detected dubious
@@ -526,9 +549,10 @@ $Team = $PSScriptRoot                       # the team folder; it holds .agentta
 $Py   = '<env>\Scripts\python.exe'          # the Python that has agenttalk (absolute path)
 $Claude = '<full path of claude.exe>'       # from: (Get-Command claude).Source
 $Codex  = 'codex'                           # see the note below the script
+$Scratch = Join-Path (Split-Path $Team -Parent) 'atk-scratch'   # where the seats' scratch folders live
 $DashboardPort = 8765                       # a free port on this computer
 
-New-Item -ItemType Directory -Force "$Team\logs", "$Team\pids", "$Team\inbox" | Out-Null
+New-Item -ItemType Directory -Force "$Team\logs", "$Team\pids", "$Team\inbox", $Scratch | Out-Null
 $env:AGENTTALK_ROOT = $Team                 # which team's store
 $env:AGENTTALK_PY   = $Py
 Remove-Item Env:AGENTTALK_SELF -ErrorAction SilentlyContinue   # each wrapper sets its own seat's name
@@ -569,9 +593,14 @@ Start-Seat 'builder-1' 'claude' "$Team\seats\builder-1" @((Q $Claude)) @('--mode
 Start-Seat 'builder-2' 'claude' "$Team\seats\builder-2" @((Q $Claude)) @('--model', 'sonnet', '--effort', 'medium')
 # Codex's sandbox runs as another Windows account, so git may say "dubious ownership" in this clone
 $env:GIT_CONFIG_COUNT = '1'; $env:GIT_CONFIG_KEY_0 = 'safe.directory'; $env:GIT_CONFIG_VALUE_0 = ("$Team\seats\reviewer" -replace '\\', '/')
-Start-Seat 'reviewer'  'codex'  "$Team\seats\reviewer"  @($Codex, '-a', 'never', '-s', 'workspace-write', '-C', (Q "$Team\seats\reviewer"), '--add-dir', (Q "$Team\.agenttalk")) @('--effort', 'high')
+Start-Seat 'reviewer'  'codex'  "$Team\seats\reviewer"  @((Q $Codex), '-a', 'never', '-s', 'workspace-write', '-C', (Q "$Team\seats\reviewer"), '--add-dir', (Q "$Team\.agenttalk"), '--add-dir', (Q $Scratch)) @('--effort', 'high')
 Remove-Item Env:GIT_CONFIG_COUNT, Env:GIT_CONFIG_KEY_0, Env:GIT_CONFIG_VALUE_0 -ErrorAction SilentlyContinue
 ```
+
+Run the scripts from the team folder as `.\start-team.ps1` and `.\stop-seat.ps1 <name>`, or
+with the full path (a PowerShell script in the current folder needs the `.\`). If PowerShell
+refuses to run them with a message about its execution policy, tell your human what it said
+and let them decide; do not change the policy yourself.
 
 Save a matching `<team>\stop-seat.ps1`. It stops **one seat and everything under it**: it
 first checks that the PID in the file still belongs to that seat, then stops that PID's
@@ -611,7 +640,7 @@ did one started with the full path of the native `codex.exe` (found under the np
 a seat started with the full path of `claude.exe` also replied. Use the bare name for Codex
 unless a seat reports "executable not found", and then use the full native path.
 
-To stop the dashboard, run it with the second argument: `stop-seat.ps1 dashboard
+To stop the dashboard, run it with the second argument: `.\stop-seat.ps1 dashboard
 "*agenttalk*dashboard*"`. A command that a seat started and detached from its own process
 tree is not covered, so after a stop look at what is left (`Get-CimInstance Win32_Process`).
 
@@ -619,7 +648,10 @@ tree is not covered, so after a stop look at what is left (`Get-CimInstance Win3
 
 *Run on Linux by a fresh assistant (see the last section); not yet on macOS.* Logs are
 appended to, so a restart does not wipe an earlier error. Save as
-`<team>/start-team.sh` and make it executable with `chmod +x`.
+`<team>/start-team.sh`, and make both scripts of this section executable:
+`chmod +x "<team>/start-team.sh" "<team>/stop-seat.sh"`. Run them from the team folder as
+`./start-team.sh` and `./stop-seat.sh <name>`, or with the full path (a shell does not look
+in the current folder for a command).
 
 ```sh
 #!/bin/sh
@@ -631,8 +663,9 @@ PY="<env>/bin/python"                       # the Python that has agenttalk (abs
 CLAUDE_BIN="<full path of claude>"          # from: command -v claude  (often $HOME/.local/bin/claude)
 CODEX_BIN="<full path of codex>"            # from: command -v codex
 DASHBOARD_PORT=8765                         # a free port on this computer
+SCRATCH="$(dirname "$TEAM")/atk-scratch"    # where the seats' scratch folders live
 
-mkdir -p "$TEAM/logs" "$TEAM/pids" "$TEAM/inbox"
+mkdir -p "$TEAM/logs" "$TEAM/pids" "$TEAM/inbox" "$SCRATCH"
 export AGENTTALK_ROOT="$TEAM" AGENTTALK_PY="$PY"
 unset AGENTTALK_SELF                        # each wrapper sets its own seat's name
 
@@ -664,7 +697,7 @@ else start_hidden dashboard "$TEAM" -m agenttalk dashboard --store "$TEAM" --por
 
 start_seat builder-1 claude "$TEAM/seats/builder-1" --model sonnet --effort medium -- "$CLAUDE_BIN"
 start_seat builder-2 claude "$TEAM/seats/builder-2" --model sonnet --effort medium -- "$CLAUDE_BIN"
-start_seat reviewer  codex  "$TEAM/seats/reviewer"  --effort high -- "$CODEX_BIN" -a never -s workspace-write -C "$TEAM/seats/reviewer" --add-dir "$TEAM/.agenttalk"
+start_seat reviewer  codex  "$TEAM/seats/reviewer"  --effort high -- "$CODEX_BIN" -a never -s workspace-write -C "$TEAM/seats/reviewer" --add-dir "$TEAM/.agenttalk" --add-dir "$SCRATCH"
 ```
 
 And `<team>/stop-seat.sh <name>`:
@@ -686,7 +719,7 @@ else echo "pid $pid is not the process of $name; nothing killed"; fi
 rm -f "$f"
 ```
 
-To stop the dashboard: `stop-seat.sh dashboard "agenttalk dashboard"`. A command that a seat
+To stop the dashboard: `./stop-seat.sh dashboard "agenttalk dashboard"`. A command that a seat
 started and detached into a session of its own is not in the group, so after a stop look at
 what is left (`pgrep -g <pid>` for the group, `ps` for the rest). The script prints
 `FAILED to stop` and exits with 1 if anything of the group is still running, so it never
@@ -725,8 +758,8 @@ equivalent tree stop was run with a seat that had a long-running command under i
    your human what each seat answered before you run anything else.
 4. Look at `<team>\logs`: each seat's `.out.log` should have grown.
 
-> **Tell your human:** "To start the team, run `start-team` (the script in the team
-> folder) once. It starts the dashboard and every seat in the background, with no
+> **Tell your human:** "To start the team, run the start script in the team folder once
+> (`.\start-team.ps1` on Windows, `./start-team.sh` on Linux or macOS). It starts the dashboard and every seat in the background, with no
 > window. **After a reboot nothing starts itself, so run it again.** After you update
 > Claude Code or Codex, ask me to restart the seats, because a running seat keeps
 > using the old version. To stop one seat I use its exact process number from the
@@ -767,14 +800,14 @@ it too, in case you run them first.)
 ```powershell
 # PowerShell
 New-Item -ItemType Directory -Force "<team>\inbox" | Out-Null
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
 Start-Process -FilePath $env:AGENTTALK_PY -WindowStyle Hidden -ArgumentList @('-m','agenttalk','--root','"<team>"','wait','--for','lead','--timeout','1800') -RedirectStandardOutput "<team>\inbox\wait-$stamp.txt"
 ```
 
 ```sh
 # sh
 mkdir -p "<team>/inbox"
-"$AGENTTALK_PY" -m agenttalk --root "<team>" wait --for lead --timeout 1800 > "<team>/inbox/wait-$(date +%Y%m%d-%H%M%S).txt" &
+"$AGENTTALK_PY" -m agenttalk --root "<team>" wait --for lead --timeout 1800 > "$(mktemp "<team>/inbox/wait-$(date +%Y%m%d-%H%M%S)-XXXXXX")" &
 ```
 
 When the job ends, read that file and act on it. An empty file after 30 minutes means
@@ -787,14 +820,15 @@ nothing arrived.
 2. Take your messages **into a file**, then read the file and act on **every** one:
 
    ```powershell
-   $stamp = Get-Date -Format 'yyyyMMdd-HHmm'
    New-Item -ItemType Directory -Force "<team>\inbox" | Out-Null
+   $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
    & $env:AGENTTALK_PY -m agenttalk --root "<team>" drain --for lead -n 50 | Out-File "<team>\inbox\$stamp.txt" -Encoding utf8
    ```
 
    ```sh
    mkdir -p "<team>/inbox"
-   "$AGENTTALK_PY" -m agenttalk --root "<team>" drain --for lead -n 50 > "<team>/inbox/$(date +%Y%m%d-%H%M).txt"
+   f=$(mktemp "<team>/inbox/$(date +%Y%m%d-%H%M%S)-XXXXXX")     # a new, unique file every time
+   "$AGENTTALK_PY" -m agenttalk --root "<team>" drain --for lead -n 50 > "$f"
    ```
 
    `drain` consumes your messages: afterwards they no longer show as unread. A reply
@@ -921,9 +955,11 @@ the full commit id). With them, agenttalk checks the reviewer's status and verdi
 each other and refuses a pair that does not agree (checked: `rejected` with `GO` was
 refused). Without them the request is an untagged one and **no such check happens**.
 
-- Name the **exact commit**, what the change is meant to do, and where to read it. The
-  commit is already in the reviewer's clone (you fetched it, step 3d): give the branch
-  name and the full commit id, and the reviewer reads it with `git show <commit>`.
+- Name what the change is meant to do, and the range to read: the branch name, the
+  **base** (the work order's `work_head`) and the full **head** commit id. The commits are
+  already in the reviewer's clone and checked out (you did that in step 3d). The reviewer
+  reads `git log <base>..<head>` and `git diff <base> <head>`, so that earlier commits of
+  the change are not missed.
 - Say **read-only**: the reviewer does not change the builder's work.
 - Do **not** say what you expect. A review that has the answer in the brief is not a
   check. Ask the reviewer to say what it ran, and what it could not check.
@@ -1082,7 +1118,8 @@ customer data; other projects' code; anything the team does not need.
 > their AI companies. The Claude seats can change anything your user account can unless
 > we restrict them. I recommend running the team in a separate user account, a virtual
 > machine or a container that holds only this project. Running on your own account
-> as it is only makes sense if nothing else on this computer needs protecting. A Codex
+> as it is only makes sense if nothing else on this computer needs protecting. (I asked
+> this at the start, because the installs go into the place you choose.) A Codex
 > seat can also write in the computer's temporary folders. Which do you choose? I will
 > write the answer in the rules file."
 
@@ -1194,6 +1231,11 @@ scripts exactly as printed above (run twice, restarted, in a folder whose name h
 with the full path of `claude.exe`); the background `wait` written to a file; and `CLAUDE.md` and
 `AGENTS.md` files read by a seat (an earlier check; the rules now go in the local files of
 step 4, which are covered by the later paragraph above).
+
+**Added after the second review of the pull request** (Windows): a Codex seat with and without the
+scratch folder as an extra writable folder (`Access is denied` without it); the Windows start and
+stop scripts as printed, with four seats, the scratch folder, a quoted Codex path and the unique
+inbox file names; and the sh snippets for the unique inbox files, in a Windows Git Bash shell.
 
 **Added after a review of the pull request** (Windows, with a wrapped Codex seat and a wrapped
 Claude seat): `CLAUDE.local.md` and `AGENTS.override.md` beside tracked `CLAUDE.md` and
