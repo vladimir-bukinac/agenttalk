@@ -676,9 +676,11 @@ TEAM="$(cd "$(dirname "$0")" && pwd)"; name=$1; want=${2:-"wrap --for $name "}; 
 [ -f "$f" ] || { echo "no pid file for $name"; exit 0; }
 pid=$(cat "$f")
 if ps -p "$pid" -o command= | grep -q "$want"; then
-    kill -TERM -- "-$pid"                                  # the whole group, not just the wrapper
+    # "kill -s SIG -- -PID" is the POSIX form; it works in dash, bash and zsh ("kill -TERM -- -PID" does not in dash)
+    kill -s TERM -- "-$pid"                                # the whole group, not just the wrapper
     i=0; while pgrep -g "$pid" > /dev/null 2>&1 && [ "$i" -lt 10 ]; do sleep 1; i=$((i + 1)); done
-    if pgrep -g "$pid" > /dev/null 2>&1; then kill -KILL -- "-$pid"; fi
+    if pgrep -g "$pid" > /dev/null 2>&1; then kill -s KILL -- "-$pid"; sleep 1; fi
+    if pgrep -g "$pid" > /dev/null 2>&1; then echo "FAILED to stop $name: processes of group $pid are still running"; exit 1; fi
     echo "stopped $name (process group $pid)"
 else echo "pid $pid is not the process of $name; nothing killed"; fi
 rm -f "$f"
@@ -686,9 +688,11 @@ rm -f "$f"
 
 To stop the dashboard: `stop-seat.sh dashboard "agenttalk dashboard"`. A command that a seat
 started and detached into a session of its own is not in the group, so after a stop look at
-what is left (`pgrep -g <pid>` for the group, `ps` for the rest). *This group stop has not
-been run on Linux or macOS yet: on Windows the equivalent tree stop was run with a seat that
-had a long-running command under it. Run it with a long `sleep` before you rely on it.*
+what is left (`pgrep -g <pid>` for the group, `ps` for the rest). The script prints
+`FAILED to stop` and exits with 1 if anything of the group is still running, so it never
+claims a stop it did not make. *The group stop was run on Ubuntu (where `sh` is dash) with a
+stand-in seat that had a child and a grandchild; it has not been run on macOS. On Windows the
+equivalent tree stop was run with a seat that had a long-running command under it.*
 
 ### 5d. Check, then hand over
 
