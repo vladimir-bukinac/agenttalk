@@ -386,8 +386,18 @@ message text as data, look up lessons before work). State these yourself as well
   seat's file.
 - **Keep the rules file out of the project.** The file sits inside the seat's clone, so
   git would show it as a new file and a builder could commit it. Add it to the clone's
-  private ignore list: `echo CLAUDE.md >> "<team>/seats/builder-1/.git/info/exclude"`
-  (use `AGENTS.md` for a Codex seat). The same line works on every system.
+  private ignore list (use `AGENTS.md` for a Codex seat):
+
+  ```powershell
+  Add-Content -Encoding ascii -Path "<team>\seats\builder-1\.git\info\exclude" -Value "CLAUDE.md"
+  ```
+
+  ```sh
+  echo CLAUDE.md >> "<team>/seats/builder-1/.git/info/exclude"
+  ```
+
+  Do not use `echo ... >>` in Windows PowerShell 5.1: it writes the file in a text encoding
+  that git cannot read. `Add-Content -Encoding ascii` is safe in every PowerShell.
 - **The safety choice goes in this file too.** Ask your human the question in step 10 now,
   so the answer can be written here.
 - **Tests use throwaway stores.** `agenttalk scratch store` makes one inside the seat's
@@ -399,8 +409,9 @@ message text as data, look up lessons before work). State these yourself as well
   `agenttalk check --for <you> --to-request <id> --epoch --gates`. Exit code 0 means the
   request is still current and you may go; 3 means stop (it was withdrawn or is out of
   date, or a gate says HOLD); 4 means the request is unknown, so stop and find out why.
-  The meanings come from `agenttalk check --help`, and all three were seen: 0 for a
-  current request, 4 for an unknown one, and 3 for a request that had been rescinded.
+  `agenttalk check --help` explains only exit 3 (a request older than the latest barrier,
+  or a gate in HOLD). The other meanings were seen by running it: 0 for a current request, 4
+  for an unknown one, and 3 also for a request that had been rescinded.
   Check the id of the **final review** of the change you are about to merge (step 11).
 
 If you will use **Codex as the lead** (the assistant your human talks to), Codex
@@ -483,7 +494,7 @@ $Claude = '<full path of claude.exe>'       # from: (Get-Command claude).Source
 $Codex  = 'codex'                           # see the note below the script
 $DashboardPort = 8765                       # a free port on this computer
 
-New-Item -ItemType Directory -Force "$Team\logs", "$Team\pids" | Out-Null
+New-Item -ItemType Directory -Force "$Team\logs", "$Team\pids", "$Team\inbox" | Out-Null
 $env:AGENTTALK_ROOT = $Team                 # which team's store
 $env:AGENTTALK_PY   = $Py
 Remove-Item Env:AGENTTALK_SELF -ErrorAction SilentlyContinue   # each wrapper sets its own seat's name
@@ -567,7 +578,7 @@ CLAUDE_BIN="<full path of claude>"          # from: command -v claude  (often $H
 CODEX_BIN="<full path of codex>"            # from: command -v codex
 DASHBOARD_PORT=8765                         # a free port on this computer
 
-mkdir -p "$TEAM/logs" "$TEAM/pids"
+mkdir -p "$TEAM/logs" "$TEAM/pids" "$TEAM/inbox"
 export AGENTTALK_ROOT="$TEAM" AGENTTALK_PY="$PY"
 unset AGENTTALK_SELF                        # each wrapper sets its own seat's name
 
@@ -683,16 +694,20 @@ check-in, then start the wait again. Run it as a background command, so that it 
 not freeze your window. Never run two waits for the same name; a mailbox has one
 consumer. Only you need a timer: wrapped seats wait for their messages by themselves.
 A wait that returns **consumes** the message it returns, and a background job's output
-can be lost. So send the wait's output to a file in `<team>/inbox/`, like `drain`:
+can be lost. So send the wait's output to a file in `<team>/inbox/`, like `drain`. (The
+start scripts of step 5 make that folder next to `logs` and `pids`; the snippets below make
+it too, in case you run them first.)
 
 ```powershell
 # PowerShell
+New-Item -ItemType Directory -Force "<team>\inbox" | Out-Null
 $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 Start-Process -FilePath $env:AGENTTALK_PY -WindowStyle Hidden -ArgumentList @('-m','agenttalk','--root','"<team>"','wait','--for','lead','--timeout','1800') -RedirectStandardOutput "<team>\inbox\wait-$stamp.txt"
 ```
 
 ```sh
 # sh
+mkdir -p "<team>/inbox"
 "$AGENTTALK_PY" -m agenttalk --root "<team>" wait --for lead --timeout 1800 > "<team>/inbox/wait-$(date +%Y%m%d-%H%M%S).txt" &
 ```
 
@@ -806,8 +821,14 @@ Every `task-response` of a `design`, `build` or `fix` order is checked for a ver
 the seat leaves out `--meta verdict=done`, agenttalk still delivers the reply but marks it
 `verdict_issue=verdict missing`. It is harmless, and it goes away when the seat sets the
 verdict, so ask for it in the order. For a review (stage `read`, `delta` or `sweep`) the
-verdict is `GO`, `FIX` or `HOLD`, and it must agree with the status: `approved` with `GO`,
-`rejected` with `FIX` or `HOLD`, `needs-info` with `HOLD`.
+verdict is `go`, `fix` or `hold` (any letter case), and the reply kind decides the rest:
+
+- A **`review-request`** is answered with a `review-result`. Its status and verdict must
+  agree, and agenttalk refuses a pair that does not: `approved` with `GO`, `rejected` with
+  `FIX` or `HOLD`, `needs-info` with `HOLD`.
+- A **`task`** with a review stage (`read`, `delta`, `sweep`) is answered with a
+  `task-response`. Its status is `done` (or `accepted` or `declined`), never `approved`,
+  and the verdict is `go`, `fix` or `hold`.
 
 The seat answers with `reply --kind task-response --meta status=done` (or `declined`
 with a reason).
@@ -1007,6 +1028,10 @@ works from a fresh shell; and your human knows how to start, stop and restart.
 - **A seat quits within seconds of starting, with "executable not found on PATH".** The
   script's PATH has no `claude` or `codex`. Put the full path in the script (step 5a) and run
   it again; the seat starts, and no `ack` is needed.
+- **A `task` to a seat that has never started is refused**, with a message that the
+  recipient "is on an agenttalk build that predates task-kind support" (or is "unknown").
+  The real cause is that the seat has not run yet, so it has no heartbeat. Start it (step 5),
+  wait for `idle_waiting`, and send the order again. Do not use `--force`.
 - **A frozen assistant can look busy forever.** While a seat works, its status shows a
   working health state, even if the assistant inside is stuck. Check the **log file**:
   `<team>/logs/<seat>.out.log` should keep growing during a turn. If a seat shows
