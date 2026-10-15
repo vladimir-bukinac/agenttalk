@@ -921,8 +921,9 @@ the full commit id). With them, agenttalk checks the reviewer's status and verdi
 each other and refuses a pair that does not agree (checked: `rejected` with `GO` was
 refused). Without them the request is an untagged one and **no such check happens**.
 
-- Name the **exact commit**, what the change is meant to do, and where to read it (the
-  builder's folder and branch, to be fetched as in step 3d).
+- Name the **exact commit**, what the change is meant to do, and where to read it. The
+  commit is already in the reviewer's clone (you fetched it, step 3d): give the branch
+  name and the full commit id, and the reviewer reads it with `git show <commit>`.
 - Say **read-only**: the reviewer does not change the builder's work.
 - Do **not** say what you expect. A review that has the answer in the brief is not a
   check. Ask the reviewer to say what it ran, and what it could not check.
@@ -952,7 +953,8 @@ it is, never your argument for it). It answers `proceed`, `reshape`, `probe`,
 ### 7d. One fix round, then one final read
 
 When a review finds problems, send **one** fix order that lists every finding. Then
-ask the reviewer for **one final read** of the new commit. A second round means the
+ask the reviewer for **one final read** of the new commit. After the fix, fetch the new
+commit into the reviewer's clone again (step 3d) before you ask. A second round means the
 order or the review was unclear; stop and rethink before a third.
 
 When the first review is clean (`approved`, nothing to fix), there is no fix round and no
@@ -1050,7 +1052,7 @@ Codex), under your human's account and that company's terms.
   computer's user account can do.
 - A wrapped **Codex** seat with `-s workspace-write` can *write* only in its folder, any
   `--add-dir` folder **and the computer's temporary folders** (`/tmp` and `$TMPDIR`
-  on Linux and macOS). Codex has two settings to turn the temporary folders off,
+  on Linux and macOS; what they are on Windows was not checked). Codex has two settings to turn the temporary folders off,
   `sandbox_workspace_write.exclude_slash_tmp` and
   `sandbox_workspace_write.exclude_tmpdir_env_var` (found in the installed Codex program;
   a seat started with `-c sandbox_workspace_write.exclude_slash_tmp=true -c
@@ -1080,8 +1082,9 @@ customer data; other projects' code; anything the team does not need.
 > their AI companies. The Claude seats can change anything your user account can unless
 > we restrict them. I recommend running the team in a separate user account, a virtual
 > machine or a container that holds only this project. Running on your own account
-> as it is only makes sense if nothing else on this computer needs protecting. Which do
-> you choose? I will write the answer in the rules file."
+> as it is only makes sense if nothing else on this computer needs protecting. A Codex
+> seat can also write in the computer's temporary folders. Which do you choose? I will
+> write the answer in the rules file."
 
 ## Step 11. The first day
 
@@ -1188,8 +1191,9 @@ wrapped Claude seat and a hidden wrapped Codex seat: `init`; the roster commands
 `doctor`; `check`; `scratch store`; `install-skills --dry-run`; `codex-config --status`;
 `wrap --loop` with `--model` and `--effort`; `dashboard`; the PowerShell start and stop
 scripts exactly as printed above (run twice, restarted, in a folder whose name has a space,
-with the full path of `claude.exe`); the background `wait` written to a file; and a `CLAUDE.md` and an
-`AGENTS.md` file read by a seat.
+with the full path of `claude.exe`); the background `wait` written to a file; and `CLAUDE.md` and
+`AGENTS.md` files read by a seat (an earlier check; the rules now go in the local files of
+step 4, which are covered by the later paragraph above).
 
 **Added after a review of the pull request** (Windows, with a wrapped Codex seat and a wrapped
 Claude seat): `CLAUDE.local.md` and `AGENTS.override.md` beside tracked `CLAUDE.md` and
