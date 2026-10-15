@@ -1,25 +1,20 @@
 # Setting up agenttalk for the first time: a brief for the lead
 
+**In plain words:** agenttalk lets several AI assistants work as one team on the same
+project, leaving each other messages as files so that nothing is lost when a session
+ends. This brief tells you, the first assistant, how to set that team up well: check
+what is installed, install agenttalk, choose the team and its rules, write one start
+script that runs every teammate in the background with no window, and then run the team
+day to day. You do most of the work. A person, your human, does only what a person
+should do: say yes before anything is installed on the whole computer, decide how much
+freedom the assistants get, run the start script, and give the go-ahead for anything
+that cannot be undone.
+
 **Written for:** the AI assistant (Claude Code or Codex) that a person has told to
 "read this brief and set up agenttalk".
 **Covers:** agenttalk **v0.101.1**, the released version, on Windows, Linux and macOS.
 **Leaves out on purpose:** the supervisor (it needs Windows today) and the managed
 model gateway.
-
-## In plain words
-
-agenttalk lets several AI assistants work as one team on the same project. They leave
-each other messages as files, so nothing is lost when a session ends. This brief tells
-you, the first assistant, how to build that team well. You check what is installed,
-install agenttalk, decide who is on the team and what each one may do, write one
-start script that runs every teammate in the background with no window, and then
-run the team: you hand out work, a teammate from another AI company checks it, and
-the lessons are written down so the team gets better each day.
-
-You do most of the work. A person (your human) does the few things only a person
-should do: say yes before something is installed on the whole computer, decide how
-much freedom the assistants get, run the start script, and give the go-ahead for
-anything that cannot be undone.
 
 ## How to use this brief
 
