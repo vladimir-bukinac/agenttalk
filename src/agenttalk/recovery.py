@@ -39,7 +39,10 @@ and the reviewer-3 GO-WITH-CHANGES read of the first draft):
   fully static hardlinked clone.
 - **Fallback**: a filesystem/mount that does not support hardlinks (cross-
   device, some network/container filesystems) falls back to a byte copy
-  for the whole clone - still correct, just slower (and the fence
+  for the whole clone (the probe links one real store file into the backup
+  folder; a file whose link still fails later is copied on its own, and the
+  manifest's ``hardlink_used`` is true only if every file was linked) -
+  still correct, just slower (and the fence
   duration becomes proportional to store size again in that mode, which
   is the documented, unavoidable tradeoff of no hardlink support).
 
@@ -160,25 +163,33 @@ def _relative_files(root: Path) -> list[Path]:
 
 
 def _probe_hardlink_support(store_dir: Path, staging: Path) -> bool:
-    """Best-effort, cheap: try to hardlink one real file if one exists,
-    else a throwaway probe file in the SAME parent as the destination
-    staging dir (hardlinks cannot cross filesystem/mount boundaries, so
-    the probe must live on the destination's own filesystem, not the
-    source's)."""
-    probe_src = staging.parent / f".hardlink-probe-{uuid.uuid4().hex}"
-    probe_dst = staging.parent / f".hardlink-probe-{uuid.uuid4().hex}.link"
+    """Best-effort, cheap: hardlink one REAL store file into the staging dir
+    and remove that link again. A hardlink cannot cross a filesystem, drive or
+    mount boundary, so the probe has to run between the same two places the
+    clone will use (#505: a probe that linked two files inside the backup
+    folder only proved the destination could link, then the clone failed when
+    the store was on another drive). A store with no real file yet is copied."""
+    src = next(
+        (p for p in store_dir.rglob("*") if p.is_file() and not _is_lock_artifact(p.name)), None,
+    )
+    if src is None:
+        return False
+    probe = staging / f".hardlink-probe-{uuid.uuid4().hex}"
     try:
-        probe_src.write_bytes(b"probe")
-        os.link(probe_src, probe_dst)
+        os.link(src, probe)
         return True
     except OSError:
         return False
     finally:
-        probe_src.unlink(missing_ok=True)
-        probe_dst.unlink(missing_ok=True)
+        probe.unlink(missing_ok=True)
 
 
-def _clone_tree(store_dir: Path, staging: Path, *, use_hardlinks: bool) -> None:
+def _clone_tree(store_dir: Path, staging: Path, *, use_hardlinks: bool) -> bool:
+    """Clone the store into `staging`; return True only if EVERY file was hardlinked.
+
+    A file whose link fails (the probe tried one file, a store can span mounts) is copied
+    instead, so the clone completes and the manifest does not claim hardlinks it did not use."""
+    all_linked = use_hardlinks
     for src in _relative_files(store_dir):
         if _is_lock_artifact(src.name):
             continue
@@ -186,9 +197,13 @@ def _clone_tree(store_dir: Path, staging: Path, *, use_hardlinks: bool) -> None:
         dst = staging / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         if use_hardlinks:
-            os.link(src, dst)
-        else:
-            shutil.copy2(src, dst)
+            try:
+                os.link(src, dst)
+                continue
+            except OSError:
+                all_linked = False
+        shutil.copy2(src, dst)
+    return all_linked
 
 
 def _hash_file(path: Path) -> str:
@@ -230,7 +245,7 @@ def create_backup(store, *, dest_root: Path | None = None,
         sequence_at_snapshot: int | None = None
         fence_start = time.monotonic()
         with store._message_publication_lock():
-            _clone_tree(store.dir, staging, use_hardlinks=use_hardlinks)
+            use_hardlinks = _clone_tree(store.dir, staging, use_hardlinks=use_hardlinks)
             order = store._read_message_publication_order()
             sequence_at_snapshot = order["append_sequence"] if order else None
         fence_seconds = time.monotonic() - fence_start

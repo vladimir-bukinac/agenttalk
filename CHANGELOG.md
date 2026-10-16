@@ -81,6 +81,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`agenttalk backup` now works when the team folder and the backup folder are on different drives
+  (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
+  which is fast and uses no extra space) and otherwise copies the files. That check linked two test files
+  inside the backup folder, so it never noticed that the team's own files were on another drive, and the
+  backup then stopped with an error (`WinError 17` on Windows, "Invalid cross-device link" on Linux and
+  macOS).
+
+  What you will notice: before this, a team on one drive (for example `D:`) with the default backup folder
+  on another (`C:`), or on a separate data disk, got an error and no backup. Now the backup completes. It
+  copies the files, and `agenttalk backup` says `mode: copy (no hardlink support)`; the backup's
+  `manifest.json` says `"hardlink_used": false`. On one drive nothing changes: it still uses hard links.
+
+  What you need to do: nothing. Until you have this version you can set `AGENTTALK_RECOVERY_DIR` to a
+  folder on the same drive as the team folder.
+
+  Technical details: `recovery._probe_hardlink_support` now links one real store file into the backup's
+  staging folder (and removes the link) instead of linking two probe files inside it, and
+  `recovery._clone_tree` copies a file whose link fails and returns whether every file was linked, so
+  `hardlink_used` is true only then. Tests: `tests/test_recovery.py` (a forced cross-device `os.link`, a
+  link that fails after the probe passed, and a same-filesystem control). Checked for real on Windows
+  with the store on `D:` and the backup folder on `C:`.
+
 - **A parked agent can now be stood down with `agenttalk release` (#488).** An agent whose next message it
   cannot run is "parked": it keeps that message at the front of its queue and waits. Until now a `release`
   sent to a parked agent was never read, so the agent kept running, and the only way to stop it was to kill
