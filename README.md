@@ -859,6 +859,10 @@ command tables.
 This section is for a team planning a migration of an existing application.
 It explains how to preserve behavior while changing the stack beneath it.
 
+For the method itself, read the [migration playbook](docs/MIGRATION-PLAYBOOK.md) first.
+It collects what our own practice migrations taught, in seven stages, each rule with why it
+matters and how to check it, and starts with the twelve rules to apply first.
+
 A migration needs more than a successful build on newer dependencies.
 You need an account of what existed, what changed, and how each claim was checked.
 Agenttalk helps the team share that account and coordinate independent work.

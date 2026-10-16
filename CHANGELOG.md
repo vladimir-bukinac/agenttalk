@@ -12,6 +12,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A migration playbook, and the lessons behind it, now ship with agenttalk.** Everything the
+  maintainers' teams learned from their own migrations (Python 2 to 3, Django, PHP and Laravel, Java
+  and Spring, Docker and Kubernetes, payment code) used to live only in their own lesson stores,
+  so a new user started with none of it.
+
+  What you will notice: a new guide, `docs/MIGRATION-PLAYBOOK.md`, for a team that moves a
+  codebase to a newer framework, language version or platform and must show that it still behaves
+  the same. It has seven stages (assess, baseline, one step at a time, prove, concurrency and data,
+  packaging and runtime, review and hand-over). Each rule names the stack it applies to, when it
+  applies, why, and one check you can run. It starts with the twelve rules to apply first, and
+  keeps general practice that was not measured in these runs in its own marked section. The same
+  124 lessons are in `src/agenttalk/knowledge_packs/migration.jsonl`, one per line, for tools that
+  load them into a team's lesson store; the command that does that is a separate, later change.
+  Many rules rest on a single case, and the guide says so.
+
+  What you need to do: nothing. Read the guide before a migration.
+
+  Technical details: the pack lines carry `key`, `scope`, `trigger`, `body`, `applies_to` (with exactly
+  one `stage-*` tag), `evidence`, `pack` and `pack_version`; keys are bare slugs.
+  `tests/test_migration_pack.py` checks the format and that the guide and the pack stay in step. The
+  guide ships in the source package.
+
 - **`agenttalk overview` shows how the team is doing on one screen, and `/agenttalk` and `$agenttalk` run it for you.**
   It is the terminal's version of the dashboard's Overview.
 
