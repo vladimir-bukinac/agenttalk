@@ -220,6 +220,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_publish_output_for_a_note_names_its_domain_without_a_scope_hint` and
   `test_publish_help_says_scope_does_not_choose_the_domain`.
 
+- **The operations guide now explains what to do when an agent looks stuck (#497).** Two causes were
+  not written down anywhere an operator would look.
+
+  What you will notice: `docs/OPERATIONS.md` has a new section, "An agent looks stuck", and a row
+  for it in "If something is wrong, start here". It says two things. First, after you update Claude
+  Code or Codex, restart the agents that run under `agenttalk wrap`: each one finds its tool's file
+  once, when it starts, and an update can replace or remove that file. Second, an agent that shows
+  "working" for far longer than a turn usually takes may have a hung tool rather than a busy one. The
+  guide says which case the wrapper already ends by itself (a Codex agent under `wrap --loop`, after
+  30 minutes with a program it started alive for 10, by default), how to look at the agent's log
+  for the rest, and that a quiet log alone does not prove a hang.
+
+  What you need to do: nothing. No program behaviour changed; spotting a hung tool automatically is
+  not part of this change.
+
+  Technical details: documentation only (`docs/OPERATIONS.md`). The watchdog facts come from
+  `wrapper/turn_watchdog.py` (`TurnWatchdogConfig` defaults 1800 s and 600 s; default-on only for a
+  continuous `wrap --loop --cli codex`, see `cmd_wrap`).
+
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
   which is fast and uses no extra space) and otherwise copies the files. That check linked two test files
