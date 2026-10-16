@@ -10,6 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.102.0] - 2026-10-16
+
+**In short:** a team is easier to watch, an agent that has run for a long time can be given a
+fresh start with one command, and three faults that stopped people are fixed.
+`agenttalk overview` prints the dashboard's Overview in the terminal, in plain words, and the
+new `/agenttalk` (Claude Code) and `$agenttalk` (Codex) skills run it. `agenttalk status` and
+the dashboard show how large each agent's conversation has grown and warn before it gets
+expensive; `agenttalk session fresh` then starts that agent's next turn on a new conversation
+without stopping it. Fixed: `agenttalk backup` works when the team folder and the backup
+folder are on different drives; an agent that is stuck waiting on a message it cannot run can
+be stood down with `agenttalk release`; and on Linux and macOS a background agent starts from
+a normal virtual environment (`python3 -m venv`), so the `--copies` workaround is no longer
+needed. After upgrading, run `agenttalk install-skills` to get the two new skills.
+
 ### Added
 
 - **`agenttalk overview` shows how the team is doing on one screen, and `/agenttalk` and `$agenttalk` run it for you.**
