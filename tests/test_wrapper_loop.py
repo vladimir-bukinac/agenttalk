@@ -3108,6 +3108,64 @@ def test_launch_preflight_uses_agenttalk_codex_override(tmp_path) -> None:
     assert res.argv == [str(native.resolve()), "exec"]
 
 
+def _missing_cli_remediation(monkeypatch, tmp_path, cli: str, **kwargs) -> str:
+    monkeypatch.setattr(run.shutil, "which", lambda _name: None)
+    env = {"AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path)}
+    res = run.preflight_launch_runtime(
+        [cli, "-p"], cli, tmp_path, env,
+        runner=lambda *_args: (0, "agenttalk 0.test"), **kwargs)
+    assert res.blocked is not None
+    assert "executable not found on PATH" in res.blocked
+    return res.blocked.split("remediation=", 1)[1]
+
+
+def test_launch_preflight_missing_claude_gives_claude_advice_not_codex(
+    monkeypatch, tmp_path,
+) -> None:
+    # #508 item 1: a Claude seat without claude on the PATH was told to set
+    # AGENTTALK_CODEX to the native codex.exe.
+    remediation = _missing_cli_remediation(monkeypatch, tmp_path, "claude")
+    assert "claude" in remediation
+    assert "codex" not in remediation.lower()
+
+
+def test_launch_preflight_missing_codex_gives_codex_advice_not_claude(
+    monkeypatch, tmp_path,
+) -> None:
+    remediation = _missing_cli_remediation(monkeypatch, tmp_path, "codex")
+    assert "AGENTTALK_CODEX" in remediation
+    assert "claude" not in remediation.lower()
+
+
+@pytest.mark.parametrize(("cli", "is_windows", "expected", "absent"), [
+    ("claude", False, "~/.local/bin/claude", ".exe"),
+    ("claude", True, "claude.exe", "~/"),
+    ("codex", False, "command -v codex", ".exe"),
+    ("codex", True, "native codex.exe", "command -v"),
+])
+def test_launch_preflight_missing_cli_advice_fits_the_platform(
+    monkeypatch, tmp_path, cli, is_windows, expected, absent,
+) -> None:
+    remediation = _missing_cli_remediation(
+        monkeypatch, tmp_path, cli, is_windows=is_windows)
+    assert expected in remediation
+    assert absent not in remediation
+
+
+def test_launch_preflight_claude_shim_gives_no_codex_advice(tmp_path) -> None:
+    shim = tmp_path / "claude.cmd"
+    shim.write_text("@echo off\r\n", encoding="utf-8")
+    env = {"AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path)}
+    res = run.preflight_launch_runtime(
+        [str(shim)], "claude", tmp_path, env,
+        runner=lambda *_args: (0, "agenttalk 0.test"))
+    assert res.blocked is not None
+    assert ".cmd/.bat/.ps1 shim" in res.blocked
+    remediation = res.blocked.split("remediation=", 1)[1]
+    assert "claude" in remediation
+    assert "codex" not in remediation.lower()
+
+
 def test_agenttalk_runtime_preflight_ignores_ambiguous_probe_failures(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()

@@ -81,6 +81,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A background Claude agent that cannot find `claude` now gets advice about Claude, not about Codex
+  (#508, item 1).** Before an agent's first turn, its wrapper (the program that runs the agent in the
+  background) checks that it can start the agent's AI tool. When it could not, it always gave the same
+  advice: "set AGENTTALK_CODEX to the native codex.exe". A Claude agent on Linux was told how to fix a
+  Codex install on Windows.
+
+  What you will notice: before this, every agent got the Codex advice. Now the advice names the agent's
+  own tool and fits the computer it runs on. A Claude agent is told to give the full path of `claude`
+  after `--`, with the usual place as an example (`~/.local/bin/claude` on Linux and macOS,
+  `%USERPROFILE%\.local\bin\claude.exe` on Windows) and the command that prints it (`command -v claude`,
+  or `where claude` on Windows). A Codex agent is still told about `AGENTTALK_CODEX`, and "native
+  codex.exe" appears only on Windows. The same applies when the path points at a Windows helper script
+  (`.cmd`, `.bat` or `.ps1`) that the wrapper cannot start directly.
+
+  What you need to do: nothing.
+
+  Technical details: new `wrapper/run.py` `_launch_cli_remediation(cli, is_windows=...)`, used by both
+  refusals in `preflight_launch_runtime` (executable not found, and a shim). `preflight_launch_runtime`
+  takes an optional `is_windows` (default: the running system). Any other `--cli` value gets "pass the
+  full path of the <cli> executable after --". Tests in `tests/test_wrapper_loop.py`:
+  `test_launch_preflight_missing_claude_gives_claude_advice_not_codex`,
+  `test_launch_preflight_missing_codex_gives_codex_advice_not_claude`,
+  `test_launch_preflight_missing_cli_advice_fits_the_platform` (four cases) and
+  `test_launch_preflight_claude_shim_gives_no_codex_advice`.
+
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
   which is fast and uses no extra space) and otherwise copies the files. That check linked two test files
