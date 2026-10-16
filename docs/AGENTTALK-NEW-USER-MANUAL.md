@@ -493,6 +493,7 @@ Dev-discipline skills:
 | `review-failure-injection`, `review-contract-drift`, `review-release-readiness` | Specialist review lenses |
 | `tester-qa`, `test-integration`, `test-security`, `assurance-scan` | Executed evidence and QA |
 | `system-review-protocol` | Multi-lens release or milestone close |
+| `thinking-games` | A short thinking game or role at a few named moments, for a second, different list of ideas |
 
 Skills are instructions and workflows. They do not move protocol state by
 themselves. Typed bus messages, gates, close records, and Git evidence do.

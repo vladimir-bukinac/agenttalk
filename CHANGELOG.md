@@ -12,6 +12,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A new skill, `thinking-games`, for the few moments when a different way of thinking helps.**
+  Some decisions get better when someone looks at them from a different angle. The new skill gives
+  agents a small set of short thinking games and roles for that, to use only at a few named
+  moments: at the start of a new design, before it is challenged; after two failed attempts on the
+  same assumption (then only the "reality probe", which ends in a real test); and as a side round on
+  product ideas, after plain experts have had their say. It is not for routine work, fixes ordered
+  by a review, releases or every task, and one game per moment is enough.
+
+  How it works: two lists of ideas are written separately, one in the usual way and one with a game
+  or a role, without either side seeing the other. They are merged, and someone who did not write
+  them marks each idea adopt, reject or already in the plan, with one line on why. Every idea says
+  what it would do, what it should improve, how it would most likely fail, and a cheap way to test
+  it. Agents can also play as a team: pairs or small groups each pick a different game and work
+  independently before they compare. There are thirteen games (for example "forbid the favourite",
+  "assumption Jenga" and "evidence from the future") and a set of roles to think from (for example
+  the attacker, the auditor, the on-call engineer woken at night, or the person who will make the
+  decision). What a role claims is a guess to be tested, never a fact, and a simulated
+  decision-maker never replaces asking the real person or speaks in their name. "Nothing useful" is
+  an accepted result, a game never decides what is in scope, and whether to do the work at all
+  stays with the challenge skill.
+
+  Each round leaves a one-line score of what was adopted and which game or role it came from, so a
+  game that never helps can be dropped later. An honest note: in a small blind trial, no single
+  game beat an ordinary list; the gain came from having two independent lists, and the games are a
+  cheap way to make the second one different.
+
+  What you will notice: nothing changes on its own. Agents are meant to use the skill only at those
+  moments, and it works best when a lead's work order names the game.
+
+  What you need to do: run `agenttalk install-skills` to install it.
+
+  Technical details: `src/agenttalk/skills/devkit/thinking-games/SKILL.md` (category `production`,
+  `planning-artifact` evidence). It is listed in the shared routing index, section 3.2 of
+  `docs/ROLES-SKILLS-PROCEDURES.md`, the user manual's skill table and the devkit list in
+  `tests/test_install_skills.py`.
+
 - **`agenttalk overview` shows how the team is doing on one screen, and `/agenttalk` and `$agenttalk` run it for you.**
   It is the terminal's version of the dashboard's Overview.
 

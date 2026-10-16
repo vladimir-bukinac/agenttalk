@@ -239,6 +239,7 @@ The devkit is one set of skills for how to do the work itself. Each line names w
 | `assurance-scan` | A release gate or close needs scan evidence from the checks installed for the project's stack. | Deciding GO or HOLD; it only produces evidence. |
 | `write-docs` | You write or update a README, guide, reference, manual or design document. | Code comments (`craft-code`). |
 | `write-for-humans` | You write release notes, changelog entries, pull request descriptions, issue and review comments, or status reports for people who do not program. | Documentation pages (`write-docs`). |
+| `thinking-games` | Only at a few named moments (a design start before its challenge, two failed attempts on one assumption, a side round on product ideas): play one short game or role to get a second, different list of ideas, merge it with a plain list, and have someone else mark what to adopt. | Routine work, review-ordered fixes or releases; deciding whether to do the work at all (`agenttalk.challenge`). |
 | `_shared` | Never directly: it holds the shared reference pages (evidence profiles, routing, plain-language voice) the other devkit skills link to. | Everything; it is not a skill to run. |
 
 ## 4. Procedures
