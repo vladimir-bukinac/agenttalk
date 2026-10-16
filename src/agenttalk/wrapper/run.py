@@ -762,6 +762,29 @@ def _launch_blocked_summary(command: str, error: str, remediation: str) -> str:
     )
 
 
+def _launch_cli_remediation(cli: str, *, is_windows: bool) -> str:
+    """How to point the wrapper at the seat's own tool when it cannot start it.
+
+    #508 item 1: a Claude seat must never be told to set AGENTTALK_CODEX, and a
+    Codex seat must never be sent to Claude's install path.
+    """
+    if cli == "claude":
+        if is_windows:
+            # where.exe and a literal path work in both PowerShell and cmd; in
+            # PowerShell `where` is Where-Object and %VAR% does not expand.
+            return ("pass the full path of claude.exe after -- (usually "
+                    "C:\\Users\\<you>\\.local\\bin\\claude.exe; 'where.exe claude' prints it)")
+        return ("pass the full path of claude after -- (for example "
+                "~/.local/bin/claude; 'command -v claude' prints it)")
+    if cli == "codex":
+        if is_windows:
+            return ("pass the full path of the native codex.exe after --, "
+                    "or set AGENTTALK_CODEX to it")
+        return ("pass the full path of codex after --, or set AGENTTALK_CODEX to it "
+                "('command -v codex' prints it)")
+    return f"pass the full path of the {cli} executable after --"
+
+
 def _self_probe_blocked_summary(argv: list[str], rc: int | None, output: str) -> str | None:
     if rc == 0:
         return None
@@ -782,9 +805,12 @@ def preflight_launch_runtime(
     *,
     runner: Callable[[list[str], str, dict[str, str], float], tuple[int | None, str]] | None = None,
     timeout: float = 5.0,
+    is_windows: bool | None = None,
 ) -> LaunchPreflightResult:
     """Resolve the per-turn CLI and probe the pinned agenttalk interpreter before any turn."""
-    workspace = Path(workspace_root).resolve() if workspace_root else _workspace_root()
+    if is_windows is None:
+        is_windows = os.name == "nt"
+    workspace =Path(workspace_root).resolve() if workspace_root else _workspace_root()
     env = dict(child_env) if child_env is not None else _child_env(workspace)
     if not base_argv:
         return LaunchPreflightResult([], _launch_blocked_summary(
@@ -800,7 +826,7 @@ def preflight_launch_runtime(
         return LaunchPreflightResult(list(base_argv), _launch_blocked_summary(
             raw0,
             "executable not found on PATH",
-            "pass an absolute real CLI executable after -- or set AGENTTALK_CODEX to the native codex.exe",
+            _launch_cli_remediation(cli, is_windows=is_windows),
         ))
     if candidate.is_dir():
         return LaunchPreflightResult(list(base_argv), _launch_blocked_summary(
@@ -820,7 +846,7 @@ def preflight_launch_runtime(
             return LaunchPreflightResult(list(base_argv), _launch_blocked_summary(
                 str(candidate),
                 "resolved launch command is a .cmd/.bat/.ps1 shim, which is not directly spawnable with shell=False",
-                "pass the native executable after -- or set AGENTTALK_CODEX to the native codex.exe",
+                _launch_cli_remediation(cli, is_windows=is_windows),
             ))
         candidate = native
 

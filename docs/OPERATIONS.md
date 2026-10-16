@@ -65,6 +65,7 @@ assume the first command found on `PATH` is the team's runtime.
 | What you see | Go to |
 | --- | --- |
 | Agents have stopped answering | [Check whether the team has stopped answering](#check-whether-the-team-has-stopped-answering), then [Pause, stop and recover](#pause-stop-and-recover) |
+| An agent shows "working" far longer than a turn takes, or agents fail after you updated Claude Code or Codex | [An agent looks stuck](#an-agent-looks-stuck) |
 | An agent keeps being relaunched, or the supervisor says its restart budget is spent or a process is still owned | [Pause, stop and recover](#pause-stop-and-recover), steps 4 and 5 |
 | An upgrade or a runtime switch went wrong | [Roll a runtime or release back](#roll-a-runtime-or-release-back) |
 | `gateway start` timed out, or the gateway is not ready | [The `start` timeout paragraph](#prepare-a-new-windows-machine) and [Stop and recover the paid gateway](#stop-and-recover-the-paid-gateway) |
@@ -505,6 +506,36 @@ schedule it, record that task's name, interval and where its alarm goes.
 A deadman on the same machine cannot alert while that machine is off. An
 independent host/monitor and an operator-reachable notification route are needed
 for that guarantee; agenttalk does not supply them merely by generating the helper.
+
+### An agent looks stuck
+
+- **After you update Claude Code or Codex, restart the wrapped agents.** A wrapped
+  agent (one run by `agenttalk wrap`) finds its AI tool's file once, when it starts,
+  and keeps using that path for every turn. An update can replace or remove that
+  file. Restart each agent the way it was started: with
+  `agenttalk request-restart --for <agent>` when the supervisor runs it, or by
+  running its `agenttalk wrap` command again.
+- **An agent that shows "working" for far longer than a turn usually takes may have
+  a hung tool, not a busy one.** Its status says "working" for as long as its AI
+  tool runs, even when the tool has stopped making progress.
+  - The wrapper catches one case on Linux and Windows. For a Codex agent run with
+    `wrap --loop`, its turn watchdog ends a turn that has run for 30 minutes while
+    a program the agent started has been alive for 10. Those are the defaults:
+    `turn_watchdog` in `supervisor.json` changes them, and can switch the watchdog
+    on for Claude agents, where it is off by default. The watchdog needs a list of
+    running processes. On Linux it uses `ps`. On Windows it uses the PowerShell
+    selected for this project when its supervisor was set up. When it cannot get
+    that list, it does nothing.
+  - **On macOS the watchdog never ends a turn today.** Apple's `ps` lacks a field
+    the watchdog reads, so it never gets its list.
+  - In every other case you are the watchdog, including every agent on macOS. Look
+    at the agent's wrapper log
+    ([Find logs and scheduled tasks](#find-logs-and-scheduled-tasks)). Output that
+    stopped long ago points to a hung tool, though a quiet log alone does not prove
+    it. If you conclude it is hung, restart the agent by hand: with
+    `agenttalk request-restart --for <agent>` when the supervisor runs it, or by
+    stopping its wrapper process by its process ID and running its
+    `agenttalk wrap` command again. Its conversation is kept.
 
 ## Set up the paid gateway
 
