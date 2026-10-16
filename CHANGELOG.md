@@ -228,16 +228,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Code or Codex, restart the agents that run under `agenttalk wrap`: each one finds its tool's file
   once, when it starts, and an update can replace or remove that file. Second, an agent that shows
   "working" for far longer than a turn usually takes may have a hung tool rather than a busy one. The
-  guide says which case the wrapper already ends by itself (a Codex agent under `wrap --loop`, after
-  30 minutes with a program it started alive for 10, by default), how to look at the agent's log
-  for the rest, and that a quiet log alone does not prove a hang.
+  guide says which case the wrapper already ends by itself on Linux and Windows: a Codex agent under
+  `wrap --loop`, after 30 minutes with a program it started alive for 10, by default. It also says
+  plainly that on macOS this watchdog never ends a turn today. Everywhere else the operator watches the
+  agent's log and restarts the agent by hand. The guide notes that a quiet log alone does not prove
+  a hang.
 
-  What you need to do: nothing. No program behaviour changed; spotting a hung tool automatically is
-  not part of this change.
+  What you need to do: nothing. No program behaviour changed; spotting a hung tool automatically, and
+  making the watchdog work on macOS, are not part of this change.
 
   Technical details: documentation only (`docs/OPERATIONS.md`). The watchdog facts come from
-  `wrapper/turn_watchdog.py` (`TurnWatchdogConfig` defaults 1800 s and 600 s; default-on only for a
-  continuous `wrap --loop --cli codex`, see `cmd_wrap`).
+  `wrapper/turn_watchdog.py`: `TurnWatchdogConfig` defaults to 1800 s and 600 s, and is on by default
+  only for a continuous `wrap --loop --cli codex` (see `cmd_wrap`). The process list comes from
+  `_snapshot_posix` (`ps -axo pid=,ppid=,etimes=,comm=`) or `_snapshot_windows` (the PowerShell
+  recorded by `supervise --select-pwsh`). Apple's `ps` has `etime` but no `etimes`, so on macOS the list is never available. The
+  watchdog then does nothing, by design: it never kills without a list.
 
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,

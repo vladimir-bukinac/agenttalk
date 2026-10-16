@@ -517,16 +517,25 @@ for that guarantee; agenttalk does not supply them merely by generating the help
   running its `agenttalk wrap` command again.
 - **An agent that shows "working" for far longer than a turn usually takes may have
   a hung tool, not a busy one.** Its status says "working" for as long as its AI
-  tool runs, even when the tool has stopped making progress. One case is caught
-  for you: for a Codex agent run with `wrap --loop`, the wrapper's turn watchdog
-  ends a turn that has run for 30 minutes while a program the agent started has
-  been alive for 10 (the defaults; `turn_watchdog` in `supervisor.json` changes
-  them, and can switch it on for Claude agents, where it is off by default). For
-  anything else, look at the agent's wrapper log
-  ([Find logs and scheduled tasks](#find-logs-and-scheduled-tasks)): output that
-  stopped long ago points to a hung tool, though a quiet log alone does not prove
-  it. If you conclude it is hung, restart the agent as above. Its conversation is
-  kept.
+  tool runs, even when the tool has stopped making progress.
+  - The wrapper catches one case on Linux and Windows. For a Codex agent run with
+    `wrap --loop`, its turn watchdog ends a turn that has run for 30 minutes while
+    a program the agent started has been alive for 10. Those are the defaults:
+    `turn_watchdog` in `supervisor.json` changes them, and can switch the watchdog
+    on for Claude agents, where it is off by default. The watchdog needs a list of
+    running processes. On Linux it uses `ps`. On Windows it uses the PowerShell
+    selected for this project when its supervisor was set up. When it cannot get
+    that list, it does nothing.
+  - **On macOS the watchdog never ends a turn today.** Apple's `ps` lacks a field
+    the watchdog reads, so it never gets its list.
+  - In every other case you are the watchdog, including every agent on macOS. Look
+    at the agent's wrapper log
+    ([Find logs and scheduled tasks](#find-logs-and-scheduled-tasks)). Output that
+    stopped long ago points to a hung tool, though a quiet log alone does not prove
+    it. If you conclude it is hung, restart the agent by hand: with
+    `agenttalk request-restart --for <agent>` when the supervisor runs it, or by
+    stopping its wrapper process by its process ID and running its
+    `agenttalk wrap` command again. Its conversation is kept.
 
 ## Set up the paid gateway
 
