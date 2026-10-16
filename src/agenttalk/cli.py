@@ -6420,14 +6420,22 @@ def _kn_publish_preflight(args, actor: str) -> tuple[list[str], dict | None, dic
     from agenttalk import knowledge as kn
 
     errors: list[str] = []
-    try:
-        kn.validate_key(args.key)
-    except kn.KnowledgeError as exc:
-        errors.append(str(exc))
-    try:
-        kn.validate_body(args.message)
-    except kn.KnowledgeError as exc:
-        errors.append(str(exc))
+    # --key and -m are checked here, not by argparse, so that a missing one is
+    # listed with every other problem in one refusal.
+    if args.key is None:
+        errors.append("--key is required")
+    else:
+        try:
+            kn.validate_key(args.key)
+        except kn.KnowledgeError as exc:
+            errors.append(str(exc))
+    if args.message is None:
+        errors.append("-m/--message is required")
+    else:
+        try:
+            kn.validate_body(args.message)
+        except kn.KnowledgeError as exc:
+            errors.append(str(exc))
 
     is_lesson = args.type == kn.TYPE_LESSON
     if not is_lesson and not args.domain:
@@ -6489,6 +6497,9 @@ def _kn_publish_preflight(args, actor: str) -> tuple[list[str], dict | None, dic
             continue
         if not getattr(args, field, None):
             errors.append(f"{flag} is required for --type lesson")
+    scope = getattr(args, "scope", None)
+    if scope and scope not in kn.LESSON_SCOPES:
+        errors.append(f"--scope must be one of: {', '.join(sorted(kn.LESSON_SCOPES))}")
 
     for field, flag in (("trigger", "--trigger"), ("evidence_ref", "--evidence-ref")):
         value = getattr(args, field, None)
@@ -6606,6 +6617,16 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
     if action == "publish":
         actor = _resolve_self(getattr(args, "actor", None), roster=roster)
         errors, anchor, lesson = _kn_publish_preflight(args, actor)
+        if errors and (args.domain or args.type == kn.TYPE_LESSON):
+            # Name a refused domain in the same refusal, not only after every
+            # other option is fixed. A read-only registry check: Git and the
+            # ledger are still untouched, and the binding check runs again
+            # under the lock.
+            try:
+                _knowledge_resolve_domain_for_publish(
+                    store, args, _load_domain_registry(store))
+            except (kn.KnowledgeError, dom.DomainError) as exc:
+                errors.append(str(exc))
         if errors:
             for error in errors:
                 sys.stderr.write(f"agenttalk knowledge publish: {error}\n")
@@ -16493,11 +16514,12 @@ def build_parser() -> argparse.ArgumentParser:
                        "Without a domain registry, all note types can use --domain process.")
     knpub.add_argument("--type", required=True,
                        choices=sorted(["seam", "gotcha", "decision", "pointer", "lesson"]))
-    knpub.add_argument("--key", required=True, help="Stable note key (latest-by-key).")
-    knpub.add_argument("-m", "--message", required=True, help="The insight (not a copy of the anchor).")
+    knpub.add_argument("--key", help="Stable note key (latest-by-key). Required.")
+    knpub.add_argument("-m", "--message",
+                       help="The insight (not a copy of the anchor). Required.")
     knpub.add_argument("--verified-against", dest="verified_against",
                        help="Ref/SHA the insight was verified against (default: HEAD).")
-    knpub.add_argument("--scope", choices=lesson_scope_choices,
+    knpub.add_argument("--scope", metavar="{" + ",".join(lesson_scope_choices) + "}",
                        help="Lesson scope (required for --type lesson).")
     knpub.add_argument("--trigger", help="Lesson trigger text (required for --type lesson).")
     knpub.add_argument("--evidence-ref", dest="evidence_ref",

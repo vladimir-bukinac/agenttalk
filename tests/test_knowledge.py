@@ -855,15 +855,16 @@ def test_cli_curate_routes_single_durable_writer(
     assert calls["n"] == 2
 
 
-def test_publish_preflight_reports_all_errors_before_registry_git_or_ledger_io(
+def test_publish_preflight_reports_all_errors_before_git_or_ledger_io(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture) -> None:
+    # Rough edge 4: the read-only registry check may run on the error path,
+    # so a refused domain is listed too; Git and the ledger stay untouched.
     root = _repo(tmp_path)
 
     def forbidden(*args, **kwargs):
         raise AssertionError("preflight errors must stop before I/O")
 
-    monkeypatch.setattr(cli, "_load_domain_registry", forbidden)
     monkeypatch.setattr(cli, "_kn_full_head", forbidden)
     monkeypatch.setattr(kn, "write_event_locked", forbidden)
     rc = _run([
@@ -1887,6 +1888,60 @@ def test_search_without_a_word_or_tags_says_how_to_search_by_tag(
         rc = exc.code
     assert rc == 2
     assert "or --tags" in capsys.readouterr().err
+
+
+def _run_refused(argv: list[str], root: Path) -> int:
+    try:
+        return _run(argv, root)
+    except SystemExit as exc:
+        return exc.code
+
+
+def test_publish_lists_every_missing_or_invalid_option_in_one_refusal(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # Rough edge 4: a missing message, a wrong scope and a missing date were
+    # reported one per run.
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    rc = _run_refused(["knowledge", "publish", "--from", "dev", "--type", "lesson",
+                       "--scope", "operations", "--trigger", "t", "--evidence-ref",
+                       "rr-1", "--review-after", FUTURE_REVIEW], root)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--key is required" in err
+    assert "-m/--message is required" in err
+    assert "--scope must be one of" in err
+    assert "--expires-at is required for --type lesson" in err
+    assert kn.read_events(Store(root))[0] == []
+
+
+def test_publish_names_a_refused_domain_with_the_other_problems(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # Rough edge 4: a note refused for its domain heard about it only after
+    # every other option was fixed (this registry does not list process).
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    rc = _run_refused(["knowledge", "publish", "--from", "dev", "--type", "gotcha",
+                       "--domain", "process", "--key", "process.trap",
+                       "-m", "the insight"], root)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "anchor-kind is required for non-lesson notes" in err
+    assert "unknown domain 'process'" in err
+
+
+def test_publish_lists_a_broken_registry_with_the_field_errors(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root = _repo(tmp_path)
+    (Store(root).dir / "domains.json").write_text("{not json", encoding="utf-8")
+    capsys.readouterr()
+    rc = _run_refused(["knowledge", "publish", "--from", "dev", "--type", "gotcha",
+                       "--domain", "cli", "--key", "cli.trap", "--anchor-kind",
+                       "path", "--path", "src/cli.py"], root)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "-m/--message is required" in err
+    assert "is not valid JSON" in err
 
 
 def test_unrelated_orbit_domain_edit_is_caution_not_global_hard_stale(
