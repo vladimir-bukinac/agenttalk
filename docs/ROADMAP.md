@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-13 (UTC; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-16 (UTC; the Python practice and what it changes in §6.13; ideas from a single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.102.0 (2026-10-16). `CHANGELOG.md` remains the release-history source of truth.
@@ -221,7 +221,7 @@ At the end of week 2 the team counts the merged items, the review rounds, the Wi
 
 These go ahead only with spare allowance:
 - the review handover built in, if the running trial shows benefit (#306);
-- one packaged modernisation entry path (#153);
+- one packaged modernisation entry path (#153): its first increment moved up on 2026-10-16 (§6.13);
 - a source for searchable lead history (#375);
 - the turn ticket (#384);
 - a Linux and macOS monitor (#356): optional in weeks 5-6, still planned (§6.11).
@@ -292,6 +292,45 @@ The operator approved four measures. Two of them belong to a separate usage serv
 2. **A reserve for people:** a per-team setting such as "the agents use at most 70% of the weekly allowance". Past it, the lead takes on urgent work only. It goes to the usage service's design.
 3. **Outside use shown as its own category,** never as an error. It also goes to the usage service's design.
 4. **Readings from people's own Claude Code sessions,** through the same status-line reading the seats already use, so that less of the outside use goes unseen. Use in the Claude app or on the website still shows only in the account total. Small; it waits its turn with the usage-limit follow-ups (wave 2, item 10). (#470)
+
+### 6.13 The Python practice and the first outside team *(the operator's focus from 2026-10-14)*
+
+On 2026-10-14 the operator put all effort on one goal until the first outside team starts using agenttalk (about 2026-10-21): learn as much as possible about understanding, improving and migrating Python codebases. The team practised on public open-source code only, mostly on a Linux virtual machine:
+- an online shop from 2012 (Satchmo 0.9.2), moved from Python 2 to Python 3.13 and Django 5.2, then improved, including its payment modules;
+- a newer shop (Shuup 3.1.0, from 2021), moved from Django 2.2 to 5.2 one version at a time;
+- a donation platform's 2018 payout engine (Liberapay), moved to Python 3.13 with its money code unchanged;
+- Python 3.14 container images, a Laravel app moved to PHP 8.5, and the same apps under a Kubernetes pod spec;
+- still running: charging once and acting once on a key-value store and a message queue, using local stand-ins.
+
+**What it taught about migrations.** This is the method, and it is what an outside team needs most.
+1. **Another vendor's independent rebuild found regressions that everything else had passed.** Every frozen test suite and every same-vendor review had passed the work. Examples: a removed function on an error path; Python 3 refusing to sort tied values; a binary buffer replaced by a text one; an acceptance suite that stayed green with the payment step skipped.
+2. **A check is evidence only if it can fail.** Break the code on purpose and see the check go red. A "fixed" claim needs its test to fail with the fix removed, on its assertion and not on an import error.
+3. **Concurrency claims hold only on the production database with several workers, against the old version as the baseline.** In one run a safety fix made overselling worse; the single-file test database had hidden it.
+4. **One finding of a kind means a search for the whole kind.** The search after five findings found five more.
+5. **A failing test after an upgrade is a finding, never a test to edit.** And each claim is written at the size of its proof.
+
+**What it taught about agenttalk.** These are problems a new Linux or Python team meets in its first hours.
+- Background agents would not start from a normal Python virtual environment on Linux and macOS. Fixed in v0.102.0 (#493).
+- First-hour messages that point the wrong way (#508):
+  - a Claude seat that cannot start gets advice about Codex;
+  - a restart hint needs the supervisor;
+  - a refusal blames an old build when the seat simply has not started yet;
+  - knowledge commands report their missing options one at a time.
+- The code-understanding scan reports "complete" on a Python repository it cannot read (#496). A trial read of both shops showed that Python support is feasible (#495, design only).
+- An AI tool that hangs at start-up shows as "working" forever (#497).
+- Coordination gaps:
+  - a finished review does not wake the lead (one team sat idle for about an hour because of it);
+  - drafts an agent decided not to send raise false alarms;
+  - a review request that reuses a task's id loses its thread.
+
+**What changes in the plan.** Each larger item keeps its own challenge; the challenge on this list asked for it to stay small.
+1. **Released:** v0.102.0 (2026-10-16), with the virtual-environment fix.
+2. **Next release, before the outside team starts:**
+   - one batch of first-hour fixes: #508 items 1-3, 5 and 6; knowledge commands that report every missing option at once; an honest scan status for languages it cannot read (#496); and a docs line on hung tools and on restarting seats after a tool update (#497);
+   - the first-run setup guide brought up to v0.102.0 and linked from the README (#507).
+3. **The migration method moves up** from the optional weeks 5-6 (§6.7). Its first increment is a short skill, about 150 lines, carrying the rules above with no project or payment specifics (#153). It ships only if a blind test shows that it helps: two fresh agents port the same small old app with four hidden regressions, one with the skill and one without.
+4. **New issues, designed later:** wake the lead when a review closes the last open piece of its task; let an agent discard a draft on purpose; keep the thread when a request id is reused. Hang detection (#497) and start-on-boot (#356) keep their places.
+5. **Python code understanding (#495)** follows the outside team's first week, with its own challenge.
 
 ---
 
@@ -377,6 +416,17 @@ Houmao runs teams of command-line agents in tmux on Linux and macOS: specialists
 - **A docs check** that every command a document shows was run once.
 
 One point from the opinions: #178 needs crash tests. A crash after the work is finished but before the reply is recorded must be covered. An outcome nobody can tell needs reconciling, not a blind rerun.
+
+### 7.3 Ideas from a single-agent harness (read on 2026-10-16)
+
+A colleague's internal tool makes one coding agent safe to run with little supervision across a family of company repositories. It is not public; we read it with permission and ran nothing from it. It has no team: no roles, no review by another seat, no message bus. It judges its own value from an audit trail of about 30,000 events, and keeps only what enforces a rule, joins several steps, or adapts to the machine it runs on. Four ideas fit agenttalk; none is challenged yet.
+
+| Idea | What it would change here | Status |
+|---|---|---|
+| **Seats inside a locked-down container** | Unattended seats run in a container whose network is closed except for a short allow-list. Build caches are shared from the host, and repository credentials are added by the network proxy instead of being stored inside. Today our seats run on the host with full permissions. A team with strict rules on where its code and data may go needs this before it runs seats unattended. It is the next step after the containment census (#336) and the per-seat command limits in §7.1. | Design and challenge first; a probe with one seat |
+| **Secrets kept outside the agent** | The agent asks the host for a key it was granted, and checks refuse any command that would print a secret. A value that reaches a transcript is rotated, not just noted. Our seats inherit the operator's environment. | Design, with a security read |
+| **Measure which commands actually work** | Every wrapped command writes a redacted record with its exit code. The record showed which commands failed often (one failed in 44% of uses) and decided whether to keep, fix or drop each. agenttalk's turn records could give the same report per command and per skill. | A report first, no build |
+| **One instruction file every agent reads** | The rules live in a vendor-neutral `AGENTS.md` that Claude Code imports, so they survive a change of agent. We keep separate Claude and Codex skill sets; check whether a shared entry file would cut the duplication. | Small probe |
 
 ---
 
@@ -519,8 +569,9 @@ Do not ship broad workflow claims if any of these are true:
 
 ---
 
-## 12. Known Limitations (2026-10-10)
+## 12. Known Limitations (2026-10-10, updated 2026-10-16)
 
+- **The code-understanding scan reads Java only.** On a Python repository it reports "complete" although nothing was analysed (#496). The honest status is in the next batch of fixes; Python support is designed in #495 (§6.13).
 - **The supervisor** is PowerShell Core + `Win32_Process`-bound, and it is not run on the maintainers' fleet. Dead seats are relaunched by hand (§8).
 - **Publications serialize on one store-wide guard.** Several sends back to back can make waiting wrappers exit without a crash record (#154).
 - **Wrapped seat turns start only on a message.** Unfinished multi-turn work waits for the next message (#139).
@@ -535,10 +586,10 @@ Do not ship broad workflow claims if any of these are true:
 
 ## 13. Recommendation
 
-1. **Done: v0.94.0 shipped** (the first board delivery plus the console v2 preview, with the fleet upgraded once), followed by v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0, v0.101.0 (2026-10-12), v0.101.1 (2026-10-13) and v0.102.0 (2026-10-16). #407 and #433 are merged (2026-10-10). The next steps are the operator's order of 2026-10-12 (§6.11); the rest of wave 1 and wave 2 (§6.3 and §6.4) and the end-of-week-2 re-plan (§6.5) follow, and the re-plan also weighs the §7.1 and §7.2 ideas.
+1. **Done: v0.94.0 shipped** (the first board delivery plus the console v2 preview, with the fleet upgraded once), followed by v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0, v0.101.0 (2026-10-12), v0.101.1 (2026-10-13) and v0.102.0 (2026-10-16). #407 and #433 are merged (2026-10-10). Until the first outside team starts (about 2026-10-21), the focus is the Python practice and the fixes it found (§6.13). After that, the next steps are the operator's order of 2026-10-12 (§6.11); the rest of wave 1 and wave 2 (§6.3 and §6.4) and the end-of-week-2 re-plan (§6.5) follow, and the re-plan also weighs the §7.1 and §7.2 ideas.
 2. **Later, not in the approved plan (§8):** make the team self-healing (restart a dead seat, run the supervisor, stop a dead seat waiting out its heartbeat threshold, then the crash harness and guard-aware relaunch, then host-restart survival); fix the store at the mechanism (measure and shrink the publication critical section, reconcile stale obligations). Wrappers surviving store contention already shipped in 0.94.0 (#218).
-3. **Also later:** the remaining refocus items (context policy with knowledge and memory, §8) and a first-class migration method (#153, optional weeks 5-6 in §6.7). Spec-kitty removal is done.
+3. **Also later:** the remaining refocus items (context policy with knowledge and memory, §8). The first-class migration method (#153) has moved up: its first increment is in §6.13. Spec-kitty removal is done.
 4. **Each of these keeps its own challenge:** nothing in §8 starts without one.
-5. **Later:** the remaining §7 candidates by rank, and the §7.2 ideas that have no place yet: 2 (typed tools through MCP), 10 (the Claude Code mod) and the build of 5. The other §7.2 ideas are already placed: 1 inside #178 (§6.11), 6 right after #178 and the README change, the design of 5 right after #178, and 9, 7, 3 + 8 and 4 in weeks 3-4. Each still gets its own challenge verdict.
+5. **Later:** the remaining §7 candidates by rank, the §7.3 ideas, and the §7.2 ideas that have no place yet: 2 (typed tools through MCP), 10 (the Claude Code mod) and the build of 5. The other §7.2 ideas are already placed: 1 inside #178 (§6.11), 6 right after #178 and the README change, the design of 5 right after #178, and 9, 7, 3 + 8 and 4 in weeks 3-4. Each still gets its own challenge verdict.
 
 Bottom line: agenttalk can become the platform for teams of agents from different vendors to build software "by the book". But the product has to be honest about authority. It can enforce process, preserve evidence, challenge work before it starts, and fail closed when evidence is missing. It cannot remove the human oracle or prove correctness by itself.
