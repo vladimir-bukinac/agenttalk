@@ -12095,6 +12095,16 @@ def _cadence_health_notifier(store, agent: str):
     return emit
 
 
+def _supervisor_running(store) -> bool:
+    """A valid supervisor instance marker whose owner is not confirmed gone.
+
+    An owner whose liveness cannot be probed counts as running, so the
+    request-restart advice is replaced only when no supervisor can act on it.
+    """
+    rec = store.read_supervisor_instance()
+    return rec is not None and not _owner_identity_gone(rec.get("pid"), rec.get("pid_start"))
+
+
 def _launch_config_blocked_notifier(store, agent: str):
     """Operator escalation for a pre-loop wrapper launch preflight failure."""
     def emit(summary: str) -> bool:
@@ -12102,12 +12112,23 @@ def _launch_config_blocked_notifier(store, agent: str):
             target = store.operator_facing() or store.sole_lead()
             if not target or target == agent:
                 return False
+            # #508 item 2: request-restart only asks a supervisor to relaunch
+            # the agent, so without one it would do nothing.
+            if _supervisor_running(store):
+                next_step = ("After repairing the launch config, run: "
+                             f"agenttalk request-restart --for {agent}")
+            else:
+                next_step = (
+                    "No supervisor is running, so agenttalk request-restart would "
+                    "do nothing: repair the launch config as the remediation says, "
+                    f"then start {agent} again the way it was started (for example "
+                    "the same agenttalk wrap command)"
+                )
             body = (
                 f"[wrapper-launch-config-blocked] agent {agent} did not enter the "
                 "wrapper loop because launch/runtime preflight failed before any "
                 "message was consumed. Cursor, attempts, and dead-letter state are "
-                f"unchanged. Command/error/remediation: {summary}. After repairing "
-                f"the launch config, run: agenttalk request-restart --for {agent}"
+                f"unchanged. Command/error/remediation: {summary}. {next_step}"
             )
             store.send(
                 sender=agent,

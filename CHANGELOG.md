@@ -106,6 +106,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_launch_preflight_missing_cli_advice_fits_the_platform` (four cases) and
   `test_launch_preflight_claude_shim_gives_no_codex_advice`.
 
+- **When an agent cannot start and no supervisor is running, the notice now says how to start it again
+  (#508, item 2).** When an agent's wrapper cannot start the agent's AI tool, it sends a notice to the
+  person or agent who looks after the team. The notice ended with "run: agenttalk request-restart". That
+  command only asks the supervisor (the background program that starts and restarts agents) to restart
+  the agent; with no supervisor running, nothing happens.
+
+  What you will notice: before this, the notice always said to run `agenttalk request-restart`. Now it
+  says that only when a supervisor is running. Otherwise it says that no supervisor is running, so
+  `request-restart` would do nothing: fix the launch command as the advice in the notice says, then start
+  the agent again the way it was started (for example with the same `agenttalk wrap` command).
+
+  What you need to do: nothing.
+
+  Technical details: new `cli._supervisor_running(store)`: a valid supervisor instance marker
+  (`Store.read_supervisor_instance`) whose owner process is not confirmed gone (`_owner_identity_gone`).
+  When the owner's liveness cannot be checked, the supervisor counts as running and the old advice stays.
+  Used by `_launch_config_blocked_notifier`. The notice for an agent parked on a message ("wrapper
+  config-blocked") still says `request-restart`; it is not part of this change. Tests in
+  `tests/test_wrapper_loop.py`: `test_cmd_wrap_launch_blocked_without_supervisor_says_start_again`,
+  `test_cmd_wrap_launch_blocked_with_dead_supervisor_says_start_again` and
+  `test_cmd_wrap_launch_blocked_with_live_supervisor_keeps_request_restart`.
+
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
   which is fast and uses no extra space) and otherwise copies the files. That check linked two test files

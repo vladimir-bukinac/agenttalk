@@ -4044,6 +4044,49 @@ def test_cmd_wrap_launch_preflight_blocks_before_consuming_message(tmp_path) -> 
     assert "missing-codex.exe" in notice.body
 
 
+def _launch_blocked_notice_body(tmp_path, s: Store) -> str:
+    s.set_operator_facing("alpha")
+    rc = cli.main([
+        "--root", str(tmp_path),
+        "wrap", "--for", "beta", "--cli", "codex", "--loop",
+        "--", str(tmp_path / "missing-codex.exe"),
+    ])
+    assert rc == 1
+    notice = s.messages_for("alpha")[-1]
+    assert notice.subject == "wrapper launch config-blocked"
+    return notice.body
+
+
+def test_cmd_wrap_launch_blocked_without_supervisor_says_start_again(tmp_path) -> None:
+    # #508 item 2: request-restart only asks a supervisor to restart the seat;
+    # with no supervisor running it does nothing.
+    body = _launch_blocked_notice_body(tmp_path, _store(tmp_path))
+    assert "run: agenttalk request-restart" not in body
+    assert "No supervisor is running" in body
+    assert "start beta again the way it was started" in body
+
+
+def test_cmd_wrap_launch_blocked_with_live_supervisor_keeps_request_restart(
+    tmp_path,
+) -> None:
+    s = _store(tmp_path)
+    assert s.claim_supervisor_instance(pid=os.getpid()) is not None
+    body = _launch_blocked_notice_body(tmp_path, s)
+    assert "run: agenttalk request-restart --for beta" in body
+    assert "No supervisor is running" not in body
+
+
+def test_cmd_wrap_launch_blocked_with_dead_supervisor_says_start_again(
+    tmp_path, monkeypatch,
+) -> None:
+    s = _store(tmp_path)
+    assert s.claim_supervisor_instance(pid=os.getpid()) is not None
+    monkeypatch.setattr(cli, "_owner_identity_gone", lambda *_args: True)
+    body = _launch_blocked_notice_body(tmp_path, s)
+    assert "run: agenttalk request-restart" not in body
+    assert "start beta again the way it was started" in body
+
+
 def test_cmd_wrap_preflight_success_clears_config_blocked_hold(
     tmp_path,
     monkeypatch,
