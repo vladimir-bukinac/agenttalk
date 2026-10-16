@@ -128,6 +128,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_cmd_wrap_launch_blocked_with_dead_supervisor_says_start_again` and
   `test_cmd_wrap_launch_blocked_with_live_supervisor_keeps_request_restart`.
 
+- **A work order sent to an agent that has never started now says so, instead of blaming an old
+  version (#508, item 3).** `agenttalk task` refuses to send a work order to an agent whose agenttalk
+  version is too old to read one, because that agent would quietly drop it. An agent that had never
+  started has no version on record, so it was refused as if it ran an old version, with "(unknown)"
+  as its version.
+
+  What you will notice: before this, a work order to a new agent that had not run yet was refused
+  with "the recipient is on an agenttalk build that predates task-kind support ... (unknown)". Now,
+  when the agent has no heartbeat (the "I am alive" stamp an agent writes while it runs) and no
+  health record at all, the refusal says the agent has not started yet, so agenttalk cannot tell
+  whether its version can read a work order. It says to start the agent first, or to send with
+  `--force`: then the order waits in the agent's queue and is read when the agent starts, if it runs
+  agenttalk 0.88 or later. With `--force` the notice says the same. An agent that has run but never
+  reported its version is still refused as "(unknown)", as before. The guide for leads
+  (`docs/LEAD-SETUP-BRIEF.md`, "Known rough edges") quotes the new message.
+
+  What you need to do: nothing. Start the agent, then send the work order again.
+
+  Technical details: new `cli._never_started(store, agent)`: `Store.read_heartbeat` is `None` and
+  the health file (`Store.health_path`) does not exist. `cmd_task` uses it for the refusal and the
+  `--force` notice. `_recipients_behind_kind` and `agenttalk broadcast --kind task` are unchanged.
+  Tests in `tests/test_cli.py`: `test_task_to_a_seat_that_never_started_says_so_not_old_build`,
+  `test_task_force_to_a_seat_that_never_started_says_when_it_arrives` and
+  `test_task_to_a_seat_with_only_a_heartbeat_still_reports_unknown_build`.
+
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
   which is fast and uses no extra space) and otherwise copies the files. That check linked two test files

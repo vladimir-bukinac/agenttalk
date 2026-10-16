@@ -1154,10 +1154,10 @@ works from a fresh shell; and your human knows how to start, stop and restart.
 - **A seat quits within seconds of starting, with "executable not found on PATH".** The
   script's PATH has no `claude` or `codex`. Put the full path in the script (step 5a) and run
   it again; the seat starts, and no `ack` is needed.
-- **A `task` to a seat that has never started is refused**, with a message that the
-  recipient "is on an agenttalk build that predates task-kind support" (or is "unknown").
-  The real cause is that the seat has not run yet, so it has no heartbeat. Start it (step 5),
-  wait for `idle_waiting`, and send the order again. Do not use `--force`.
+- **A `task` to a seat that has never started is refused**, with a message that the seat
+  "has not started yet". It has not run, so agenttalk cannot tell whether its version can
+  read a task. Start it (step 5), wait for `idle_waiting`, and send the order again. Do not
+  use `--force`.
 - **A frozen assistant can look busy forever.** While a seat works, its status shows a
   working health state, even if the assistant inside is stuck. Check the **log file**:
   `<team>/logs/<seat>.out.log` should keep growing during a turn. If a seat shows

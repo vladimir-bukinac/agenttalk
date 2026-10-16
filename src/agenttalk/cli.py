@@ -8059,6 +8059,11 @@ def _recipients_behind_kind(store: Store, recipients: list[str], *,
     return behind
 
 
+def _never_started(store: Store, agent: str) -> bool:
+    """No heartbeat and no health record: the agent has never run here."""
+    return store.read_heartbeat(agent) is None and not store.health_path(agent).exists()
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     """Send a `task`: a lead work order the recipient must execute (or
     explicitly decline) under standing guardrails — the ONE kind whose body
@@ -8135,7 +8140,20 @@ def cmd_task(args: argparse.Namespace) -> int:
     force_notice = None
     if behind:
         names = ", ".join(f"{name} ({version})" for name, version in behind)
+        # #508 item 3: a seat with no heartbeat and no health record has never
+        # started, so its build is not known to be old.
+        floor = ".".join(str(part) for part in store_mod.KIND_SUPPORT_FLOOR["task"])
+        not_started = _never_started(store, recipient)
         if not getattr(args, "force", False):
+            if not_started:
+                sys.stderr.write(
+                    f"agenttalk task: refusing — {recipient} has not started yet "
+                    "(no heartbeat and no health record), so it is not known "
+                    "whether its agenttalk build can read a task. Start it "
+                    "first, or re-run with --force to send now: the task waits "
+                    f"in its queue, and it reads it when it starts if it runs "
+                    f"agenttalk {floor} or later.\n")
+                return 2
             sys.stderr.write(
                 "agenttalk task: refusing — the recipient is on an agenttalk "
                 "build that predates task-kind support and would silently "
@@ -8148,10 +8166,16 @@ def cmd_task(args: argparse.Namespace) -> int:
         # finding: the code must match its own docstring/help/CHANGELOG claim
         # that --force "prints exactly who will not see the message," not just
         # silently override the refusal.
-        force_notice = (
-            f"agenttalk task: --force — sending anyway. This recipient will "
-            f"NOT see it (agenttalk build predates task-kind support): "
-            f"{names}.\n")
+        if not_started:
+            force_notice = (
+                f"agenttalk task: --force — sending anyway. {recipient} has not "
+                "started yet (no heartbeat and no health record); it reads the "
+                f"task when it starts if it runs agenttalk {floor} or later.\n")
+        else:
+            force_notice = (
+                f"agenttalk task: --force — sending anyway. This recipient will "
+                f"NOT see it (agenttalk build predates task-kind support): "
+                f"{names}.\n")
     minted_id = _maybe_autogen_request_id("task", meta)
     msg = store.send(
         sender=sender,
