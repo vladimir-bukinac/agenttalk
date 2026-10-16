@@ -90,8 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   What you will notice: before this, every agent got the Codex advice. Now the advice names the agent's
   own tool and fits the computer it runs on. A Claude agent is told to give the full path of `claude`
   after `--`, with the usual place as an example (`~/.local/bin/claude` on Linux and macOS,
-  `%USERPROFILE%\.local\bin\claude.exe` on Windows) and the command that prints it (`command -v claude`,
-  or `where claude` on Windows). A Codex agent is still told about `AGENTTALK_CODEX`, and "native
+  `C:\Users\<you>\.local\bin\claude.exe` on Windows) and the command that prints it (`command -v claude`,
+  or `where.exe claude` on Windows, which works in both PowerShell and the Command Prompt). A Codex agent is still told about `AGENTTALK_CODEX`, and "native
   codex.exe" appears only on Windows. The same applies when the path points at a Windows helper script
   (`.cmd`, `.bat` or `.ps1`) that the wrapper cannot start directly.
 

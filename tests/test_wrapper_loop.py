@@ -3140,6 +3140,10 @@ def test_launch_preflight_missing_codex_gives_codex_advice_not_claude(
 @pytest.mark.parametrize(("cli", "is_windows", "expected", "absent"), [
     ("claude", False, "~/.local/bin/claude", ".exe"),
     ("claude", True, "claude.exe", "~/"),
+    # Codex read P3: in PowerShell `where` is Where-Object and %VAR% does not
+    # expand, so the Windows advice must work in both PowerShell and cmd.
+    ("claude", True, "'where.exe claude'", "%"),
+    ("claude", True, "C:\\Users\\<you>\\.local\\bin\\claude.exe", "'where claude'"),
     ("codex", False, "command -v codex", ".exe"),
     ("codex", True, "native codex.exe", "command -v"),
 ])

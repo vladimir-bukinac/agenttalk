@@ -770,8 +770,10 @@ def _launch_cli_remediation(cli: str, *, is_windows: bool) -> str:
     """
     if cli == "claude":
         if is_windows:
-            return ("pass the full path of claude.exe after -- (for example "
-                    "%USERPROFILE%\\.local\\bin\\claude.exe; 'where claude' prints it)")
+            # where.exe and a literal path work in both PowerShell and cmd; in
+            # PowerShell `where` is Where-Object and %VAR% does not expand.
+            return ("pass the full path of claude.exe after -- (usually "
+                    "C:\\Users\\<you>\\.local\\bin\\claude.exe; 'where.exe claude' prints it)")
         return ("pass the full path of claude after -- (for example "
                 "~/.local/bin/claude; 'command -v claude' prints it)")
     if cli == "codex":
