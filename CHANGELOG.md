@@ -14,32 +14,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A new skill, `thinking-games`, for the few moments when a different way of thinking helps.**
   Some decisions get better when someone looks at them from a different angle. The new skill gives
-  agents a small set of short thinking games and roles for that, to use only at a few named
-  moments: at the start of a new design, before it is challenged; after two failed attempts on the
-  same assumption (then only the "reality probe", which ends in a real test); and as a side round on
-  product ideas, after plain experts have had their say. It is not for routine work, fixes ordered
-  by a review, releases or every task, and one game per moment is enough.
+  agents short thinking games, and roleplay cards to think from, for a few named moments only: at
+  the start of a new design, before it is challenged (the challenge skill is where an independent
+  agent asks whether the work should be done at all); after two failed attempts on the same
+  assumption, outside a round of fixes ordered by a review (then only the "reality probe", which
+  ends in a real test); and as a side round on product ideas, after agents have given their ideas
+  the plain way. It is not for routine work, fixes ordered by a review, releases or every task. One
+  game per moment is enough (in a team round, one per pair or group).
 
-  How it works: two lists of ideas are written separately, one in the usual way and one with a game
-  or a role, without either side seeing the other. They are merged, and someone who did not write
-  them marks each idea adopt, reject or already in the plan, with one line on why. Every idea says
-  what it would do, what it should improve, how it would most likely fail, and a cheap way to test
-  it. Agents can also play as a team: pairs or small groups each pick a different game and work
-  independently before they compare. There are thirteen games (for example "forbid the favourite",
-  "assumption Jenga" and "evidence from the future") and a set of roles to think from (for example
-  the attacker, the auditor, the on-call engineer woken at night, or the person who will make the
-  decision). What a role claims is a guess to be tested, never a fact, and a simulated
-  decision-maker never replaces asking the real person or speaks in their name. "Nothing useful" is
-  an accepted result, a game never decides what is in scope, and whether to do the work at all
-  stays with the challenge skill.
+  How it works: two lists of ideas are written from the same short description of the decision,
+  one the usual way and one with a game. The second list is written by another agent, or by a fresh
+  one that never saw the first list; when that is not possible, the round is labelled "not
+  independent". Every idea says what it would do, what it should improve, how it would most likely
+  fail, and a cheap way to test it. The lists are merged, and someone who wrote neither marks each
+  idea adopt, reject or already in the plan, with one line on why. A short quick start at the top
+  of the skill covers just these steps.
 
-  Each round leaves a one-line score of what was adopted and which game or role it came from, so a
-  game that never helps can be dropped later. An honest note: in a small blind trial, no single
-  game beat an ordinary list; the gain came from having two independent lists, and the games are a
-  cheap way to make the second one different.
+  What is in it: thirteen games, for example "forbid the favourite" (plan without the obvious
+  answer, then bring it back), "pull one assumption" and "evidence from the future" (write the
+  support ticket from a future where the idea works). Twelve roleplay cards give a viewpoint to
+  think from, such as an attacker, an auditor, the on-call engineer woken at night or the person
+  who will make the decision. Five formats are for pairs or groups, such as a courtroom or a red
+  team against a blue team. In a team round, each pair or group picks a different game and works
+  alone before they compare.
+
+  The safety rules: what a roleplay card claims is a guess to be tested, never a fact. Tests and
+  probes run only on copies or test environments, never on live systems or anyone else's. A
+  simulated decision-maker is labelled as simulated, never speaks in the real person's name, never
+  replaces asking them, and never hides an option from them. "Nothing useful" is an accepted
+  result, a game never decides what is in scope, and whether to do the work at all stays with the
+  challenge skill.
+
+  Each round leaves a one-line score of what was adopted and which game or roleplay card it came
+  from. A card is judged only after at least five plays; one that never added a useful idea that
+  only it found can then be reworked or dropped. An honest note: the evidence is small. One blind
+  trial of three runs tried three of the games. The game list was never judged better than the
+  ordinary list, and once worse. The gain came from merging two independent lists, each of which
+  added useful ideas the other missed, and judging the lists took more agent time than writing
+  them. The roleplay cards, the formats, the team round and the other ten games are untried. That a
+  game makes the second list more different than a second ordinary list would is a hope the scores
+  will test, not a finding.
 
   What you will notice: nothing changes on its own. Agents are meant to use the skill only at those
-  moments, and it works best when a lead's work order names the game.
+  moments, and it is meant to be named in a lead's work order (the written task a team lead gives
+  an agent).
 
   What you need to do: run `agenttalk install-skills` to install it.
 

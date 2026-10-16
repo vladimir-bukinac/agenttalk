@@ -32,7 +32,7 @@ unique evidence).
 | Documentation accuracy / audience / prose review | review-docs |
 | Failure-path / contract-drift / release-readiness assurance | review-failure-injection / review-contract-drift / review-release-readiness |
 | Release / milestone multi-lens close | system-review-protocol |
-| A second, different list of ideas at a named moment (design start, two failed attempts on one assumption, product-ideas side round) | thinking-games |
+| A second, independent list of ideas at a named moment (design start, two failed attempts on one assumption outside a review-ordered fix round, product-ideas side round) | thinking-games |
 
 ## Core precedence
 
