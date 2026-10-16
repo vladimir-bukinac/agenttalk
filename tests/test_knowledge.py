@@ -1944,6 +1944,42 @@ def test_publish_lists_a_broken_registry_with_the_field_errors(
     assert "is not valid JSON" in err
 
 
+def test_publish_output_names_the_domain_a_lesson_was_stored_in(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # #508 item 6: --scope ops stores the lesson in domain process, and the
+    # next command (curate verify --domain) needs process, not ops.
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    assert _run(["knowledge", "publish", "--from", "dev", "--type", "lesson",
+                 "--key", "ops.restart", "--scope", "ops", "--trigger", "t",
+                 "--evidence-ref", "rr-1", "--review-after", FUTURE_REVIEW,
+                 "--expires-at", FUTURE_EXPIRES, "-m", "the insight"], root) == 0
+    out = capsys.readouterr().out
+    assert "stored in domain process" in out
+    assert "--scope ops labels the lesson; it does not choose the domain" in out
+    assert "agenttalk knowledge curate verify --domain process --key ops.restart" in out
+    assert _lesson_verify(root, "ops.restart") == 0
+
+
+def test_publish_output_for_a_note_names_its_domain_without_a_scope_hint(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    assert _pub(root, key="cli.trap") == 0
+    out = capsys.readouterr().out
+    assert "stored in domain cli" in out
+    assert "--scope" not in out
+
+
+def test_publish_help_says_scope_does_not_choose_the_domain(
+        capsys: pytest.CaptureFixture) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["knowledge", "publish", "--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "it does not choose the domain" in out
+    assert "prints the domain it used" in out
+
+
 def test_unrelated_orbit_domain_edit_is_caution_not_global_hard_stale(
         tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     root = _repo(tmp_path)

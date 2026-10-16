@@ -6681,6 +6681,14 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
                 return 2
             kn.write_event_locked(store, evt)
         print(f"published note {evt['id']} {domain_id}/{args.key} ({args.type}, uncurated)")
+        # #508 item 6: a lesson's --scope is easy to mistake for its domain, and
+        # the next command (curate, search --domain) needs the domain.
+        scope = getattr(args, "scope", None)
+        scope_hint = (
+            f" (--scope {scope} labels the lesson; it does not choose the domain)"
+            if scope and scope != domain_id else "")
+        print(f"stored in domain {domain_id}{scope_hint}. To verify it: agenttalk "
+              f"knowledge curate verify --domain {domain_id} --key {args.key}")
         return 0
 
     if action == "curate":
@@ -16511,7 +16519,8 @@ def build_parser() -> argparse.ArgumentParser:
              "to the virtual process domain.")
     knpub.add_argument("--from", dest="actor", help="Publishing agent.")
     knpub.add_argument("--domain", help="Domain id; required except for lessons (default: process). "
-                       "Without a domain registry, all note types can use --domain process.")
+                       "Without a domain registry, all note types can use --domain process. "
+                       "publish prints the domain it used; curate and search need that one.")
     knpub.add_argument("--type", required=True,
                        choices=sorted(["seam", "gotcha", "decision", "pointer", "lesson"]))
     knpub.add_argument("--key", help="Stable note key (latest-by-key). Required.")
@@ -16520,7 +16529,8 @@ def build_parser() -> argparse.ArgumentParser:
     knpub.add_argument("--verified-against", dest="verified_against",
                        help="Ref/SHA the insight was verified against (default: HEAD).")
     knpub.add_argument("--scope", metavar="{" + ",".join(lesson_scope_choices) + "}",
-                       help="Lesson scope (required for --type lesson).")
+                       help="Lesson scope (required for --type lesson). It labels the "
+                            "kind of lesson; it does not choose the domain (see --domain).")
     knpub.add_argument("--trigger", help="Lesson trigger text (required for --type lesson).")
     knpub.add_argument("--evidence-ref", dest="evidence_ref",
                        help="Lesson evidence reference (required for --type lesson).")

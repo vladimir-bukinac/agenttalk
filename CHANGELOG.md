@@ -200,6 +200,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_publish_lists_a_broken_registry_with_the_field_errors`, and the renamed
   `test_publish_preflight_reports_all_errors_before_git_or_ledger_io`.
 
+- **`agenttalk knowledge publish` now says which domain it stored the note in (#508, item 6).** Every
+  lesson has a scope (what kind of lesson it is, for example `ops`) and is stored in a domain (the
+  part of the project it belongs to; lessons go to `process` unless you give `--domain`). The two are
+  easy to mix up. A lesson published with `--scope ops` is stored in domain `process`, so the next
+  command, for example `knowledge curate verify --domain ops`, found nothing.
+
+  What you will notice: before this, `publish` printed only `published note <id> process/<key>`, and
+  the help did not say that `--scope` leaves the domain alone. Now a second line says
+  `stored in domain process`, adds "(--scope ops labels the lesson; it does not choose the domain)"
+  when the two differ, and gives the command to verify the note with the right domain. The help for
+  `--scope` and `--domain` says the same. What is stored has not changed.
+
+  What you need to do: nothing. Use the domain that `publish` prints in the next command.
+
+  Technical details: `cmd_knowledge` (publish) prints the extra line after the unchanged first line;
+  the `--scope` and `--domain` help texts of `knowledge publish` changed. Tests in
+  `tests/test_knowledge.py`: `test_publish_output_names_the_domain_a_lesson_was_stored_in`,
+  `test_publish_output_for_a_note_names_its_domain_without_a_scope_hint` and
+  `test_publish_help_says_scope_does_not_choose_the_domain`.
+
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
   which is fast and uses no extra space) and otherwise copies the files. That check linked two test files
