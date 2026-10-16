@@ -6739,6 +6739,11 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
                     f"agenttalk knowledge: --{field.replace('_', '-')} must be zero or greater.\n"
                 )
                 return 2
+        if action == "search" and args.query is None and not lesson_tags:
+            sys.stderr.write(
+                "agenttalk knowledge search: give a search word, or --tags <tag> "
+                "to list every lesson with that tag.\n")
+            return 2
         exact_key = getattr(args, "key", None) if action == "search" else None
         if exact_key is not None and not getattr(args, "domain", None):
             sys.stderr.write("agenttalk knowledge search: --key needs --domain.\n")
@@ -16538,10 +16543,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     knsearch = knsub.add_parser(
         "search", help="Substring search over pointer and lesson fields.")
-    knsearch.add_argument("query", help="Search string.")
+    knsearch.add_argument("query", nargs="?",
+                          help="Search string. Optional with --tags, which then lists "
+                               "every lesson with one of those tags.")
     knsearch.add_argument("--domain")
     knsearch.add_argument("--key", help="Only the note with exactly this key (needs --domain); "
-                                       "applied before --limit. The search string is still required.")
+                                       "applied before --limit. Still needs a search "
+                                       "string or --tags.")
     knsearch.add_argument("--type", choices=sorted(["seam", "gotcha", "decision", "pointer", "lesson"]))
     knsearch.add_argument("--scope", choices=lesson_scope_choices,
                           help="Limit lesson search to a scope.")

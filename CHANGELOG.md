@@ -153,6 +153,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_task_force_to_a_seat_that_never_started_says_when_it_arrives` and
   `test_task_to_a_seat_with_only_a_heartbeat_still_reports_unknown_build`.
 
+- **`agenttalk knowledge search --tags <tag>` now works without a search word (#508, item 5).** A
+  lesson in the team's knowledge store carries a few short tags (for example `shell`), so it can be
+  found again later. Searching by tag alone failed, because the search always demanded a word as
+  well.
+
+  What you will notice: before this, `knowledge search --tags shell` stopped with "the following
+  arguments are required: query". Now it lists every lesson tagged `shell`; add a word to narrow the
+  list. A search with neither a word nor `--tags` still stops, and now says how to search by tag. The
+  guide for leads (`docs/LEAD-SETUP-BRIEF.md`) no longer says a word is needed.
+
+  What you need to do: nothing.
+
+  Technical details: the `query` argument of `knowledge search` is optional (`nargs="?"`); `cmd_knowledge`
+  refuses a search with no query and no `--tags` (exit 2). An empty query (`""`) still matches every
+  note, as before. `knowledge.select_knowledge_view` already supported no query, so the stored notes
+  and the selection are unchanged. We made the tag-only search work rather than only improving the
+  error, because it needed no new stored field or command. Tests in `tests/test_knowledge.py`:
+  `test_search_by_tag_alone_needs_no_search_word` and
+  `test_search_without_a_word_or_tags_says_how_to_search_by_tag`.
+
 - **`agenttalk backup` now works when the team folder and the backup folder are on different drives
   (#505).** A backup first checks whether it can make "hard links" (a second name for the same file,
   which is fast and uses no extra space) and otherwise copies the files. That check linked two test files

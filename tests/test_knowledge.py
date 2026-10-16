@@ -1865,6 +1865,30 @@ def test_mixed_view_filters_search_caps_and_explicit_json_compatibility(
         assert _run(argv, root) == 2
 
 
+def test_search_by_tag_alone_needs_no_search_word(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # #508 item 5: `knowledge search --tags <tag>` failed without a search word.
+    root = _repo(tmp_path)
+    for key, tag in (("process.one", "orbit"), ("process.two", "parser")):
+        assert _lesson_pub(root, key=key, applies_to=tag, body=f"body {key}") == 0
+        assert _lesson_verify(root, key) == 0
+    capsys.readouterr()
+    assert _run(["knowledge", "search", "--tags", "orbit", "--json"], root) == 0
+    found = json.loads(capsys.readouterr().out)
+    assert [row["key"] for row in found["lessons"]] == ["process.one"]
+
+
+def test_search_without_a_word_or_tags_says_how_to_search_by_tag(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root = _repo(tmp_path)
+    try:
+        rc = _run(["knowledge", "search", "--scope", "process"], root)
+    except SystemExit as exc:
+        rc = exc.code
+    assert rc == 2
+    assert "or --tags" in capsys.readouterr().err
+
+
 def test_unrelated_orbit_domain_edit_is_caution_not_global_hard_stale(
         tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     root = _repo(tmp_path)

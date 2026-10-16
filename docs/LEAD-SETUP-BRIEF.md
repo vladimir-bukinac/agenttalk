@@ -1022,8 +1022,8 @@ each session.
   ```
 
   `--applies-to` takes a few short tags (for example `shell,start-script`). They are how a
-  lesson is found again later: `knowledge search --tags <tag> -- <a word>` uses them (the
-  search needs a query word as well), and so does the wrapper when it picks lessons for a
+  lesson is found again later: `knowledge search --tags <tag>` lists every lesson with that
+  tag (add a word to narrow it down), and the wrapper uses them when it picks lessons for a
   seat.
 
   `--scope` is one of `craft`, `docs`, `ops`, `process`, `release`, `review`,
