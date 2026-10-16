@@ -24,7 +24,8 @@ to be clever. There are two axes: **game cards** (a way to think) and **roleplay
 game card per list, optionally combined with one roleplay card, is enough.
 
 ## QUICK START
-1. Play only at a named moment (WHEN, below); never on routine work.
+1. Play only at a named moment (WHEN, below); never on routine work. After two failed
+   attempts outside a review-ordered fix round: only the reality probe, one list.
 2. Write the frame: the decision in two or three sentences, plus the plan as it stands.
 3. Make two lists from the same frame: a plain one, and one with a card. The second runs
    in a fresh context (another agent, or a fresh subagent that never saw the first list);
@@ -34,8 +35,8 @@ game card per list, optionally combined with one roleplay card, is enough.
 5. Merge the lists by mechanism. Someone who wrote neither list marks each item adopt,
    reject or already in the plan, with one line why.
 6. Write the one-line score (KEEP SCORE). "Nothing useful" is an accepted result, and a
-   game never decides scope.
-The rest of this page is reference.
+   game never decides scope. Checks run only on copies or test environments; never
+   record a round in a challenge brief. The rest of this page is reference.
 
 ## WHEN to play
 - **A design start:** a new design, way of working or initiative that will get a
@@ -269,15 +270,14 @@ A round feeds a plan and never approves anything. When it is part of other work 
 design, a plan, a work order), record it there and emit that work's evidence; never put
 it in a challenge brief. Only when the round is the whole job, emit the
 `planning-artifact` profile (full rules + bus-validated vs skill-policy:
-../_shared/references/evidence.md), with the marked items as the `proposal`, which
-evidence.md accepts in place of the `decision` field below: a round proposes, it never
-decides.
+../_shared/references/evidence.md). The marked items go in `proposal`, which evidence.md
+accepts in place of `decision`: a round proposes, it never decides.
 
 Required fields:
 
 - `artifact_type`
 - `scope`
-- `decision`
+- `decision` - or `proposal`; a round always fills `proposal` with the marks
 - `assumptions`
 - `alternatives`
 - `risks`

@@ -50,8 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only it found can then be reworked or dropped. An honest note: the evidence is small. One blind
   trial of three runs tried three of the games. The game list was never judged better than the
   ordinary list, and once worse. The gain came from merging two independent lists, each of which
-  added useful ideas the other missed, and judging the lists took more agent time than writing
-  them. The roleplay cards, the formats, the team round and the other ten games are untried. That a
+  added useful ideas the other missed, and judging the lists took more agent time than playing
+  the game. The roleplay cards, the formats, the team round and the other ten games are untried. That a
   game makes the second list more different than a second ordinary list would is a hope the scores
   will test, not a finding.
 
