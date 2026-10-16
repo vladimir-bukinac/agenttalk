@@ -1897,7 +1897,7 @@ def _run_refused(argv: list[str], root: Path) -> int:
         return exc.code
 
 
-def test_publish_lists_every_missing_or_invalid_option_in_one_refusal(
+def test_publish_lists_missing_key_message_scope_and_dates_in_one_refusal(
         tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     # Rough edge 4: a missing message, a wrong scope and a missing date were
     # reported one per run.

@@ -173,8 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_search_by_tag_alone_needs_no_search_word` and
   `test_search_without_a_word_or_tags_says_how_to_search_by_tag`.
 
-- **`agenttalk knowledge publish` now lists every missing or wrong option in one refusal (#513).**
-  Saving a lesson or a note to the team's knowledge store takes several options. Most problems were already
+- **`agenttalk knowledge publish` now reports three more kinds of problem in the same refusal as the
+  others (#513).** Saving a lesson or a note to the team's knowledge store takes several options. Most problems were already
   listed together, but three kinds came separately, so a new user had to run the command again for
   each one: a missing `--key` or `-m`, a `--scope` that is not one of the allowed words, and a domain
   (the part of the project a note belongs to) that the team's domain list does not accept, such as
@@ -182,8 +182,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   What you will notice: before this, a missing `-m` or an unknown `--scope` stopped the command before
   anything else was checked, and a refused domain was reported only after every other option was
-  right. Now one refusal lists all of them, one per line. `--type` is still checked first, because it
-  decides which other options are needed. Nothing is saved while any problem is listed.
+  right. Now these three are listed together with the problems that were already grouped, one per
+  line. Some refusals still come on their own:
+  - The command-line reader stops first, and alone, at a missing or unknown `--type` (it decides which
+    other options are needed), at an unknown `--anchor-kind` value, and at an option it does not know.
+  - A `--verified-against` that does not name a commit, or a key that already holds a note of another
+    type, is reported only once everything else is right.
+
+  Nothing is saved while any problem is listed.
 
   What you need to do: nothing.
 
@@ -195,7 +201,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unreadable or invalid `domains.json` is listed too). This relaxes an earlier rule, "all field errors
   before any registry, Git or ledger I/O": the read-only registry read may now happen on the error path; Git and the ledger are still untouched, and the binding check
   still runs under the lock. Tests in `tests/test_knowledge.py`:
-  `test_publish_lists_every_missing_or_invalid_option_in_one_refusal`,
+  `test_publish_lists_missing_key_message_scope_and_dates_in_one_refusal`,
   `test_publish_names_a_refused_domain_with_the_other_problems`,
   `test_publish_lists_a_broken_registry_with_the_field_errors`, and the renamed
   `test_publish_preflight_reports_all_errors_before_git_or_ledger_io`.
