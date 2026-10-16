@@ -173,8 +173,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `test_search_by_tag_alone_needs_no_search_word` and
   `test_search_without_a_word_or_tags_says_how_to_search_by_tag`.
 
-- **`agenttalk knowledge publish` now lists every missing or wrong option in one refusal.** Saving a
-  lesson or a note to the team's knowledge store takes several options. Most problems were already
+- **`agenttalk knowledge publish` now lists every missing or wrong option in one refusal (#513).**
+  Saving a lesson or a note to the team's knowledge store takes several options. Most problems were already
   listed together, but three kinds came separately, so a new user had to run the command again for
   each one: a missing `--key` or `-m`, a `--scope` that is not one of the allowed words, and a domain
   (the part of the project a note belongs to) that the team's domain list does not accept, such as
