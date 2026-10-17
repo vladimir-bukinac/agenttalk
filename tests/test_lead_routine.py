@@ -5,15 +5,13 @@ Design: docs/DESIGN-lead-loop-default.md, sections 3, 4, 6, 7 (what slice 1 writ
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import sys
 import textwrap
 import time
 from pathlib import Path
 
 import pytest
 
+from _lead_loop_barrier import barrier_code, run_released_together
 from agenttalk import cli
 from agenttalk import lead_loop_cadence as cad
 from agenttalk import lead_relay as relay
@@ -38,88 +36,142 @@ def _owed(s: Store) -> str:
                   meta={"request_id": "R1", "status": "approved"}).id
 
 
-# --------------------------------------------------------------------------------------------- the record
-def test_complete_changes_only_its_own_part_and_names_what_completed(tmp_path: Path) -> None:
+# ---------------------------------------------------------------------------------------------- the record
+ALL_SECTIONS = ["threads", "dead_letters", "unrouted_escalations", "relay"]
+
+
+def _judged(rec: dict, part: str) -> dict:
+    return rec["parts"][part]["judgement"]
+
+
+def _machine(rec: dict, part: str) -> dict:
+    return rec["parts"][part]["machine"]
+
+
+def test_complete_changes_only_its_own_part_and_names_who_and_in_which_mode(tmp_path: Path) -> None:
     s = _store(tmp_path)
     routine.complete(s, "lead", "relay", kind="self-reported", note="forwarded R1")
     routine.complete(s, "lead", "gates")
     rec = routine.read(s, "lead")
-    assert set(rec["completion"]) == {"relay", "gates"}
-    entry = rec["completion"]["relay"]
+    assert set(rec["parts"]) == {"relay", "gates"}
+    entry = _judged(rec, "relay")
     assert entry["kind"] == "self-reported" and entry["note"] == "forwarded R1"
-    assert rec["generation"] == 2
+    assert entry["by"] == "lead" and entry["mode"] == "interactive"
+    assert rec["generation"] == 2 and "machine" not in rec["parts"]["relay"]
     with pytest.raises(ValueError, match="unknown part"):
         routine.complete(s, "lead", "nonsense")
 
 
-def test_a_sweep_completes_only_the_machine_parts_and_never_a_judgement_or_manual_part(tmp_path: Path) -> None:
+def test_a_managed_leads_completion_says_so(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    s.set_managed_lead_loop("lead")
+    assert routine.complete(s, "lead", "gates")["mode"] == "managed"
+
+
+def test_a_sweep_writes_only_the_machine_record_of_the_machine_parts(tmp_path: Path) -> None:
     s = _store(tmp_path)
     routine.complete(s, "lead", "gates", now_epoch=1.0)
-    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T10:00:00Z", attempted=["threads", "relay"],
-                                failed=[], now_epoch=100.0)
+    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T10:00:00Z", lease_id="L1",
+                                attempted=ALL_SECTIONS, failed=[], now_epoch=100.0)
     rec = routine.read(s, "lead")
-    assert rec["completion"]["gates"]["at"].startswith("1970-01-01T00:00:01")        # untouched by the sweep
-    assert set(rec["completion"]) == {"gates", "bus", "relay"} and rec["completion"]["bus"]["kind"] == "sweep"
-    assert not set(rec["completion"]) & set(routine.MANUAL_PARTS)
+    assert _judged(rec, "gates")["at"].startswith("1970-01-01T00:00:01")             # untouched by the sweep
+    assert set(rec["parts"]) == {"gates", "bus", "relay"} and not set(rec["parts"]) & set(routine.MANUAL_PARTS)
+    machine = _machine(rec, "bus")
+    assert machine["kind"] == "sweep" and machine["mode"] == "managed"
+    assert machine["controller_start"] == "2026-10-17T10:00:00Z" and machine["lease_id"] == "L1"
+
+
+def test_a_sweep_keeps_the_leads_own_completion_of_the_same_part(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    routine.complete(s, "lead", "relay", now_epoch=10, note="decision made")
+    routine.record_sweep(s, "lead", controller_start="2026-10-17T10:00:00Z", attempted=ALL_SECTIONS, failed=[],
+                         now_epoch=20)
+    rec = routine.read(s, "lead")
+    assert _judged(rec, "relay")["kind"] == "self-reported" and _judged(rec, "relay")["note"] == "decision made"
+    assert _judged(rec, "relay")["at"].endswith("00:00:10Z") and _machine(rec, "relay")["kind"] == "sweep"
+
+
+def test_the_leads_completion_keeps_the_sweeps_record_of_the_same_part(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    routine.record_sweep(s, "lead", controller_start="2026-10-17T10:00:00Z", attempted=ALL_SECTIONS, failed=[])
+    before = _machine(routine.read(s, "lead"), "relay")
+    routine.complete(s, "lead", "relay", now_epoch=20)
+    rec = routine.read(s, "lead")
+    assert _machine(rec, "relay") == before and _judged(rec, "relay")["kind"] == "self-reported"
 
 
 def test_a_failed_section_is_named_and_does_not_renew_its_part(tmp_path: Path) -> None:
     s = _store(tmp_path)
-    routine.record_sweep(s, "lead", controller_start="c1", attempted=["threads", "dead_letters", "unrouted_escalations",
-                                                                     "relay"], failed=[], now_epoch=10.0)
-    first_bus = routine.read(s, "lead")["completion"]["bus"]["at"]
+    routine.record_sweep(s, "lead", controller_start="c1", attempted=ALL_SECTIONS, failed=[], now_epoch=10.0)
+    first_bus = _machine(routine.read(s, "lead"), "bus")["at"]
     routine.record_sweep(s, "lead", controller_start="c1", attempted=["threads", "dead_letters", "relay"],
                          failed=["unrouted_escalations"], now_epoch=500.0)
     rec = routine.read(s, "lead")
-    assert rec["completion"]["bus"]["at"] == first_bus                          # NOT renewed
-    assert rec["completion"]["bus"]["failed"] == ["unrouted_escalations"]
-    assert rec["completion"]["relay"]["at"] != first_bus                       # the relay section was read fine
+    assert _machine(rec, "bus")["at"] == first_bus                              # NOT renewed
+    assert _machine(rec, "bus")["failed"] == ["unrouted_escalations"]
+    assert _machine(rec, "relay")["at"] != first_bus                           # the relay section was read fine
     assert rec["sweep"]["failed"] == ["unrouted_escalations"]
+
+
+def test_a_section_that_was_not_attempted_is_not_completed(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    routine.record_sweep(s, "lead", controller_start="c1", attempted=[], failed=[])
+    rec = routine.read(s, "lead")
+    assert all("at" not in slots["machine"] for slots in rec["parts"].values())
+    assert _machine(rec, "relay")["unattempted"] == ["relay"]
+    routine.record_sweep(s, "lead", controller_start="c1", attempted=["threads", "relay"], failed=[])
+    rec = routine.read(s, "lead")
+    assert "at" in _machine(rec, "relay") and "at" not in _machine(rec, "bus")      # relay yes, bus still missing
+    assert _machine(rec, "bus")["unattempted"] == ["dead_letters", "unrouted_escalations"]
 
 
 def test_an_old_controllers_write_is_refused_and_leaves_the_newer_record_unchanged(tmp_path: Path) -> None:
     s = _store(tmp_path)
-    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=["relay"], failed=[])
+    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS, failed=[])
     before = routine.record_path(s, "lead").read_bytes()
-    assert not routine.record_sweep(s, "lead", controller_start="2026-10-17T11:00:00Z", attempted=["relay"], failed=[])
+    assert not routine.record_sweep(s, "lead", controller_start="2026-10-17T11:00:00Z", attempted=ALL_SECTIONS,
+                                    failed=[])
     assert routine.record_path(s, "lead").read_bytes() == before
-    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=["relay"], failed=[])
+    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS, failed=[])
+
+
+def test_a_controller_whose_lease_has_moved_on_is_refused_inside_the_lock(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    assert not routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS,
+                                    failed=[], lease_id="old", still_owner=lambda: False)
+    assert not routine.record_path(s, "lead").exists()
+    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS,
+                                failed=[], lease_id="live", still_owner=lambda: True)
 
 
 def test_a_torn_or_missing_record_reads_as_nothing_recorded(tmp_path: Path) -> None:
     s = _store(tmp_path)
-    assert routine.read(s, "lead")["completion"] == {}
+    assert routine.read(s, "lead")["parts"] == {}
     routine.record_path(s, "lead").write_text("{not json", encoding="utf-8")
-    assert routine.read(s, "lead")["completion"] == {}
+    assert routine.read(s, "lead")["parts"] == {}
     routine.complete(s, "lead", "bus")                                         # and the next write repairs it
-    assert "bus" in routine.read(s, "lead")["completion"]
+    assert "bus" in routine.read(s, "lead")["parts"]
 
 
-def _complete_script(root: Path, part: str, start_at: float) -> str:
+def _complete_script(root: Path, barrier_dir: Path, part: str) -> str:
     return textwrap.dedent(f"""
-        import sys, time
+        import sys
         sys.path.insert(0, {str(ROOT / 'src')!r})
         from pathlib import Path
         from agenttalk import lead_routine as routine
         from agenttalk.store import Store
         s = Store(Path({str(root)!r}))
-        while time.time() < {start_at!r}:
-            time.sleep(0.005)
-        routine.complete(s, "lead", {part!r})
-    """)
+    """) + barrier_code(barrier_dir, part) + 'routine.complete(s, "lead", %r)\n' % part
 
 
 def test_two_processes_completing_different_parts_keep_both(tmp_path: Path) -> None:
     s = _store(tmp_path)
-    start = time.time() + 3.0
-    env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
-    procs = [subprocess.Popen([sys.executable, "-c", _complete_script(tmp_path, part, start)], env=env,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-             for part in ("handover", "resources")]
-    outs = [p.communicate(timeout=60) for p in procs]
-    assert [p.returncode for p in procs] == [0, 0], outs
+    barrier = tmp_path.parent / (tmp_path.name + "-barrier")
+    outs = run_released_together(barrier, [_complete_script(tmp_path, barrier, part)
+                                           for part in ("handover", "resources")])
+    assert [o[0] for o in outs] == [0, 0], outs
     rec = routine.read(s, "lead")
-    assert set(rec["completion"]) == {"handover", "resources"} and rec["generation"] == 2
+    assert set(rec["parts"]) == {"handover", "resources"} and rec["generation"] == 2
 
 
 def test_manual_parts_are_listed_apart_and_never_in_the_parts(tmp_path: Path) -> None:
@@ -291,14 +343,56 @@ def test_the_cadence_state_keeps_the_relay_buckets_across_a_failed_sweep_and_a_r
     assert s.read_lead_loop_cadence("lead")["relay_reminded"] == {"relay:R1:M:builder": 2}
 
 
-def test_a_turn_that_leaves_the_hand_off_open_moves_no_cursor_and_nothing_is_replayed(tmp_path: Path) -> None:
-    s = _store(tmp_path)
-    _owed(s)
-    _drive_and_capture(s, scoped=False)                       # the controller path consumes one message
-    cursor = s.cursor("lead")
-    assert cursor != ""
-    assert relay.open_obligations(relay.obligations_for(s, "lead"))      # the hand-off is still owed, separately
-    cstate_before = s.read_lead_loop_cadence("lead")
-    cad.cadence_actionable(_snapshot_at(s, 5 * relay.RELAY_DEADLINE_SECONDS), cstate_before, now_epoch=time.time(),
-                           reminder_after_seconds=1800)       # a reminder is computed from a read-only snapshot
-    assert s.cursor("lead") == cursor
+# ------------------------------------------------ fix round 1: the controller carries its OWN lease identity (P2-4)
+def test_the_real_cadence_cannot_borrow_a_replacement_controllers_identity(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    from agenttalk import store as store_mod
+    s = Store(tmp_path)
+    s.init(["lead", "reviewer", "builder"])
+    s.set_managed_lead_loop("lead")
+    monkeypatch.setattr(store_mod, "_process_liveness", lambda pid: store_mod.PROC_ALIVE)
+    real_snapshot = cad.build_cadence_snapshot
+    seen: dict = {}
+
+    def replace_owner_after_snapshot(*args, **kwargs):
+        snap = real_snapshot(*args, **kwargs)
+        seen["old"] = dict(s.read_lead_loop_lease("lead"))
+        newer = dict(seen["old"], lease_id="replacement-lease", acquired_at="2099-01-01T00:00:00Z")
+        s._write_lead_loop_lease("lead", newer)             # a replacement takes over while this controller computes
+        routine.record_sweep(s, "lead", controller_start=newer["acquired_at"], lease_id="replacement-lease",
+                             attempted=["replacement"], failed=[], now_epoch=200)
+        seen["record"] = routine.record_path(s, "lead").read_bytes()
+        return snap
+
+    def capture_loop(store, agent, drive, **kwargs):
+        kwargs["cadence"]()
+        return 0
+
+    monkeypatch.setattr(cad, "build_cadence_snapshot", replace_owner_after_snapshot)
+    monkeypatch.setattr(loop, "run_loop", capture_loop)
+    cli._wrap_loop_mode(s, "lead", cli="codex", base_argv=["python", "-c", "pass"], sender="lead",
+                        min_interval=5.0, render=False, lead_loop=True)
+    assert routine.record_path(s, "lead").read_bytes() == seen["record"]       # the newer record is untouched
+    assert "stale controller write refused" in capsys.readouterr().err         # and the refusal is logged
+
+
+def test_the_real_cadence_records_its_own_lease_identity_when_it_still_owns_the_lease(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from agenttalk import store as store_mod
+    s = Store(tmp_path)
+    s.init(["lead", "reviewer", "builder"])
+    s.set_managed_lead_loop("lead")
+    monkeypatch.setattr(store_mod, "_process_liveness", lambda pid: store_mod.PROC_ALIVE)
+    seen: dict = {}
+
+    def capture_loop(store, agent, drive, **kwargs):
+        kwargs["cadence"]()
+        seen["lease"] = dict(store.read_lead_loop_lease(agent))
+        return 0
+
+    monkeypatch.setattr(loop, "run_loop", capture_loop)
+    cli._wrap_loop_mode(s, "lead", cli="codex", base_argv=["python", "-c", "pass"], sender="lead",
+                        min_interval=5.0, render=False, lead_loop=True)
+    machine = routine.read(s, "lead")["parts"]["relay"]["machine"]
+    assert machine["lease_id"] == seen["lease"]["lease_id"]
+    assert machine["controller_start"] == seen["lease"]["acquired_at"]

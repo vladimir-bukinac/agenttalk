@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command, `agenttalk lead-routine`, records which parts of the lead's routine were done
   and by what, and keeps the parts that agenttalk cannot check (handover note, machine
   resources, scheduled timers) apart so they are never mistaken for covered.
+  A finished hand-off stays finished when old messages are cleaned up in several steps, and a re-asked
+  request no longer offers its old answer. Only the command's own message closes a hand-off, and the
+  routine record keeps the sweep's findings and the lead's own word apart for every part.
   (Technical detail: derived obligations in `lead_relay.py`; `Store.send_operation` gained a
   `precheck` run inside the publication lock; `Store.archive_messages_batched` recomputes the
   protected floor under the rank-100 and rank-160 locks; routine record in

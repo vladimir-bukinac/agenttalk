@@ -544,7 +544,14 @@ inventing one.
    seat that never declared it waits is invisible here**: nothing is owed to it, nothing
    reminds you, and `status` says nothing. When you hand out work, ask the seat to declare
    it. Record that you did this part of the routine with
-   `agenttalk lead-routine complete --part relay`.
+   `agenttalk lead-routine complete --part relay`: that is your own word and is kept
+   next to, never over, what the automatic sweep recorded for the same part.
+   Two more limits. Only `relay result` closes a hand-off: a message you write by hand,
+   even one that mentions the result, closes nothing. And the command checks that the result
+   is current at the moment it looks, not at the moment it sends: a reply that re-opens
+   the request can arrive in between, so the decision may reach a seat for a result that
+   was withdrawn a moment earlier. If the seat tells you the work was re-opened, the next
+   derivation shows the new state.
    ```powershell
    agenttalk threads --for $SELF
    ```

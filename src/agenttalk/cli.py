@@ -8111,9 +8111,14 @@ def cmd_lead_routine(args: argparse.Namespace) -> int:
         if sweep:
             print(f"  last sweep {sweep.get('at')}: attempted {len(sweep.get('attempted') or [])}, "
                   f"failed {sweep.get('failed') or 'none'}")
-        for name, entry in sorted(field["parts"].items()):
-            print(f"  part {name}: {entry.get('kind', '?')} at {entry.get('at', '?')}"
-                  + (f", failed {entry['failed']}" if entry.get("failed") else ""))
+        for name, slots in sorted(field["parts"].items()):
+            machine, judged = slots.get("machine"), slots.get("judgement")
+            if machine:
+                print(f"  part {name} (machine sweep): {machine.get('at', 'never completed')}"
+                      + (f", failed {machine['failed']}" if machine.get("failed") else "")
+                      + (f", not attempted {machine['unattempted']}" if machine.get("unattempted") else ""))
+            if judged:
+                print(f"  part {name} (lead's own, {judged.get('mode', '?')}): {judged.get('at', '?')}")
         for name, entry in sorted(field["manual_parts"].items()):
             print(f"  manual part {name}: {entry.get('at')} (not covered by automatic health)")
         if notice:
@@ -12976,12 +12981,17 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
                 return _fail()
             def _note_sweep() -> None:
                 # what this sweep attempted and covered (lead routine record); a failed write never fails the sweep
+                # the identity is the lease THIS controller acquired at start-up, never one read back now
                 try:
-                    lease = store.read_lead_loop_lease(agent) or {}
-                    lead_routine.record_sweep(
+                    written = lead_routine.record_sweep(
                         store, agent, controller_start=str(lease.get("acquired_at") or ""),
+                        lease_id=lease_id,
+                        still_owner=lambda: (store.read_lead_loop_lease(agent) or {}).get("lease_id") == lease_id,
                         attempted=list(snap.get("attempted_sections") or []),
                         failed=list(snap.get("failed_sections") or []), now_epoch=now_epoch)
+                    if not written:
+                        sys.stderr.write("agenttalk lead-routine: stale controller write refused for %s "
+                                         "(a newer controller owns the record)\n" % agent)
                 except Exception:  # noqa: BLE001, S110  # nosec B110
                     pass
 

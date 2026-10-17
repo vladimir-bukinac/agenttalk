@@ -208,6 +208,11 @@ nothing reminds you. The parts of your routine that agenttalk cannot check (hand
 note, machine resources, scheduled timers) are recorded by hand with
 `lead-routine complete --part <part>` and shown under "not covered by automatic health".
 
+Two limits of the hand-off command: only `relay result` closes a hand-off (a message written by hand closes
+nothing), and it checks that the result is current when it looks, not when it sends, so a reply that
+re-opens the request can overtake it by a moment. What the automatic sweep recorded and what you recorded
+with `lead-routine complete` are kept apart for each part, so neither replaces the other.
+
 Go deeper: the `/agenttalk.listen` skill (the full passive-listen loop, the
 message-classification table, and the stand-down authority envelope).
 

@@ -200,3 +200,56 @@ def test_the_floor_is_computed_while_both_publication_locks_are_held(tmp_path: P
     s.archive_messages_batched(floor_fn, batch_size=2)
     assert "got_mutex" not in outcome and "refused" in outcome, outcome
     assert "got_operation_lock" not in outcome and "op_refused" in outcome, outcome
+
+
+# ------------------------------------ fix round 1: a closed hand-off stays closed across the batches (P2-2)
+def _closed_handoff_with_padding(s: Store, padding: int) -> str:
+    _old_fillers(s, padding)
+    s.send(sender="lead", recipient="reviewer", kind="review-request", body="review", meta={"request_id": "R1"})
+    result = s.send(sender="reviewer", recipient="lead", kind="review-result", body="done",
+                    meta={"request_id": "R1", "status": "approved"}).id
+    s.send(sender="builder", recipient="lead", body="waiting", meta={"waiting_on": "R1"})
+    relay.publish_handoff(s, "lead", "builder", result_id=result, body="go")
+    _fillers_and_cursors(s, 4)
+    return result
+
+
+@pytest.mark.parametrize("padding, batch_size", [(0, 2), (1, 2), (2, 2), (3, 3), (0, 3)])
+def test_a_closed_handoff_does_not_reopen_between_batches(tmp_path: Path, padding: int, batch_size: int) -> None:
+    s = _store(tmp_path)
+    _closed_handoff_with_padding(s, padding)
+    assert _states(s) == {("builder", "R1"): relay.CLOSED_FORWARDED}
+    now = _later()
+
+    def floor() -> str:
+        return cli._compute_keep_floor(s, s.load_config(), keep_count=1, keep_age_days=0, now=now)[0]
+
+    s.archive_messages_batched(floor, batch_size=batch_size)
+    assert not relay.open_obligations(relay.derive(s.valid_messages(), "lead"))
+    assert relay.protected_floor(s.valid_messages()) is None
+
+
+def test_a_closed_handoff_does_not_reopen_with_the_production_batch_size(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    _closed_handoff_with_padding(s, 198)                       # the opener and the result land on the batch boundary
+    assert _states(s) == {("builder", "R1"): relay.CLOSED_FORWARDED}
+    res = _compact(s, keep_count=1)
+    assert res["archived"]
+    assert not relay.open_obligations(relay.derive(s.valid_messages(), "lead"))
+
+
+def test_a_closed_not_needed_handoff_is_never_open_and_a_late_declaration_is_still_unresolved(
+        tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    s.send(sender="lead", recipient="reviewer", kind="review-request", body="review", meta={"request_id": "R1"})
+    result = s.send(sender="reviewer", recipient="lead", kind="review-result", body="done",
+                    meta={"request_id": "R1", "status": "approved"}).id
+    s.send(sender="builder", recipient="lead", body="waiting", meta={"waiting_on": "R1"})
+    relay.publish_handoff(s, "lead", "builder", result_id=result, outcome=relay.OUTCOME_NOT_NEEDED, reason="no")
+    _fillers_and_cursors(s, 4)
+    now = _later()
+    s.archive_messages_batched(
+        lambda: cli._compute_keep_floor(s, s.load_config(), keep_count=1, keep_age_days=0, now=now)[0], batch_size=2)
+    assert not relay.open_obligations(relay.derive(s.valid_messages(), "lead"))   # closed, or gone with its request
+    s.send(sender="reviewer", recipient="lead", body="I wait too", meta={"waiting_on": "R1"})
+    assert _states(s)[("reviewer", "R1")] == relay.UNRESOLVED          # a genuinely late declaration

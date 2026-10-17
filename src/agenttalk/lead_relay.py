@@ -13,6 +13,10 @@ that are already durable on the bus (see ``docs/DESIGN-lead-loop-default.md``, s
 * *closing message*: a message from the lead L to S with ``meta.relay_of=<result id>`` (the decision text),
 ``meta.relay_outcome=not-needed`` (a reason), or
   ``meta.relay_of=<request id>`` with ``meta.relay_outcome=unresolved`` (the request is no longer in live history).
+  It counts only as the FULL tuple: ``relay_of``, the ``relay_nonce`` that :func:`handoff_nonce` gives for this lead,
+  target and seat, a supported outcome (none means forwarded) and, for not-needed, a reason in the body. A message
+  that carries only part of it is ordinary chatter and closes nothing. A forwarded or not-needed closing also names
+  the request (``meta.relay_request``), so the closed relation survives the archiving of the request itself.
 
 The promise is deliberately small: best effort, for declared waiters only, and an undeclared waiter is invisible.
 Integrity is the declared sender plus the store's
@@ -121,15 +125,37 @@ def _decisions(messages: list[Message], lead: str) -> tuple[dict, dict, set]:
     return declared, cancelled, foreign
 
 
-def _closings(messages: list[Message], lead: str) -> dict[tuple[str, str], Message]:
-    """{(relay_of, recipient seat): latest closing message sent by the lead}."""
-    out: dict[tuple[str, str], Message] = {}
+def is_closing(m: Message, lead: str) -> bool:
+    """True when ``m`` carries the full closing tuple (see the module text); anything less closes nothing."""
+    meta = _meta(m)
+    ref = meta.get("relay_of")
+    if m.sender != lead or not isinstance(ref, str) or not ref:
+        return False
+    outcome = meta.get("relay_outcome") or OUTCOME_FORWARDED
+    if outcome not in (OUTCOME_FORWARDED, OUTCOME_NOT_NEEDED, OUTCOME_UNRESOLVED):
+        return False
+    if meta.get("relay_nonce") != handoff_nonce(lead, ref, m.recipient, outcome):
+        return False
+    return outcome != OUTCOME_NOT_NEEDED or bool((m.body or "").strip())
+
+
+def _closings(messages: list[Message], lead: str) -> tuple[dict[tuple[str, str], Message],
+                                                           dict[tuple[str, str], Message]]:
+    """``({(relay_of, seat): closing}, {(request id, seat): closing})`` of the lead's valid closing messages.
+
+    The second map holds forwarded and not-needed closings by the request they name, so a declaration whose
+    request and result were archived first (compaction runs in batches) still finds its closing."""
+    by_ref: dict[tuple[str, str], Message] = {}
+    by_request: dict[tuple[str, str], Message] = {}
     for m in messages:
+        if not is_closing(m, lead):
+            continue
         meta = _meta(m)
-        ref = meta.get("relay_of")
-        if m.sender == lead and isinstance(ref, str) and ref:
-            out[(ref, m.recipient)] = m
-    return out
+        by_ref[(meta["relay_of"], m.recipient)] = m
+        req = meta.get("relay_request")
+        if isinstance(req, str) and req and meta.get("relay_outcome") != OUTCOME_UNRESOLVED:
+            by_request[(req, m.recipient)] = m
+    return by_ref, by_request
 
 
 def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -> list[Obligation]:
@@ -142,7 +168,7 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
     retired_set = set(retired)
     declared, cancelled, foreign = _decisions(msgs, lead)
     results = _threads.terminal_responses(msgs, lead)
-    closings = _closings(msgs, lead)
+    closings, closings_by_request = _closings(msgs, lead)
     openers = {rid for rid, group in _threads.group_messages_by_request_id(msgs).items()
                if any(m.kind in OPENER_KINDS and m.sender == lead for m in group)}
     found: list[Obligation] = []
@@ -167,8 +193,15 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
             continue    # the result has not arrived yet (or the request is another seat's): nothing owed now
         else:
             closing = closings.get((rid, seat))
+            kept = closings_by_request.get((rid, seat))
             if closing is not None and _meta(closing).get("relay_outcome") == OUTCOME_UNRESOLVED:
                 found.append(Obligation(lead, seat, rid, None, CLOSED_UNRESOLVED, decl.ts, decl.id, closing.id))
+            elif kept is not None and kept.id > decl.id and not is_cancelled:
+                # the request and its result were archived, the declaration and the closing were not
+                state = (CLOSED_NOT_NEEDED if _meta(kept).get("relay_outcome") == OUTCOME_NOT_NEEDED
+                         else CLOSED_FORWARDED)
+                found.append(Obligation(lead, seat, rid, _meta(kept).get("relay_of"), state, decl.ts, decl.id,
+                                        kept.id))
             elif is_cancelled:
                 found.append(Obligation(lead, seat, rid, None, CANCELLED, decl.ts, decl.id))
             elif seat in retired_set:
@@ -196,7 +229,7 @@ def derive_for_seat(messages: list[Message], seat: str, *, retired: Iterable[str
         decl = next(m for m in reversed(msgs) if m.sender == seat and rid in _csv(_meta(m).get("waiting_on")))
         cancel = [m for m in msgs if m.sender == seat and rid in _csv(_meta(m).get("waiting_off")) and m.id > decl.id]
         closing = next((m for m in reversed(msgs) if m.recipient == seat and _meta(m).get("relay_of") == rid
-                        and _meta(m).get("relay_outcome") == OUTCOME_UNRESOLVED), None)
+                        and is_closing(m, m.sender) and _meta(m).get("relay_outcome") == OUTCOME_UNRESOLVED), None)
         if closing is not None:
             seen[(closing.sender, rid, seat)] = Obligation(closing.sender, seat, rid, None, CLOSED_UNRESOLVED, decl.ts,
                                                            decl.id, closing.id)
@@ -342,6 +375,12 @@ def publish_handoff(store: Store, lead: str, seat: str, *, result_id: str | None
     meta = {"relay_of": target, "relay_nonce": handoff_nonce(lead, target, seat, outcome)}
     if outcome != OUTCOME_FORWARDED:
         meta["relay_outcome"] = outcome
+    if outcome != OUTCOME_UNRESOLVED:
+        # name the request, so the closed relation outlives the archiving of the request and its result
+        shown = next((m for m in store.valid_messages() if m.id == result_id), None)
+        rid_of_result = _meta(shown).get("request_id") if shown is not None else None
+        if isinstance(rid_of_result, str) and rid_of_result:
+            meta["relay_request"] = rid_of_result
     nonce = meta["relay_nonce"]
     intent = Store._operation_intent_identity(operation="relay", kind="message", recipient=seat, meta=meta)
     digest = Store._operation_digest_for_intent(intent, text)

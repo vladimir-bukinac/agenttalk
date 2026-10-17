@@ -5,15 +5,13 @@ Design: docs/DESIGN-lead-loop-default.md, sections 5, 6, 11 and 15 (the tests of
 """
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 import textwrap
 import time
 from pathlib import Path
 
 import pytest
 
+from _lead_loop_barrier import barrier_code, run_released_together
 from agenttalk import lead_relay as relay
 from agenttalk import signing, threads
 from agenttalk import store as store_mod
@@ -225,33 +223,28 @@ def test_unresolved_is_closed_by_exactly_one_note(tmp_path: Path) -> None:
     assert _states(s) == {("builder", "GONE"): relay.CLOSED_UNRESOLVED}
 
 
-def _publish_script(root: Path, start_at: float, result: str, tag: str) -> str:
+def _publish_script(root: Path, barrier_dir: Path, result: str, tag: str) -> str:
     return textwrap.dedent(f"""
-        import sys, time
+        import sys
         sys.path.insert(0, {str(ROOT / 'src')!r})
         from pathlib import Path
         from agenttalk import lead_relay as relay
         from agenttalk.store import Store
         s = Store(Path({str(root)!r}))
-        while time.time() < {start_at!r}:
-            time.sleep(0.005)
-        m, created = relay.publish_handoff(s, "lead", "builder", result_id={result!r}, body="go")
+    """) + barrier_code(barrier_dir, tag) + textwrap.dedent("""
+        m, created = relay.publish_handoff(s, "lead", "builder", result_id=%r, body="go")
         print("CREATED" if created else "EXISTING", m.id)
-    """)
+    """ % result)
 
 
 def test_two_processes_released_together_publish_exactly_one_message(tmp_path: Path) -> None:
     s = _store(tmp_path)
     _request(s, "R1", relay_to="builder")
     result = _result(s, "R1")
-    start = time.time() + 3.0
-    env = dict(os.environ, PYTHONPATH=str(ROOT / "src"))
-    procs = [subprocess.Popen([sys.executable, "-c", _publish_script(tmp_path, start, result, str(i))], env=env,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for i in range(2)]
-    outs = [p.communicate(timeout=60) for p in procs]
-    assert [p.returncode for p in procs] == [0, 0], outs
-    lines = sorted(o[0].split()[0] for o in outs)
-    assert lines == ["CREATED", "EXISTING"], outs
+    barrier = tmp_path.parent / (tmp_path.name + "-barrier")
+    outs = run_released_together(barrier, [_publish_script(tmp_path, barrier, result, str(i)) for i in range(2)])
+    assert [o[0] for o in outs] == [0, 0], outs
+    assert sorted(o[1].split()[0] for o in outs) == ["CREATED", "EXISTING"], outs
     assert len([m for m in s.valid_messages() if (m.meta or {}).get("relay_of") == result]) == 1
 
 
@@ -325,3 +318,84 @@ def test_threads_terminal_responses_does_not_depend_on_the_readers_cursor(tmp_pa
     found = threads.terminal_responses(s.valid_messages(), "lead")
     assert found["R1"][1].id == result
     assert threads.terminal_responses(s.valid_messages(), "reviewer") == {}
+
+
+# --------------------------------------------------- fix round 1: re-ask, and the full closing tuple (P2-1, P2-5)
+@pytest.mark.parametrize("opener, response, meta", [
+    ("review-request", "review-result", {"status": "approved"}),
+    ("task", "task-response", {"status": "done"}),
+    ("proposal", "proposal-response", {"status": "accepted"}),
+])
+def test_a_reask_after_a_terminal_result_drops_the_old_result(tmp_path: Path, opener: str, response: str,
+                                                              meta: dict) -> None:
+    s = _store(tmp_path)
+    _request(s, "R1", kind=opener, relay_to="builder")
+    old = s.send(sender="reviewer", recipient="lead", kind=response, body="done", meta=dict(meta, request_id="R1")).id
+    assert [t.id for _, t in threads.terminal_responses(s.valid_messages(), "lead").values()] == [old]
+    assert _states(s) == {("builder", "R1"): relay.OWED}
+    _request(s, "R1", kind=opener, relay_to="builder")                       # the re-ask: same id, same direction
+    assert threads.terminal_responses(s.valid_messages(), "lead") == {}
+    assert _states(s) == {}                                                   # nothing owed while the new round is open
+    with pytest.raises(relay.RelayRefused, match="not a finished result"):
+        relay.publish_handoff(s, "lead", "builder", result_id=old, body="act on the old result")
+    assert not [m for m in s.valid_messages() if (m.meta or {}).get("relay_of")]
+    new = s.send(sender="reviewer", recipient="lead", kind=response, body="again", meta=dict(meta, request_id="R1")).id
+    assert [t.id for _, t in threads.terminal_responses(s.valid_messages(), "lead").values()] == [new]
+
+
+def test_the_reask_rule_is_the_one_derive_threads_uses(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    _request(s, "R1")
+    _result(s, "R1")
+    _request(s, "R1")
+    (thread,) = [t for t in threads.derive_threads(s.valid_messages(), agent="lead", cursor="") if t.request_id == "R1"]
+    assert thread.state != "closed" and "R1" not in threads.terminal_responses(s.valid_messages(), "lead")
+
+
+def _closing_meta(result: str, **over) -> dict:
+    meta = {"relay_of": result, "relay_nonce": relay.handoff_nonce("lead", result, "builder", relay.OUTCOME_FORWARDED)}
+    meta.update(over)
+    return {k: v for k, v in meta.items() if v is not None}
+
+
+@pytest.mark.parametrize("label", ["no nonce", "wrong nonce", "nonce of another seat", "unknown outcome",
+                                   "not-needed without a reason"])
+def test_a_partial_closing_marker_closes_nothing(tmp_path: Path, label: str) -> None:
+    s = _store(tmp_path)
+    _request(s, "R1", relay_to="builder")
+    result = _result(s, "R1")
+    body = "a note"
+    if label == "no nonce":
+        meta = _closing_meta(result, relay_nonce=None)
+    elif label == "wrong nonce":
+        meta = _closing_meta(result, relay_nonce="0" * 32)
+    elif label == "nonce of another seat":
+        meta = _closing_meta(result, relay_nonce=relay.handoff_nonce("lead", result, "other", relay.OUTCOME_FORWARDED))
+    elif label == "unknown outcome":
+        meta = _closing_meta(result, relay_outcome="banana")
+    else:
+        body = " "
+        meta = _closing_meta(result, relay_outcome="not-needed",
+                             relay_nonce=relay.handoff_nonce("lead", result, "builder", relay.OUTCOME_NOT_NEEDED))
+    s.send(sender="lead", recipient="builder", body=body, meta=meta)
+    assert _states(s) == {("builder", "R1"): relay.OWED}, label
+    assert [o.state for o in relay.derive_for_seat(s.valid_messages(), "builder")] == [relay.OWED]
+
+
+def test_the_full_closing_tuple_closes_and_an_absent_outcome_means_forwarded(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    _request(s, "R1", relay_to="builder")
+    result = _result(s, "R1")
+    s.send(sender="lead", recipient="builder", body="merge it", meta=_closing_meta(result))
+    assert _states(s) == {("builder", "R1"): relay.CLOSED_FORWARDED}
+
+
+def test_an_unresolved_closing_needs_the_full_tuple_too(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    _declare(s, "builder", "GONE")
+    s.send(sender="lead", recipient="builder", body="unresolved",
+           meta={"relay_of": "GONE", "relay_outcome": "unresolved"})
+    assert _states(s) == {("builder", "GONE"): relay.UNRESOLVED}
+    assert [o.state for o in relay.derive_for_seat(s.valid_messages(), "builder")] == [relay.UNRESOLVED]
+    relay.publish_handoff(s, "lead", "builder", request_id="GONE", outcome=relay.OUTCOME_UNRESOLVED)
+    assert _states(s) == {("builder", "GONE"): relay.CLOSED_UNRESOLVED}

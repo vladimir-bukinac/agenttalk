@@ -3906,6 +3906,7 @@ class Store:
             # recipient with another outcome is another payload
             identity["relay_of"] = meta.get("relay_of")
             identity["relay_outcome"] = meta.get("relay_outcome")
+            identity["relay_request"] = meta.get("relay_request")
         return identity
 
     @staticmethod
