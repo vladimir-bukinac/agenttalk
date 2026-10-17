@@ -598,6 +598,41 @@ def group_messages_by_request_id(messages: list[Message]) -> dict[str, list[Mess
     return groups
 
 
+def terminal_responses(messages: list[Message], requester: str, *,
+                       grouped: dict[str, list[Message]] | None = None) -> dict[str, tuple[Message, Message]]:
+    """``{request_id: (opener, terminal_message)}`` for every thread ``requester`` OPENED
+    that a terminal response has closed.
+
+    The replay is the one ``derive_threads`` runs (same ``_classify_event`` transitions, same
+    ball tracking), but it returns the terminal MESSAGE, which ``Thread`` does not expose, and
+    it does not depend on any reader's cursor (a ``Thread`` stays ``reply-waiting`` until its
+    result is read). A thread re-opened by a re-ask after the close has no terminal response.
+    ``messages`` MUST be the roster+signature-validated set (``Store.valid_messages()``).
+    """
+    groups = grouped if grouped is not None else group_messages_by_request_id(messages)
+    found: dict[str, tuple[Message, Message]] = {}
+    for rid, group in groups.items():
+        opener = next((m for m in group if m.kind in OPENER_KINDS), None)
+        if opener is None or opener.sender != requester:
+            continue
+        resp = opener.recipient
+        ball: str | None = resp
+        terminal: Message | None = None
+        for m in group:
+            if m.id <= opener.id or m.kind == "rescind":
+                continue
+            ev = _classify_event(opener.kind, m, requester, resp, ball)
+            if ev is None:
+                continue
+            if ev[0] == "terminal":
+                ball, terminal = None, m
+            else:
+                ball, terminal = ev[1], None
+        if terminal is not None:
+            found[rid] = (opener, terminal)
+    return found
+
+
 def derive_threads(
     messages: list[Message],
     *,

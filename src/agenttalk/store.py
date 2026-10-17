@@ -32,6 +32,7 @@ import threading
 import time
 import uuid
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -3900,6 +3901,11 @@ class Store:
             identity["origin_obligation_key_digest"] = origin_key
         if roster_revision is not None:
             identity["expected_roster_revision"] = roster_revision
+        if operation == "relay":
+            # a lead's hand-off of a finished result (lead_relay.publish_handoff): the same result and
+            # recipient with another outcome is another payload
+            identity["relay_of"] = meta.get("relay_of")
+            identity["relay_outcome"] = meta.get("relay_outcome")
         return identity
 
     @staticmethod
@@ -4045,8 +4051,17 @@ class Store:
         meta: dict,
         operation_nonce: str,
         operation_digest: str,
+        operation: str | None = None,
+        precheck: Callable[[], None] | None = None,
     ) -> tuple[Message, bool]:
-        """Atomically dedupe one canonical wrapper operation publication."""
+        """Atomically dedupe one canonical wrapper operation publication.
+
+        ``operation`` names the intent identity (default: ``composing`` for a composing marker, else
+        ``terminal``; ``relay`` for a lead's hand-off). ``precheck`` runs INSIDE the publication lock,
+        before the intent is recorded: it re-derives whatever the publication depends on and raises
+        to refuse. It must only validate (a rerun of a published operation passes through it and
+        then returns the existing message).
+        """
         if re.fullmatch(r"[0-9a-f]{32}", operation_nonce) is None:
             raise ValueError("operation nonce must be exactly 32 lowercase hexadecimal characters")
         if re.fullmatch(r"[0-9a-f]{64}", operation_digest) is None:
@@ -4059,7 +4074,7 @@ class Store:
         supplied["operation_nonce"] = operation_nonce
         supplied["operation_digest"] = operation_digest
         operation_intent = self._operation_intent_identity(
-            operation="composing" if kind == "composing" else "terminal",
+            operation=operation or ("composing" if kind == "composing" else "terminal"),
             kind=kind,
             recipient=recipient,
             meta=supplied,
@@ -4073,6 +4088,8 @@ class Store:
             timeout=10.0,
             what="wrapper operation publication",
         ):
+            if precheck is not None:
+                precheck()
             intent_path, intent = self._record_operation_intent_locked(
                 sender=sender,
                 operation_nonce=operation_nonce,
