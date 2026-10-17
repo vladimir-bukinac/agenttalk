@@ -6667,7 +6667,12 @@ def _kn_pack(args: argparse.Namespace, store) -> int:
                 return 0
             print(f"knowledge pack list: {len(rows)} pack(s) shipped with this install")
             for row in rows:
-                state = f"loaded v{row['loaded_version']}" if row["loaded_version"] else "not loaded"
+                if row["loaded"]:
+                    state = f"loaded v{row['loaded_version']}"
+                elif row["loaded_version"]:
+                    state = f"unloaded (was v{row['loaded_version']})"
+                else:
+                    state = "not loaded"
                 counts = f"{row['live']} live"
                 for label, field in (("retracted by the team", "retracted_by_team"),
                                      ("changed by the team", "changed_by_team"),

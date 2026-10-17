@@ -3371,6 +3371,7 @@ class Store:
         referencing ``old`` stays valid; ``old`` is non-rebindable (FR-002/005/006).
         """
         validate_agent_name(new)
+        refuse_reserved_new_agent_name(new)
         with self._config_lock(), self._retirement_lock():
             cfg = self.load_config()
             active = cfg.get("agents", []) or []

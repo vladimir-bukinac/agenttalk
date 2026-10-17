@@ -796,3 +796,65 @@ def test_every_event_carries_the_origin_of_the_publish_it_comes_from(tmp_path: P
     pack_ids = kn.pack_origin_ids(views)
     rec = views[(PROCESS, "pack.demo:alpha")]
     assert rec["curated"]["id"] in pack_ids and rec["latest"]["id"] in pack_ids
+
+
+# ---- PR #524 review: an unloaded pack is not listed as loaded; a bad ledger is a clear error; the reserved name on rename
+
+def test_pack_list_says_unloaded_after_an_unload_and_keeps_the_version_history(
+        tmp_path: Path, packs, capsys) -> None:
+    root = _store(tmp_path)
+    packs([_line("alpha"), _line("beta")])
+    _load(root)
+    capsys.readouterr()
+    assert _run(root, "knowledge", "pack", "list", "--json") == 0
+    assert json.loads(capsys.readouterr().out)[0]["loaded"] is True
+    assert _run(root, "knowledge", "pack", "unload", "demo") == 0
+    capsys.readouterr()
+    assert _run(root, "knowledge", "pack", "list", "--json") == 0
+    row = json.loads(capsys.readouterr().out)[0]
+    assert row["loaded"] is False and row["loaded_version"] == 1 and row["live"] == 0
+    assert _run(root, "knowledge", "pack", "list") == 0
+    line = next(ln for ln in capsys.readouterr().out.splitlines() if ln.strip().startswith("demo"))
+    assert "loaded v1" not in line and "unloaded (was v1)" in line
+    assert _load(root) == 0
+    capsys.readouterr()
+    assert _run(root, "knowledge", "pack", "list", "--json") == 0
+    assert json.loads(capsys.readouterr().out)[0]["loaded"] is True
+
+
+_BAD_LEDGERS = [
+    pytest.param({"schema_version": 1, "packs": {"demo": {"version": 1, "keys": []}}}, id="keys-is-a-list"),
+    pytest.param({"schema_version": 1, "packs": {"demo": {"version": "1", "keys": {}}}}, id="version-is-a-string"),
+    pytest.param({"schema_version": 1, "packs": {"demo": {"keys": {}}}}, id="version-missing"),
+    pytest.param({"schema_version": 1, "packs": {"demo": {"version": True, "keys": {}}}}, id="version-is-a-bool"),
+    pytest.param({"schema_version": 1, "packs": {"demo": {"version": 1, "keys": {"k": "loaded"}}}},
+                 id="key-state-is-a-string"),
+    pytest.param({"schema_version": 1, "packs": {"demo": {"version": 1, "keys": {"k": {"hash": 3}}}}},
+                 id="key-state-field-not-text"),
+    pytest.param({"schema_version": 1, "packs": {"demo": "loaded"}}, id="entry-is-a-string"),
+    pytest.param({"schema_version": 99, "packs": {}}, id="newer-schema"),
+    pytest.param({"packs": {}}, id="schema-missing"),
+]
+
+
+@pytest.mark.parametrize("ledger", _BAD_LEDGERS)
+def test_a_malformed_ledger_is_a_clear_error_not_a_crash(tmp_path: Path, packs, ledger, capsys) -> None:
+    root = _store(tmp_path)
+    packs([_line("alpha")])
+    path = Store(root).dir / "knowledge" / "packs.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(ledger), encoding="utf-8")
+    with pytest.raises(kn.KnowledgeError, match="pack ledger"):
+        kp.read_ledger(Store(root))
+    for argv in (("list",), ("load", "demo"), ("unload", "demo")):
+        assert _run(root, "knowledge", "pack", *argv) == 2
+        assert "pack ledger" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("new_name", ["agenttalk-pack", "Agenttalk-Pack", "AGENTTALK-PACK"])
+def test_a_rename_cannot_take_the_reserved_name_in_any_case(tmp_path: Path, new_name: str) -> None:
+    store = Store(tmp_path)
+    store.init(["lead", "dev"])
+    with pytest.raises(ValueError, match="reserved"):
+        store.rename_agent("dev", new_name)
+    assert "dev" in store.load_config()["agents"]

@@ -207,7 +207,28 @@ def read_ledger(store) -> dict[str, Any]:
         raise kn.KnowledgeError(f"{path} is not valid json ({exc}); fix or remove it") from exc
     if not isinstance(data, dict) or not isinstance(data.get("packs"), dict):
         raise kn.KnowledgeError(f"{path} is not a pack ledger; fix or remove it")
+    problem = _ledger_problem(data)
+    if problem:
+        raise kn.KnowledgeError(f"{path} is not a pack ledger ({problem}); fix or remove it")
     return data
+
+
+def _is_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _ledger_problem(data: dict) -> str:
+    """Why a ledger with a valid top level cannot be used, or an empty string. Every later command indexes
+    entry["version"] and entry["keys"], so a hand-edited or newer ledger must stop here, with a plain error."""
+    if data.get("schema_version") != LEDGER_SCHEMA:
+        return f"schema_version {data.get('schema_version')!r}, expected {LEDGER_SCHEMA}"
+    for name, entry in data["packs"].items():
+        if not isinstance(entry, dict) or not _is_count(entry.get("version")) or not isinstance(entry.get("keys"), dict):
+            return f"pack {name!r} needs a whole-number version and a keys object"
+        for key, state in entry["keys"].items():
+            if not isinstance(state, dict) or not all(isinstance(v, str) for v in state.values()):
+                return f"pack {name!r}, key {key!r}: the key state must be an object of text values"
+    return ""
 
 
 def _write_ledger(store, ledger: dict[str, Any]) -> None:
@@ -440,7 +461,8 @@ def describe(store) -> list[dict[str, Any]]:
             elif kn.is_curated(latest):
                 live += 1
         rows.append({"name": name, "version": pack.version, "lessons": len(pack.lessons),
-                     "loaded_version": entry["version"] if entry else None, "live": live,
+                     "loaded_version": entry["version"] if entry else None, "loaded": bool(entry) and live > 0,
+                     "live": live,
                      "retracted_by_pack": retracted_by_loader, "retracted_by_team": retracted_by_team,
                      "changed_by_team": changed_by_team})
     return rows
