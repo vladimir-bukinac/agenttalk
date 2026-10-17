@@ -223,7 +223,8 @@ def _ledger_problem(data: dict) -> str:
     if data.get("schema_version") != LEDGER_SCHEMA:
         return f"schema_version {data.get('schema_version')!r}, expected {LEDGER_SCHEMA}"
     for name, entry in data["packs"].items():
-        if not isinstance(entry, dict) or not _is_count(entry.get("version")) or not isinstance(entry.get("keys"), dict):
+        if (not isinstance(entry, dict) or not _is_count(entry.get("version"))
+                or not isinstance(entry.get("keys"), dict)):
             return f"pack {name!r} needs a whole-number version and a keys object"
         for key, state in entry["keys"].items():
             if not isinstance(state, dict) or not all(isinstance(v, str) for v in state.values()):

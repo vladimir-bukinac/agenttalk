@@ -798,7 +798,8 @@ def test_every_event_carries_the_origin_of_the_publish_it_comes_from(tmp_path: P
     assert rec["curated"]["id"] in pack_ids and rec["latest"]["id"] in pack_ids
 
 
-# ---- PR #524 review: an unloaded pack is not listed as loaded; a bad ledger is a clear error; the reserved name on rename
+# ---- PR #524 review: an unloaded pack is not listed as loaded; a bad ledger is a clear error;
+# the reserved name on rename
 
 def test_pack_list_says_unloaded_after_an_unload_and_keeps_the_version_history(
         tmp_path: Path, packs, capsys) -> None:
