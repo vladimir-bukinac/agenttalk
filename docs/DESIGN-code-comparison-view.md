@@ -1,54 +1,55 @@
 # Design: a code comparison view in the dashboard ("compare")
 
-**Status:** design only, round 1. No code is written by this document.
+**Status:** design only, round 2 (fix round 1 folded in). No code is written by this document.
 **Base:** `origin/master` at `bdc775cb5727970b960d6ee76c785b5652c1f0dd`. Every line number below is at that commit.
-**Request:** tk-97cf01713d22. **Binding input:** the accepted challenge (`ch-b8f7fbb4-63e7-47b4-99d5-bbbe88d70874`, RESHAPE), eight points, quoted by number as "C1" to "C8" below.
-**Builder:** one Qwen seat, `qwen-agenttalk-dev-2`. **Reader:** a named Codex seat reads each slice.
+**Request:** tk-97cf01713d22. **Read of round 1:** tk-f0287d325cc6 (FIX: 2 P1, 9 P2, 2 P3), folded in by tk-f5b1097b77f9.
+**Binding input:** the accepted challenge (`ch-b8f7fbb4-63e7-47b4-99d5-bbbe88d70874`, RESHAPE), eight points, called "C1" to "C8" below.
+**Builder:** one Qwen seat, `qwen-agenttalk-dev-2`. **Reader:** `codex-agenttalk-reviewer-1` reads each slice.
 
-**How to read the labels.** Every claim is marked **FACT** (I read it in the code or docs at the commit above, with the file and line), **ESTIMATE** (a number I reasoned out, with its assumption) or **ASSUMPTION** (something I could not check, and what changes if it is wrong). Anything unmarked is a definition, not a claim.
+**How to read the labels.** Every claim is marked **FACT** (I read it in the code or docs at the commit above, with file and line), **ESTIMATE** (a number I reasoned out, with its assumption) or **ASSUMPTION** (something I could not check, and what changes if it is wrong). Unmarked text is a definition, not a claim.
 
 ---
 
 ## 0. In plain words
 
-**What the operator asked for.** A page in the dashboard that shows the original code on the left, the code the team's members made on the right, and, beside it, what the team recorded about that work: who was asked to build it, who reviewed it, what each reviewer said, and which exact version of the code each reviewer was looking at.
+**What the operator asked for.** A page in the dashboard with the original code on the left, the code the team's members made on the right, and beside them what the team recorded about the work: who was asked to build it, what each fix task did, who reviewed it, what each reviewer said, and which exact version each reviewer was looking at.
 
-**What we are building first (slice 1).** One page, `/compare`, for one explicitly chosen pair of commits (a "comparison"). It shows:
-- a **status banner** that says, in plain words, whether the exact version on screen is approved, not approved, waiting for a review, or cannot be told;
-- the **changed files**, with counts, and a **side-by-side text view** of one file at a time;
-- a panel called **"Recorded rationale"** (not "reasoning": it shows what was written down, not why anyone thought something) that lists each recorded task and review for this work, with a link to its transcript.
+**What we build first (slice 1).** One page, `/compare`, for one explicitly chosen pair of commits (a "comparison"). It shows:
+- a **status banner** that repeats what the work board says about this exact version, in plain words, and says **"cannot tell"** whenever the board cannot be tied to this comparison;
+- the **changed files** with counts, and a **side-by-side text view** of one file at a time;
+- a panel called **"Recorded rationale"** (not "reasoning": it shows what was written down) with the recorded tasks, fix tasks and reviews for this work, each with a link to its transcript.
 
-**The rule that matters most.** An approval belongs to one exact version of the code. If the version on screen is newer than the one a reviewer approved, the page says so in a different colour *and* different words ("approved an EARLIER version; the changes after it are NOT covered"). If the records are missing, contradictory or still being gathered, the page says **"cannot tell"** and never shows a green approval.
+**The rule that matters most.** The page never decides by itself whether code is approved. The current status comes only from the work board's own placement, and only when the board's record is tied to this repository, this store session, this work cycle and this exact commit. A review that approved an older version is shown as **history**, in different words from the current status, and never turns the banner green. If anything cannot be established, the banner says "cannot tell" and gives the reason.
 
-**What it does not do (deferred, per C6).** No comments pinned to lines, no round-by-round playback, no scanning of old history, no syntax colouring, no editing, no merging.
+**What it does not do (deferred, C6).** No comments pinned to lines, no round-by-round playback, no scanning of old history, no syntax colouring, no editing, no merging.
 
-**How much work is it?** About **three work orders** for the one builder, roughly **1,500 lines of product code and 1,400 lines of tests** (ESTIMATE, section 10). Elapsed time is about **a day and a half** including the Codex reads between orders (ESTIMATE). Builder spend is guessed at **8 to 25 EUR** in total including rework (ASSUMPTION: there is no measured build workload yet, which is the challenge's own complaint; the first checkpoint measures it).
+**How much work is it?** About **three work orders** for the one builder: roughly **1,750 lines of product code and 1,700 lines of tests** (ESTIMATE, section 11). The first work order is a thin end-to-end slice with an early checkpoint and a **10 EUR Qwen allowance**. Builder spend for all three is guessed at **12 to 22 EUR** (ASSUMPTION: no measured build workload exists yet).
 
-**The stop rule (C7).** After work order 3 we run one checkpoint on a made-up repository. A reader who is told nothing must be able to say what is approved. We also give a second reader the same facts with only an editor's diff and a short index page. **If the second reader does as well and as fast, we stop here** and keep the index page.
+**The stop rule (C7).** After work order 1 we run the checkpoint on a made-up repository. A reader who is told nothing must be able to say what the page shows. A second reader gets the editor-plus-index alternative. **If the second reader does as well and as fast, we stop** and keep the index page. Work orders 2 and 3 are not dispatched without a GO there.
 
-**One decision I need from the lead before the build (section 1).** The existing rule says the dashboard server never runs Git. The comparison needs repository text. My recommendation keeps the rule: a command run by a person (`agenttalk compare register`) reads the repository once and stores a bounded, read-only snapshot; the page only reads that snapshot.
-
----
-
-## 1. Decisions needed before the build, with my recommendation
-
-| # | Question | Recommendation (default used by the work orders) | If the lead decides otherwise |
-|---|---|---|---|
-| D1 | **Does the server run Git on a request?** FACT: it must not today. `docs/WORK-BOARD-FEED.md` ("Integration facts and the Done lane") says the snapshot worker "never runs Git", and records "the operator's decision of 2026-09-30" that replaced an in-server Git observer by a lead-run command. FACT: `work_board_facts.py:1-6` repeats it ("the server never runs Git"). | **No.** Registration takes the snapshot with Git; the three GET endpoints read stored files only (section 5). This satisfies C4 (limits, no helpers, no fetching, only the registered range) with the strongest form of "no subprocess on a request". | Section 5.9 lists exactly what changes if the operator grants an exception: the same functions run on a request behind a one-slot gate. That is a different security review, and I do not recommend it for slice 1. |
-| D2 | **Where is "the registered repository" registered?** FACT: `work_repos` in the project config is already "an access allowlist of operator-approved local checkouts, not an item registry" (`docs/WORK-BOARD-FEED.md`, "Setup"; `work_board_facts.py:69-104`). It is edited by hand; there is no command for it. | **Reuse `work_repos` as the repository allowlist.** `compare register` refuses an alias that is not there. A second, parallel allowlist would drift. A command to add an alias is out of slice 1. | A separate allowlist adds one config key and one command (about 60 lines, one more work-order task). |
-| D3 | **Where do snapshots live?** | `.agenttalk/compare/` (outside `state/`, so a store reset does not silently delete deliberate evidence). ASSUMPTION: nothing enumerates unknown directories under `.agenttalk/`. I checked `knowledge/` (FACT: `knowledge.py:39` `STORE_DIRNAME = "knowledge"`, a sibling directory that already exists), but I did not read every cleaner. The builder checks `janitor.py`, `doctor.py` and `docs/BACKUP.md` first (work order 1, step 1). | If a cleaner would touch it, move it under `state/compare/` and note that a store reset removes it. |
-| D4 | **Show reply text in the rationale panel?** The reducer never reads bodies (FACT: `work_board.py:3-4`, "Bodies and subjects are never read"). The existing transcript route does carry bodies (FACT: `web.py` route list, `GET /api/thread/<rid>`, "CARRIES bodies"). | **Yes, a 600-character excerpt of each verdict reply, as inert text**, because "reasoning" is what the operator asked for and links alone make the operator leave the page. The excerpt is only read from messages already in the validated active window. | Links only: delete the `excerpt` field and one test. |
-| D5 | **A link from console v2 to the new page?** | **Not in slice 1.** `/compare` is a separate page with its own assets, so a mistake cannot break `/v2` (the board model tests are exact-equality tests; see section 9, risk R3). | One header link in `console2.js`, one test. |
+**The five operator-side answers are settled** (lead, tk-4f1dff3e212a): the server does not run Git, so registration takes a bounded snapshot; repositories come from `work_repos`; snapshots live in `.agenttalk/compare/`; reply excerpts are 600 characters; console v2 gets no link in slice 1.
 
 ---
 
-## 2. What the operator will see
+## 1. Decisions (settled, with the facts they rest on)
 
-### 2.1 The two pages
+| # | Decision | Why (FACT) |
+|---|---|---|
+| D1 | **The server never runs Git.** `agenttalk compare register` reads the repository once and stores a bounded read-only snapshot; the three GET endpoints read stored files only. | `docs/WORK-BOARD-FEED.md` ("Integration facts and the Done lane") records the operator's decision of 2026-09-30; `work_board_facts.py:1-6` repeats it. |
+| D2 | **Repositories come from `work_repos`.** `compare register` refuses an alias that is not there. | `work_repos` is already "an access allowlist of operator-approved local checkouts" (`docs/WORK-BOARD-FEED.md` "Setup"; `work_board_facts.py:69-104`). |
+| D3 | **Snapshots live in `.agenttalk/compare/`.** | Outside `state/`, so a store reset does not silently delete deliberate evidence (a reset is exactly what the session binding in section 7.3 handles). **Consequence read in the code:** `recovery.py:162-173` enumerates every file under the store recursively (`_relative_files`), so the snapshots are part of store backups and recovery. Section 5.8 states what that means. |
+| D4 | **Each verdict reply shows a 600-character excerpt**, as inert text. | The existing transcript route already carries bodies (`web.py` route list, `GET /api/thread/<rid>`). The reducer never reads bodies (`work_board.py:3-4`); the excerpt is read from messages already in the validated active window. |
+| D5 | **No link from console v2 in slice 1.** | Keeps the change away from `console2*.js`. |
 
-**`GET /compare`** is a small HTML shell (no inline script, no inline style). It loads `/static/compare.css`, `/static/compare-model.js` and `/static/compare.js`, and reads `?id=<cid>` from its own address. Without `id` it shows the list of registered comparisons; with `id` it shows one comparison.
+---
 
-**List page** (one row per registered comparison, newest first):
+## 2. What the operator sees
+
+### 2.1 The pages
+
+**`GET /compare`** is a small HTML shell (no inline script, no inline style). It loads `/static/compare.css`, `/static/compare-model.js` and `/static/compare.js`. It reads `?id=<cid>` and `?root=<project id>` from its own address. Without `id` it shows the list; with `id` it shows one comparison. **The project selector is carried everywhere:** the page passes `root` unchanged to every API request, to the back link, to the list-to-detail links and to the transcript links. When the address has no `root`, the first API answer names the project (`project.project_id`) and the page uses that from then on for every link it builds.
+
+**List page** (newest first; the status text is the same function as the detail page, so the list can never look greener than the page it opens):
 
 ```
 agenttalk / compare                                         project: agenttalk   [data as of 10:42:05Z]
@@ -58,23 +59,21 @@ agenttalk / compare                                         project: agenttalk  
   demo-greeting   fixture   9a1b2c3d4e5f..3f9c2a41d0e7   2 files   +9 -3    registered 10:31Z
      status:  CANNOT TELL (2 reasons)                                         [open]
   agenttalk-pr-500   agenttalk   5c1d...8e02..a07b...19cc   14 files   +402 -88
-     status:  APPROVED (this head)                                            [open]
+     status:  READY (board: reviewed; independent GO; required checks green)  [open]
 ```
-
-The status on the list is the same banner text as on the detail page (section 7), so the list can never look greener than the page it opens.
 
 **Detail page** (the checkpoint screen):
 
 ```
 agenttalk / compare / demo-greeting                           project: agenttalk   [data as of 10:42:05Z]
 
-+-- STATUS ---------------------------------------------------------------------------------+
-|  [X]  CANNOT TELL whether this head is approved.                                          |
++-- STATUS (from the work board, for THIS head) --------------------------------------------+
+|  [X]  CANNOT TELL whether this head is ready.                                             |
 |        * The board cannot place this work: multiple candidates without supersession.      |
 |        * A link is missing: required correlation history (1 record).                      |
 |  This head   3f9c2a41d0e7   (full 3f9c2a41...)     Base   9a1b2c3d4e5f                   |
 |  2 commits  .  2 files changed  (1 modified, 1 added)  .  +9 -3                          |
-|  Work item: demo-greeting   cycle 1   board column: unknown                              |
+|  Work item: demo-greeting   cycle 1 (board: cycle 1)   repository: fixture (matches)      |
 +-----------------------------------------------------------------------------------------+
 
 +-- FILES -----------------+  +-- SIDE BY SIDE: greet.py   M   +4 -1 ------------------------+
@@ -86,130 +85,133 @@ agenttalk / compare / demo-greeting                           project: agenttalk
 +--------------------------+  +--------------------------------------------------------------+
 
 +-- RECORDED RATIONALE   (what the team wrote down about this work; not a full account) -----+
-| time       who                      stage  says     applies to                              |
-| 10:05Z  reviewer-a -> lead       read   CHANGES REQUESTED   an EARLIER head (b7e1...)  [log]|
-|    "greet(None) crashes; add a guard and a test." (excerpt, 600 characters max)             |
-| 10:12Z  reviewer-b -> lead       read   APPROVED            an EARLIER head (b7e1...)  [log]|
-|    NOT this head: the changes after b7e1... are not covered.                                |
-| 10:30Z  reviewer-a  (asked, no answer yet)   read   -       THIS head (3f9c...)            |
+| TASKS                                                                                      |
+| 09:40Z  lead -> qwen-agenttalk-dev-2   build   done   "Add greet(name) ..." (excerpt) [log]|
+| 10:20Z  lead -> qwen-agenttalk-dev-2   fix     done   "Guard None ..."  (excerpt)   [log]|
+| REVIEWS (history; the status above does not come from this list)                           |
+| 10:05Z  reviewer-a  read  changes requested on an EARLIER head (b7e1...)   [log]           |
+|    "greet(None) crashes; add a guard and a test." (excerpt, 600 characters max)            |
+| 10:12Z  reviewer-b  read  a GO was recorded on an EARLIER head (b7e1...). The changes      |
+|    after it are NOT covered.                                                    [log]      |
+| 10:30Z  reviewer-a  read  asked, no answer yet (head of the request: not available)        |
 | !  1 record could not be found: review-result 20261017-000000-000000-miss (named by a reply)|
-|  each row ends with: project id . request id . reply id (select to copy)                     |
+|  each row ends with: project id . request id . reply id (select to copy)                    |
 +---------------------------------------------------------------------------------------------+
 ```
 
-Notes on the sketch:
-- Every state uses a **word and a mark**, never colour alone. `[X]`, `[!]`, `[ok]` are real text; colour is added on top.
-- "Head" always shows the first 12 characters, and the full 40 or 64 characters in a line directly under or beside it (not a tooltip).
-- The left column is labelled **ORIGINAL (base ...)** and the right **CHANGED (head ...)**.
-- The "who" column shows agent names as recorded. FACT: names are compared as identities and never parsed (`work_board.py:3-4`).
+Notes: every state uses a **word and a mark** (`[X]`, `[!]`, `[ok]`), never colour alone. "Head" shows the first 12 characters and, on the next line, the full id (not a tooltip). The left column is **ORIGINAL (base ...)**, the right **CHANGED (head ...)**. A row whose displayed text looks identical but whose bytes differ shows a **changed** mark with the words "differs in bytes not visible here" (section 5.6).
 
-### 2.2 Page states the builder must render (each has a test)
+### 2.2 Page states (each has a test)
 
 | State | When | What the page shows |
 |---|---|---|
-| loading | request in flight | the words "Loading comparison..." |
+| loading | request in flight | "Loading comparison..." |
 | list empty | no comparisons registered | "No comparisons are registered. Run `agenttalk compare register --help`." |
 | ok | detail loaded | everything above |
-| not found | HTTP 404 | "This comparison is not registered (id ...)" with a link back to the list |
-| busy | HTTP 503 | "The dashboard is busy. Retrying in N seconds" and one automatic retry after `Retry-After` seconds, then a button |
-| server error | HTTP 5xx, bad JSON, network failure | "Could not load: ..." with the reason. **Never a blank page and never a stale green banner.** (Lesson `process/inventory-read-the-error-path-before-saying-already-handled`: a screen only "copes" if the failed-read path was read.) |
-| evidence unavailable | the board has no such item, is still building, or is stale | the status banner is CANNOT TELL with the reason; the code view still works |
-| snapshot incomplete | the stored snapshot was cut short (limits) | an explicit line per cut ("500 of 731 files shown") |
-| file too large / binary / not text | per file | "Not shown: binary file (12,044 bytes)", "Not shown: larger than 262,144 bytes", and so on |
+| not found | HTTP 404 | "This comparison is not registered (id ...)" and a link back to the list (with `root`) |
+| busy | HTTP 503 | "The dashboard is busy. Retrying in N seconds", one automatic retry after `Retry-After`, then a button |
+| server error | HTTP 5xx, bad JSON, network failure | "Could not load: <reason>". **Never a blank page and never a stale status.** (Lesson `process/inventory-read-the-error-path-before-saying-already-handled`.) |
+| evidence unavailable | the board has no such item, is building, stale or incomplete | banner CANNOT TELL with the reason; the code view still works |
+| identity mismatch | session, cycle or repository differs (section 7.3) | banner CANNOT TELL naming the two values that differ |
+| snapshot incomplete | cut by limits | one line per cut ("first 500 files shown; more exist") |
+| per file | binary, too large, withheld, symlink, submodule, mode only, missing object | one plain line saying why nothing is shown |
 
 ---
 
 ## 3. What I read, and what it means for the design (FACTS)
 
-1. **The board is a pure reducer over validated envelopes** (`src/agenttalk/work_board.py:1-14`, `reduce` at `:289`). It already computes, per work item, a `verdicts` map from reviewed head to a list of `{reviewer, verdict, reply, independent, vendor}` (`:459-469`), the current candidate head (`item["candidate"]`, set in `_place`, `:532`), `issues` and `reason`/`evidence` (`:493-501`), `repo_binding` (`:473-474`), `previous_cycles` (`:484-490`) and the current-cycle `obligations` (`:480-481`). **Consequence:** the comparison page reuses this output and invents no second correlation logic (C3).
-2. **A verdict is filed under the commit its reviewer named** (`_adopt_reply_head`, `:147-172`; reply heads via `_reply_head`, `:139-144`). Reviewers who name different commits become a conflict of the request (`:156-163`). A `HOLD` is kept as evidence under its own head (`:462-467`). **Consequence:** heads are already bound to verdicts; the page's job is to compare each verdict's head with the head on screen.
-3. **A verdict map key can be `None`** (a reviewer who named no commit). `json.dumps` turns a `None` key into the string `"null"`. FACT by language rule, not by a test I ran; the builder pins it with a test (work order 2, test `test_null_head_key_is_no_head`).
-4. **The reducer marks missing or conflicting history rather than guessing**: a reference that does not resolve is `MISSING = "missing required correlation history"` (`:24`, `:240-241`); the item then becomes Unknown with the reason and evidence ids (`:493-497`). **Consequence:** the "missing link" at the checkpoint is a real reducer outcome, not something the page invents.
-5. **The reducer is total**: an internal fault makes the item Unknown rather than raising (`:289-297`, `:412-421`). **Consequence:** the page must handle `column == "unknown"` as a first-class state.
-6. **The board feed is cached and bounded**: at most 100 cards and 256 KiB (`work_board_feed.py:bounded`, defaults at `:34`; `docs/WORK-BOARD-FEED.md`). It includes Done items only for seven days. **Consequence:** the comparison may name an item that is not on the feed. That is state "evidence unavailable: not on the board feed", shown explicitly.
-7. **The server's contract** (`src/agenttalk/web.py:1-103`): loopback only; strict path allowlist; "Actions off by default" (GET/HEAD only unless enabled); nosniff, `X-Frame-Options: DENY`, `Cache-Control: no-store` on every response (`:4361-4366`); a Host gate on every request (`:4302-4330`); a per-route CSP, where the console routes use `_DASHBOARD_CSP` (`:216-218`: `script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'`). HEAD is GET without a body (`do_HEAD`, `:4419-4420`; `_send`, `:4372-4388`). **Consequence:** the new GET routes copy the exact pattern of `/api/work-board` and `/api/thread/<rid>` (`:5098-5109`, `:5223-5246`).
-8. **Static assets are an exact-name allowlist** (`_load_static_assets`, `web.py:801-829`; route `:5210-5221`). A new asset needs one more tuple there and a file under `web_static/`.
-9. **There is already a bounded-wait gate for scans** (`_SCAN_CONCURRENCY_LIMIT = 2`, `_SCAN_WAIT_TIMEOUT_SECONDS = 3.0`, `_acquire_scan_slot` at `web.py:967-978`, `ScanBusy` answered as HTTP 503 with `Retry-After` by `do_GET` at `:4436-4454`). **Consequence:** the comparison reads reuse the same shape with their own constants.
-10. **Existing hardened Git pattern** (`work_board_facts.py:133-155`, `_git`): validated arguments, no shell, drop every inherited `GIT_*` variable, set `GIT_NO_LAZY_FETCH=1`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_TERMINAL_PROMPT=0`, pass `--no-replace-objects -c core.fsmonitor=false -C <repo>`, `stdin=DEVNULL`, timeout 15 s (`PROBE_TIMEOUT_SECONDS`, `:32`; raised from 2 s after Windows CI flakes, comment at `:24-31`). Only `rev-parse`, `merge-base` and `cat-file` are allowed. **Consequence:** I reuse the pattern in a new module with a wider but still closed allowlist; I do not edit `_git`, so `verify-merges` keeps its exact behaviour.
-11. **The repository allowlist and checkout checks already exist** (`repo_aliases`, `:69-104`; `_open_repo`, `:158-185`: canonical path, top of a work tree, not shallow, ref resolution). I import `repo_aliases` and re-use the checks by calling a shared copy (see section 5.2), not by loosening them.
-12. **The existing lead-run command is the template for the new one** (`cmd_board`, `cli.py:8611-8640`; parser `:16703-16720`; run lock `RUN_LOCK_FILE = "work-board-verify.lock"`, `work_board_facts.py:22`, taken with `timeout=0`, `:229-233`; atomic write via `_atomic.write_text`, `:393`). Errors raised as `ValueError` reach `main()` and end as exit 2 with the message on stderr (comment at `cli.py:8622`).
-13. **Lock ranks** (`lock_order.py:12-46`): an unknown lock name is a leaf lock (rank 210) that "must never call back into a store transaction" (`:46-47`); `work-board-verify.lock` is rank 205. A test pins how many lock sites each file has (`tests/test_lock_order.py:80-86`, exact-equality dict), and `docs/LOCK-ORDER.md` lists every lock. **Consequence:** registration takes one new leaf lock and the builder must update the dict and the doc in the same commit.
-14. **The tests I will lean on**: `tests/test_work_board_reducer.py:25-79` has a `Bus` class that builds work-board stories through the real publication normaliser (`task`, `reply`, `rescind`; `reply(opener, status, verdict)`); `tests/test_work_board_feed.py` shows how a real `Store` is built; `tests/test_console2_web.py` pins the allowlisted assets (`:27-36`) and `tests/test_web.py` serves a real server in a thread (`web.serve_in_thread`). `REVIEW_PAIRS` is `{("approved","GO"), ("rejected","FIX"), ("rejected","HOLD"), ("needs-info","HOLD")}` (`work_tags.py:196`).
-15. **Release plumbing**: static files ship as package data automatically (`pyproject.toml:108-112`: do not add `force-include`). The dev gate pins two required wheel resources, `console.css` and `console.js` (`dev_gate.py:360-361`); new assets need no change there.
+1. **The board is a pure reducer over validated envelopes** (`work_board.py:1-14`; `reduce` at `:289`). Per work item it already yields `verdicts` (head to list of `{reviewer, verdict, reply, independent, vendor}`, built at `:459-469`), `candidate` (set in `_place`, `:532`), `obligations` for the current cycle (`:480-481`: `request_id, recipient, stage, state, verdict`), `issues`, `reason`, `evidence`, `repo_binding` (`:474`), `previous_cycles` (`:484-490`), `integration` (`:428`) and the placement `column` / `workflow_column` (`_place`, `:532-592`). **Consequence:** the comparison page reuses this output and invents no correlation or approval logic (C3).
+2. **`verdicts` is history, not status.** It holds every GO, FIX and HOLD of the current cycle under the commit each reviewer named (`:459-469`). Whether a GO still counts is decided in `_place` by many other facts: an active fix task (`:569-571`), an unresolved FIX unless discharged by a replacement chain (`:538-548`), outstanding reviews (`:578-580`), blockers (`_blockers`, `:595-640`) and policy. The column `ready` is reached only when none of those apply (`:586-589`). **Consequence (reader finding 1):** the banner is a pure function of the board's placement; the verdict map only feeds the history list. I confirm the reader's two reproductions from the code alone: an independent GO plus an outstanding fix task gives `fix_round` (`:569-571`) and a FIX discharged by a replacement review at the same head leaves a `ready` card whose map holds both verdicts (`:538-548`, `:586-589`).
+3. **A verdict map key can be `None`** (a reviewer who named no commit). `json.dumps` writes a `None` key as `"null"`. The builder pins it with a test.
+4. **Missing or conflicting history is a reducer outcome**, not something the page invents: `MISSING = "missing required correlation history"` (`work_board.py:24`, `:240-241`); conflicts make the item Unknown with the reason and evidence ids (`:493-501`). The reducer is total: an internal fault makes the item Unknown (`:412-421`).
+5. **`repo_binding`** is `{"repo": alias, "target": ref}`, `None`, or the string `"ambiguous"` (`work_board.py:656-662`). **`integration`** maps head to a **boolean-like value** (`:428`), where `False` is a real, different answer from `True`. Integration yields the `done` column only when the value is truthy and no execution is outstanding (`:553-556`).
+6. **The board feed is cached and bounded**: at most 100 cards and 256 KiB; Done items only for seven days (`work_board_feed.py`; `docs/WORK-BOARD-FEED.md`). The comparison may name an item that is not on the feed; that is a shown state.
+7. **The board and the message window come from one refresh, but the existing accessors read them separately.** The worker stores `self.current` (the messages) and `self._board` inside one `with self._lock:` block (`envelope_snapshot.py`, end of the refresh function). But `board()` (`:378-397`) and `active_with_freshness()` (`:321-350`) each take the lock on their own, so a refresh can publish between two calls, and `active_with_freshness` returns age and error text, not a generation. **Consequence (reader finding 5):** a new accessor reads both under one lock (section 7.1).
+8. **The server's contract** (`web.py:1-103`): loopback only; strict path allowlist; actions off by default; nosniff, `X-Frame-Options: DENY`, `Cache-Control: no-store` on every response (`:4361-4366`); a Host gate (`:4302-4330`); console routes use `_DASHBOARD_CSP` (`:216-218`). HEAD is GET without a body (`do_HEAD`, `:4419-4420`; `_send`, `:4372-4388`).
+9. **Project selector.** `_root_selection` (`web.py:4889-4908`) takes `root` as a project id or a unique label, and **without `root` it silently takes `roots[0]`** (`:4892-4893`). **Consequence (reader finding 6):** every link must carry `root`.
+10. **Static assets are an exact-name allowlist** (`_load_static_assets`, `web.py:801-829`; route `:5210-5221`).
+11. **A bounded-wait gate for scans already exists** (`_SCAN_CONCURRENCY_LIMIT = 2`, `_SCAN_WAIT_TIMEOUT_SECONDS = 3.0`, `_acquire_scan_slot` at `web.py:967-978`; `ScanBusy` answered as 503 with `Retry-After` at `:4436-4454`).
+12. **Existing hardened Git pattern** (`work_board_facts.py:133-155`, `_git`): validated arguments, no shell, every inherited `GIT_*` variable dropped, `GIT_NO_LAZY_FETCH=1`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_TERMINAL_PROMPT=0`, `--no-replace-objects -c core.fsmonitor=false -C <repo>`, `stdin=DEVNULL`, timeout 15 s (`PROBE_TIMEOUT_SECONDS`, `:32`, raised from 2 s after Windows CI flakes, comment `:24-31`). Only `rev-parse`, `merge-base`, `cat-file`. I reuse the pattern in a new module and do not edit `_git`.
+13. **Repository allowlist and checkout checks exist** (`repo_aliases`, `work_board_facts.py:69-104`; `_open_repo`, `:158-185`).
+14. **Store-session binding is an existing idiom.** Integration facts carry `session_id`; a run refuses to publish after a reset (`work_board_facts.py:312-313`) and the reader refuses facts from another session (`:349-350`). The store session is `cfg.get("session_id")`.
+15. **The lead-run command template** (`cmd_board`, `cli.py:8611-8640`; parser `:16703-16720`; run lock with `timeout=0`, `work_board_facts.py:229-233`). `ValueError` reaches `main()` as exit 2 with the message on stderr.
+16. **`_atomic.write_text` is not always atomic.** On Windows, when the rename keeps failing with a permission error, it falls back to a direct write of the final path and latches that mode (`_atomic.py:46-51`, `:60-81`, `:96-98`); its own docstring says a reader can catch a half-write there. **Consequence (reader finding 4):** the compare module has its own strict publication step and does not use that helper (section 4.5).
+17. **Lock ranks** (`lock_order.py:12-46`): an unknown lock name is a leaf lock (rank 210); a test pins how many lock sites each file has (`tests/test_lock_order.py:80-86`) and `docs/LOCK-ORDER.md` lists every lock.
+18. **Spend records.** The gateway's child-turn receipt page has the closed key set `actual_micro_eur, calls, charge_period, closed_at, input_tokens, outcome, output_tokens, quota_lease_ref_sha256, seq` (`ovh_gateway.py:3960-3970`, checked at `:3995-4040`). **It has no seat name.** An open ledger line is a reservation ceiling, not money spent (lead relay of 2026-10-17 11:24 UTC). Section 11.2 says what that makes measurable.
+19. **Tests I will lean on**: `tests/test_work_board_reducer.py:25-79` (`Bus`: `task`, `reply`, `rescind`, `add(raw=True)`); `tests/test_work_board_feed.py` (a real `Store`); `tests/test_console2_web.py` pins the allowlisted assets; `tests/test_web.py` serves a real server in a thread. `REVIEW_PAIRS = {("approved","GO"), ("rejected","FIX"), ("rejected","HOLD"), ("needs-info","HOLD")}` (`work_tags.py:196`).
+20. **Release plumbing**: static files ship as package data (`pyproject.toml:108-112`); the dev gate pins only `console.css` and `console.js` (`dev_gate.py:360-361`).
 
-**Not found (so not claimed):** no existing diff view, no code-reading route and no repository registry other than `work_repos` (searched `web.py`, `console2.js`, `work_board*.py`, `docs/`).
+**Not found (so not claimed):** no existing diff view, no code-reading route, no repository registry other than `work_repos`.
 
 ---
 
-## 4. Registration: `agenttalk compare register`
+## 4. Registration and its lifecycle
 
-### 4.1 The command
+### 4.1 Commands
 
 ```
 agenttalk compare register --repo <alias> --base <rev> --head <rev>
-                           [--work-item <slug>] [--label <text>] [--json]
+                           [--work-item <slug> --work-cycle <n>] [--label <text>] [--json]
+agenttalk compare amend    <cid> [--work-item <slug> --work-cycle <n> | --clear-work-item] [--label <text>]
+agenttalk compare remove   <cid>
+agenttalk compare remove   --reconcile
 agenttalk compare list [--json]
-agenttalk compare show <cid> [--json]      # prints the manifest, no file contents
+agenttalk compare show <cid> [--json]       # manifest only, no file text
 ```
 
-(`--root <store>` and the usual store options are inherited from the main parser, as for `board verify-merges`: FACT, `cmd_board` calls `_get_store(args)`.)
-
-- `--repo` is an alias that must exist in `work_repos` (D2) and pass `repo_aliases()` validation.
-- `--base` and `--head` are any revision names a person types (a branch, a tag, a full or short commit). They are **resolved once, at registration**, to full commit ids, and **only the ids are stored**. After that the comparison is immutable (C2): moving a branch never changes it.
-- `--work-item` is an optional work-item slug (`^[a-z0-9][a-z0-9-]{0,63}$`, FACT: `_SLUG` in `work_board_facts.py:35`). It names the board item whose recorded evidence is shown beside the code. Without it the page says "No work item is linked to this comparison" (state shown, not hidden).
-- `--label` is up to 120 characters of plain text, shown as the title. Control characters are refused.
-- `compare list` and `compare show` never run Git and never write.
-
-`compare register` is the **only** place this feature runs Git (D1). It also writes the whole snapshot (section 5).
+- `--repo` must exist in `work_repos` (D2) and pass `repo_aliases()`.
+- `--base` and `--head` are resolved once to full commit ids; **only ids are stored**, so moving a branch changes nothing (C2).
+- `--work-item` (`^[a-z0-9][a-z0-9-]{0,63}$`, FACT `_SLUG` in `work_board_facts.py:35`) and `--work-cycle` (an integer 1 to 9999) **are given together or not at all**. The operator says which cycle of the work the comparison belongs to; the page checks that against the board (section 7.3).
+- `--label` is up to 120 characters; control characters are refused.
+- `list` and `show` never run Git and never write.
 
 ### 4.2 What registration checks, in order (each failure is one exit-2 message)
 
-1. `git --version` parses and is at least **2.32** (needed for `GIT_CONFIG_GLOBAL`; ASSUMPTION: older Gits ignore it, so refuse them rather than guess). Message: `compare register: git 2.32 or newer is required (found X)`.
-2. The alias exists and is valid (`repo_aliases(store.load_config())`); an invalid alias is refused with the reasons `repo_aliases` already returns.
-3. The checkout is usable: canonical path, top of a work tree, **not shallow**, and **not a partial clone** (section 5.4 command `C3`). A partial clone could fetch missing objects, which C4 forbids.
-4. `--base` and `--head` resolve to **commits** (`C4`, then `C5`: object type must be `commit`).
-5. **`--base` is an ancestor of `--head`** (`C6`), so "the original" really is the starting point of the changes. Otherwise: `base is not an ancestor of head; register a pair on one line of history`. (ASSUMPTION: slice 1 needs only linear ranges; criss-cross comparisons are deferred.)
-6. The range is not too big (section 5.3 limits). A range over the limit is **registered with `truncated` flags**, never refused, so the operator sees what was cut.
-7. Registry capacity: at most **20** comparisons; the 21st is refused with `remove one first` (a `compare remove <cid>` command is out of slice 1; the operator deletes the directory; the message prints the path).
+1. `git --version` parses and is at least **2.32** (ASSUMPTION: older Gits ignore `GIT_CONFIG_GLOBAL`, so they are refused rather than guessed at).
+2. The alias exists and is valid.
+3. The checkout is usable: canonical path, top of a work tree, **not shallow**, **not a partial clone** (call C3).
+4. `--base` and `--head` resolve to commits (C4, C5).
+5. `--base` is an ancestor of `--head` (C6).
+6. **The range has no merge commit** (C8 reads each commit's `parent` lines; a commit with more than one parent refuses the registration: `range contains a merge commit; slice 1 compares linear ranges`). This settles the reader's question: merge-containing ranges are **not** supported in slice 1.
+7. Capacity: at most **20** comparisons; the 21st is refused with `remove one first: agenttalk compare remove <cid>`.
+8. Anything over a size limit is **registered with `truncated` flags**, never refused (section 5.5).
 
 ### 4.3 Stored format (schema version 1)
 
-Directory: `<store>/.agenttalk/compare/` (D3).
+Directory `<store.dir>/compare/` (D3):
 
 ```
-.agenttalk/compare/
-  registry.json              <= 64 KiB   the index
-  <cid>/manifest.json        <= 256 KiB  facts about the range
-  <cid>/files/0001.json ...  <= 1.5 MiB each, at most 500 files; one record per changed file
+compare/registry.json              <= 64 KiB
+compare/<cid>/manifest.json        <= 256 KiB
+compare/<cid>/files/0001.json ...  <= 1.5 MiB each, at most 500
+compare/.staging-<cid>-<random>/   exists only during a registration
 ```
 
-`cid` = `"cmp-" + first 12 hex digits of sha256("<project_id>|<alias>|<base_oid>|<head_oid>")`. Registering the same range again is a no-op that prints the existing id (exit 0); it never rewrites the snapshot (immutable).
+`cid` = `"cmp-" + first 12 hex of sha256("<project_id>|<alias>|<base_oid>|<head_oid>")` (the work item and label are **not** part of the id, so correcting them keeps the id).
 
-`registry.json`:
+Each registry entry: `id, label, repo_alias, base, head, work_item (or null), work_cycle (or null), project (project id), session_id (the store session at registration), created_at, counts, truncated`. The manifest adds `git_version`, `repo_path` (display only, never used to read), the commit list (up to 200 commits, oldest first: `oid, parents, author_name, author_date, subject`), the file list (up to 500: `index, path, status, old/new mode and oid, state, lines_added, lines_removed, old_size, new_size`), `limits` (every limit value used) and `built_at`.
 
-```json
-{
-  "schema_version": 1,
-  "comparisons": [
-    {"id": "cmp-3f9c2a41d0e7", "label": "demo greeting", "repo_alias": "fixture",
-     "base": "9a1b2c...(40 or 64 hex)", "head": "3f9c2a...", "work_item": "demo-greeting",
-     "created_at": "2026-10-17T10:31:00+00:00", "project": "<project id>",
-     "counts": {"files": 2, "added": 1, "modified": 1, "deleted": 0, "binary": 0, "not_shown": 0,
-                "lines_added": 9, "lines_removed": 3, "commits": 2},
-     "truncated": {"files": false, "commits": false}}
-  ]
-}
-```
+Every reader of these files reads at most limit+1 bytes, refuses if over, checks `schema_version == 1`, validates every field's type and shape, and on any doubt answers "snapshot unreadable" (an error state, never a partial render). FACT: `work_board_facts._read` behaves this way (`:293-326`).
 
-`manifest.json` adds: `git_version`, `repo_path` (the canonical path, display only, never used to read), the **commit list** (up to 200 commits, oldest first: `{oid, parent_count, author_name, author_date, subject}`; names and subjects as text, subject cut at 200 characters), the **file list** (up to 500: `{index, path, status, old_mode, new_mode, old_oid, new_oid, state, lines_added, lines_removed}`), `limits` (every limit value used, so a later change of limits cannot silently reinterpret an old snapshot) and `built_at`.
+### 4.4 Same range again, corrections, removal
 
-Every reader of these files uses a **bounded read** (read at most limit+1 bytes, refuse if over), checks `schema_version == 1`, validates every field's type and shape, and on any doubt answers "snapshot unreadable" (an error state, never a partial render). FACT: this is exactly how `work_board_facts._read` and `_valid_fact` behave (`:293-326`).
+- **Same range, same metadata:** a no-op that prints the existing id (exit 0). It also **verifies the stored snapshot is complete** (manifest present, every listed file present and within its bound). If not: exit 2 `snapshot is incomplete: run compare remove <cid> and register again`. It never reports success for missing content.
+- **Same range, different `--work-item`, `--work-cycle` or `--label`:** **an explicit error** (exit 2): `already registered with different metadata; use compare amend <cid>`. It is never silently ignored.
+- **`compare amend`** is the one deliberately scoped metadata replacement: it rewrites only `label`, `work_item`, `work_cycle` of one registry entry, under the lock, through the publication step of 4.5. It never touches code, commits or the snapshot directory. `--clear-work-item` sets both to null.
+- **`compare remove <cid>`:** under the lock, (1) publish a registry without the entry, then (2) delete the directory. A crash between the two leaves an **orphan directory** that is no longer listed anywhere readable.
+- **`compare remove --reconcile`:** under the lock, (1) drop every registry entry whose directory is missing or incomplete, (2) delete every directory under `compare/` that is not named by the registry and every `.staging-*` directory. It prints what it dropped and deleted. This is how a full registry gets room back after someone deleted a directory by hand.
+- **Register meets an orphan:** a directory `<cid>` exists but the registry does not list it: register (under the lock) deletes that directory and builds fresh.
+- **Capacity message** names `compare remove` and `compare remove --reconcile`, not "delete the directory".
 
-Writes are atomic (`agenttalk._atomic.write_text`, FACT: imported at `work_board_facts.py:15`), files first and `registry.json` last, so a crash leaves a registry that names only complete snapshots (an orphan directory is harmless and is reported by `compare list`).
+### 4.5 One strict publication step (reader finding 4)
 
-### 4.4 Concurrency of registration (the one place with a lock)
+`compare_snapshot._publish_bytes(path, data)`: write a temporary file in the same directory, `fsync` it, then `os.replace`. On Windows, retry `os.replace` up to 5 times with 100 ms pauses on `PermissionError` (a reader holding the file). **If it still fails, the registration is refused** with `cannot publish atomically on this host; nothing was changed` and the staging directory is removed. **There is no direct-write fallback** and the shared helper `_atomic.write_text` is neither used nor changed.
 
-One lock for the whole command: `store._exclusive_lock(store.dir / "compare-register.lock", timeout=0, what="compare register lock")`. A second run is refused at once: `compare register: another run is in progress` (exit 2). FACT pattern: `work_board_facts.py:229-233`. The lock is taken **before** any Git call and released after `registry.json` is written. It is a leaf lock (rank 210, FACT `lock_order.py:46-47`); nothing inside it may call a store transaction. The builder updates `tests/test_lock_order.py:80-86` (`"compare_snapshot.py": 1`) and the table in `docs/LOCK-ORDER.md`.
+A registration builds everything in `.staging-<cid>-<random>/` (manifest and every file, each published by the step above), then renames the staging directory to `<cid>` (`os.rename`; refused if the destination exists), and **publishes `registry.json` last**. So a reader sees either the old registry or the new complete one, and the registry only ever names complete directories. Readers still treat a torn or missing file as an error state (defence in depth, not the guarantee).
+
+### 4.6 Concurrency between writers
+
+One lock for register, amend, remove and reconcile: `store._exclusive_lock(store.dir / "compare.lock", timeout=0, what="compare lock")`; a second writer is refused at once (`another compare command is running`). It is a leaf lock (rank 210, FACT `lock_order.py:46-47`); nothing inside it calls a store transaction. The builder updates `tests/test_lock_order.py:80-86` (`"compare_snapshot.py": <number of sites>`) and `docs/LOCK-ORDER.md`. HTTP readers take no lock; the publication order above is what keeps them safe.
 
 ---
 
@@ -217,151 +219,143 @@ One lock for the whole command: `store._exclusive_lock(store.dir / "compare-regi
 
 ### 5.1 Principles (C4)
 
-- Plumbing commands only: `rev-parse`, `cat-file`, `merge-base`, `rev-list`, `diff-tree`, `config`. **Never** `diff`, `show`, `log`, `status`, `archive`, `grep`, `blame`, `fetch`, `pull`, `checkout`, or anything that can run a diff driver, a text-conversion filter, a hook, an editor or a pager.
-- Only **file contents named by the registered range** are ever read: the old and new blob ids that `diff-tree` lists for `base..head`. A blob id that is not in that list is never requested. This is how "registration must not expose every historical secret" is met: the readable set is exactly the blobs of the changed paths on both sides, not the repository.
-- **No object is fetched.** Partial clones and shallow checkouts are refused; `GIT_NO_LAZY_FETCH=1` is set as a second layer.
-- **Counts are exact or marked.** Anything cut by a limit sets a `truncated` flag that the page shows.
+- Plumbing commands only: `rev-parse`, `config`, `cat-file`, `merge-base`, `rev-list`, `diff-tree`. **Never** `diff`, `show`, `log`, `status`, `archive`, `grep`, `blame`, `fetch`, `pull`, `checkout`, or anything that can run a diff driver, text-conversion filter, hook, editor or pager.
+- Only **blobs named by the registered range** are read: the old and new blob ids that `diff-tree` lists for `base..head`. No other object id is ever requested.
+- **No object is fetched.** Shallow checkouts and partial clones are refused; `GIT_NO_LAZY_FETCH=1` is a second layer.
+- **Counts are exact or marked.** Anything cut by a limit sets a `truncated` flag the page shows.
 
-### 5.2 The exact process environment and argument prefix
+### 5.2 The process environment and argument prefix
 
-**Environment** (start from the current environment, then **remove every key that starts with `GIT_`**, case-insensitively, then set):
+**Environment:** start from the current environment, **remove every key that starts with `GIT_`** (case-insensitively), then set:
 
 | Variable | Value | Why |
 |---|---|---|
-| `GIT_NO_LAZY_FETCH` | `1` | never fetch missing objects (FACT: already used, `work_board_facts.py:149`; ASSUMPTION: honoured from Git 2.44, so partial clones are refused separately in `C3`) |
+| `GIT_NO_LAZY_FETCH` | `1` | never fetch missing objects (FACT: already used, `work_board_facts.py:149`) |
 | `GIT_NO_REPLACE_OBJECTS` | `1` | a replace ref cannot swap an object |
 | `GIT_TERMINAL_PROMPT` | `0` | no credential prompt |
 | `GIT_OPTIONAL_LOCKS` | `0` | reads never write the index or refs |
-| `GIT_CONFIG_NOSYSTEM` | `1` | ignore the system config (`/etc/gitconfig`, Git for Windows' own) |
-| `GIT_CONFIG_GLOBAL` | `os.devnull` (`NUL` on Windows, `/dev/null` elsewhere) | ignore the user's `~/.gitconfig` (diff drivers, aliases, `core.pager`); Git 2.32+. ASSUMPTION: Git for Windows accepts `NUL` here; the work order tests it on Windows |
+| `GIT_CONFIG_NOSYSTEM` | `1` | ignore the system config |
+| `GIT_CONFIG_GLOBAL` | `os.devnull` | ignore the user's config (Git 2.32+). ASSUMPTION: Git for Windows accepts `NUL`; the work order tests it on Windows |
 | `GIT_ATTR_NOSYSTEM` | `1` | ignore system attributes |
-| `LC_ALL` | `C` | stable, untranslated messages |
+| `LC_ALL` | `C` | stable messages |
 
-**Argument prefix for every call** (a Python list, never a shell string; `shell=False`; `stdin` is `DEVNULL` unless the call feeds a list on stdin):
+**Argument prefix for every call** (a list, `shell=False`):
 
 ```
 [git_exe, "--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "protocol.allow=never",
  "-c", "diff.external=", "-c", "core.attributesFile=<os.devnull>", "-C", "<canonical repo path>", <subcommand>, ...]
 ```
 
-`git_exe` is `shutil.which("git")` resolved **once** per run and refused if it is relative or missing. FACT: the existing probe uses the bare name `"git"` (`GIT = ("git",)`, `work_board_facts.py:33`); resolving once is a small hardening for the new module and does not change the old one.
+`git_exe` is `shutil.which("git")`, resolved once per run, refused if missing or relative.
 
-**Closed allowlist (a dict in code, checked before every call):**
+**Closed allowlist** (a dict in code, checked before every call; anything else raises `ValueError("git call not allowed")` before a process starts):
 
-| Subcommand | Allowed argument patterns (everything else raises `ValueError("git call not allowed")` before a process starts) |
+| Subcommand | Allowed argument patterns |
 |---|---|
-| `rev-parse` | `--show-toplevel`; `--is-shallow-repository`; `--verify --quiet --end-of-options <oid-or-rev>^{commit}` |
-| `config` | `--local --get-regexp <the one fixed pattern in C3>` |
-| `cat-file` | `-t <oid>`; `--batch-check=<fixed format>` (oids on stdin); `--batch` (oids on stdin) |
+| `rev-parse` | `--show-toplevel`; `--is-shallow-repository`; `--verify --quiet --end-of-options <rev>^{commit}` |
+| `config` | `--local --get-regexp <the fixed pattern of C3>` |
+| `cat-file` | `-t <oid>`; `--batch-check=<fixed format>`; `--batch` (ids come from a file) |
 | `merge-base` | `--is-ancestor <oid> <oid>` |
 | `rev-list` | `--topo-order --reverse --max-count=201 --end-of-options <oid> ^<oid>` |
 | `diff-tree` | `-r -z --raw --no-renames --no-ext-diff --no-textconv --no-abbrev --end-of-options <oid> <oid>` |
 
-Every `<oid>` argument must match `^[0-9a-f]{40}$|^[0-9a-f]{64}$` exactly. The only free-text revisions (`--base`, `--head` as typed) go through one call, `C4`, with `--end-of-options`, after a character check (`^[A-Za-z0-9._/@^~-]{1,200}$`, and not starting with `-`).
+Every `<oid>` must match `^[0-9a-f]{40}$|^[0-9a-f]{64}$`. The only free-text revisions (`--base`, `--head` as typed) go through call C4 after the check `^[A-Za-z0-9._/@^~-]{1,200}$` (not starting with `-`) and `--end-of-options`.
 
-### 5.3 The calls, in order
+### 5.3 The calls
 
-| Id | argv after the prefix | Reads | Success / failure |
-|---|---|---|---|
-| C0 | (not a git call) `git --version` is run as `[git_exe, "--version"]` | the version text | parsed `major.minor`; below 2.32 refuse |
-| C1 | `rev-parse --show-toplevel` | the work tree top | must equal the alias path after `os.path.normcase(os.path.normpath(...))` (FACT: `_open_repo`, `:158-185`) |
-| C2 | `rev-parse --is-shallow-repository` | `true` / `false` | must print `false` |
-| C3 | `config --local --get-regexp ^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$` | repo-local keys | exit 1 (no match) is success; any match refuses: `partial clone: objects may be fetched` |
-| C4 | `rev-parse --verify --quiet --end-of-options <rev>^{commit}` (once for base, once for head) | a full oid | prints exactly one oid, else `cannot resolve <rev> to a commit` |
-| C5 | `cat-file -t <oid>` | `commit` | must print `commit` (a second check; refuses a tag object that peeled oddly) |
-| C6 | `merge-base --is-ancestor <base> <head>` | exit code | 0 yes, 1 no (refuse), other = error (refuse) |
-| C7 | `rev-list --topo-order --reverse --max-count=201 --end-of-options <head> ^<base>` | oids, one per line | at most 201 lines read (output capped at 64 KiB); 201 lines means `truncated.commits = true`, keep the first 200 |
-| C8 | `cat-file --batch` with the (at most 200) commit oids on stdin | the raw commit objects | parse header lines `author`, `committer`, the first line of the message; total output capped at 2 MiB |
-| C9 | `diff-tree -r -z --raw --no-renames --no-ext-diff --no-textconv --no-abbrev --end-of-options <base> <head>` | `:<old mode> <new mode> <old oid> <new oid> <status>\0<path>\0 ...` | output capped at 4 MiB (the process is killed if it would exceed it); keep the first 500 entries in path order; `truncated.files = true` if more |
-| C10 | `cat-file --batch-check=%(objectname) %(objecttype) %(objectsize)` with the old and new blob oids of the kept entries on stdin | one line per oid | gives each side's size without reading content |
-| C11 | `cat-file --batch` with only the oids whose size is within the limit (section 5.5), on stdin | `<oid> blob <size>\n<bytes>\n` per blob | total output capped at the sum of the chosen sizes plus 64 bytes per blob |
+| Id | argv after the prefix | Success / failure |
+|---|---|---|
+| C0 | (no prefix) `[git_exe, "--version"]` | parsed; below 2.32 refuse |
+| C1 | `rev-parse --show-toplevel` | equals the alias path after `normcase(normpath(...))` (FACT `_open_repo`, `:158-185`) |
+| C2 | `rev-parse --is-shallow-repository` | must print `false` |
+| C3 | `config --local --get-regexp ^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$` | exit 1 (no match) is success; any match refuses |
+| C4 | `rev-parse --verify --quiet --end-of-options <rev>^{commit}` (base, head) | exactly one oid |
+| C5 | `cat-file -t <oid>` | must print `commit` |
+| C6 | `merge-base --is-ancestor <base> <head>` | 0 yes; 1 refuse; other = error |
+| C7 | `rev-list --topo-order --reverse --max-count=201 --end-of-options <head> ^<base>` | at most 201 lines read; 201 lines means `truncated.commits`, keep the first 200 |
+| C8 | `cat-file --batch` over the (at most 200) commit ids | parse `parent`, `author`, first message line; refuse a commit with two or more parents |
+| C9 | `diff-tree -r -z --raw --no-renames --no-ext-diff --no-textconv --no-abbrev --end-of-options <base> <head>` | keep the first 500 entries in path order; more sets `truncated.files` |
+| C10 | `cat-file --batch-check=%(objectname) %(objecttype) %(objectsize)` over the old and new blob ids of the kept entries | sizes without reading content |
+| C11 | `cat-file --batch` over only the ids whose size is within the limit | `<oid> blob <size>\n<bytes>\n` per blob |
 
-**Notes the builder must follow:**
-- All process output is read as **bytes** (`text=False`). Nothing is decoded until after the size checks.
-- **Timeouts:** each call has a **15 s** timeout (FACT: the existing constant, raised after Windows flakes, `work_board_facts.py:24-32`; use the same value, not a smaller one) and the whole `register` run has a **180 s** budget checked between calls. A timeout kills the child (`subprocess.run(timeout=...)` does this) and refuses the registration with `git timed out (call C#)`; nothing is written.
-- A **non-zero exit** from any call other than the expected `C3` exit 1 and `C6` exit 1 refuses the registration with the call id and the first 200 bytes of stderr, decoded with `errors="replace"` and stripped of control characters.
-- `cat-file --batch` and `--batch-check` are fed by `subprocess.run(..., input=<bytes>)` (not by a writer thread). This keeps the builder out of pipe-deadlock territory: there is **no threading anywhere in the Git module**. If the stdin list is large (at most 1,000 oids x 41 bytes = 41 KB) it still fits in one `input=` call.
-- **Windows, Linux, macOS.** Arguments are lists, so no quoting differs. Paths: the canonical path from the alias is passed to `-C` as a string. On Windows `os.devnull` is `NUL`; the path in `core.attributesFile=<os.devnull>` is built with an f-string, not a shell. Git prints paths with `/`; the paths in `-z` output are bytes, decoded with UTF-8 `errors="replace"`, and the stored `path` is the decoded text plus a flag `path_lossy` if any replacement happened. Line endings are never translated (bytes in, bytes out). macOS: Apple's Git may be older than 2.44; the version gate (C0) and C3 cover that. ASSUMPTION: Apple Git 2.39 or newer is what the operator has; the work order records the version it was tested on in the snapshot's `git_version`.
-- `GIT_NO_LAZY_FETCH` and `GIT_CONFIG_GLOBAL` are environment variables, so a Git that does not know them ignores them silently; that is why C0 and C3 exist and are not optional.
+All output is read as **bytes**; nothing is decoded before the size checks.
 
-### 5.4 What `cat-file --batch` does and does not do (so the builder does not add flags)
+### 5.4 One bounded-reader strategy (reader finding 7)
 
-FACT (Git documentation, not re-verified here; the builder's test below proves it for the installed Git): `cat-file --batch` prints the **raw object content**. It applies no filters, no line-ending conversion and no text conversion unless `--filters` or `--textconv` is given, and the allowlist never allows those two flags. `diff-tree --raw` prints modes and ids only; `--no-ext-diff` and `--no-textconv` are present as a second layer. Test `test_cat_file_returns_raw_bytes_despite_a_hostile_gitattributes_and_config` (work order 1) builds a repo whose `.gitattributes` says `* filter=evil diff=evil text eol=crlf` and whose local config defines an `evil` filter and textconv that would write a marker file; the test asserts the bytes are unchanged and **the marker file does not exist**.
+`subprocess.run(capture_output=True)` collects everything before returning, so a size check afterwards cannot bound memory or time. The Git module therefore has **one** function, `compare_git._run(argv, *, stdin_bytes, stdout_cap, stderr_cap, deadline)`, and nothing else starts a process.
 
-### 5.5 Limits and what happens at each (every number is a constant in `compare_git.py`)
+- **No threads and no pipes for data.** `stdin` is a temporary file we wrote (the object-id list) and rewound; `stdout` and `stderr` are two **temporary files** in the staging directory. Nothing can fill an OS pipe, so there is no pipe deadlock and no writer thread.
+- The parent uses `subprocess.Popen(argv, stdin=<file>, stdout=<file>, stderr=<file>, shell=False, env=<env>)` and a **poll loop every 20 ms**: `proc.poll()`, `os.fstat` on both output files, and the deadline. If stdout is over its cap, stderr over 64 KiB, the per-call 15 s limit passed or the registration deadline passed, it calls `proc.kill()` then `proc.wait()` and raises. `try/finally` guarantees `kill` and `wait` on every error path, and the temp files are closed and deleted.
+- **Honest bound:** a child can write between two polls. The overshoot is the child's write speed times 20 ms (ESTIMATE: a few MB at most on a local disk); the module never reads more than the cap, refuses if the file is larger, and the staging directory is deleted on failure. The test shows this: a child that never stops writing is killed within about 1 second and leaves less than the cap plus 32 MiB on disk (ESTIMATE; the work order records the measured number).
+- After a normal exit the module reads at most `cap + 1` bytes of each file and refuses if the extra byte exists.
+- **Deadline.** `REGISTER_BUDGET_S = 180` is one `Deadline` object passed to **every phase**: each Git call (C0 to C11), the row building of each file, serialising and publishing each file, the directory rename and the registry publication. It is checked before each call, between files, and before each publication. **A single `difflib` call cannot be interrupted**; it is bounded by the line limits (section 5.5), and the builder measures and records the worst case on the 2,000-line fixture. If the deadline passed, the registration is refused and staging removed.
+
+### 5.5 Limits and what happens at each
 
 | Constant | Value | When exceeded |
 |---|---|---|
 | `MAX_COMPARISONS` | 20 | registration refused |
-| `MAX_COMMITS` | 200 | list cut, `truncated.commits = true`, banner line "first 200 of N commits" (N unknown: shown as "more than 200") |
-| `MAX_FILES` | 500 | list cut (path order), `truncated.files = true`; the exact total is unknown, shown as "more than 500" |
-| `MAX_BLOB_BYTES` | 262,144 (256 KiB) per side | that file's `state = "too_large"`, both sizes shown, no content stored |
-| `MAX_LINES` | 2,000 per side | `state = "too_large"` (lines), no diff computed |
-| `MAX_LINE_CHARS` | 2,000 | the line is cut and ends with `... (+N characters)` |
-| `MAX_FILE_RECORD_BYTES` | 1,572,864 (1.5 MiB) | the record is replaced by `state = "too_large"` |
-| `MAX_SNAPSHOT_BYTES` | 16,777,216 (16 MiB) in total | remaining files get `state = "not_stored"` (counted, listed, not shown) |
-| `GIT_CALL_TIMEOUT_S` | 15 | registration refused, nothing written |
-| `REGISTER_BUDGET_S` | 180 | same |
-| `GIT_OUTPUT_CAP_BYTES` | rev-list 64 KiB, diff-tree 4 MiB, cat-file --batch as in C8/C11 | the child is killed, registration refused |
-| `EXCERPT_CHARS` | 600 | the excerpt is cut and ends with `...` |
-| `MAX_VERDICT_ROWS` | 50 | list cut, "50 of N shown" |
-| `MAX_OUTSTANDING_ROWS` | 20 | list cut, "20 of N shown" |
+| `MAX_COMMITS` | 200 | list cut, `truncated.commits`; banner text "more than 200 commits" |
+| `MAX_FILES` | 500 | list cut (path order), `truncated.files` |
+| `MAX_BLOB_BYTES` | 262,144 per side | that file `state = "too_large"`, both sizes shown, no content |
+| `MAX_LINES` | 2,000 per side | `state = "too_large"` (lines) |
+| `MAX_LINE_CHARS` | 2,000 | **only the displayed cell** is cut and ends with `... (+N characters)`; the comparison uses the full line |
+| `MAX_FILE_RECORD_BYTES` | 1,572,864 | the record is replaced by `state = "too_large"` |
+| `MAX_SNAPSHOT_BYTES` | 16,777,216 in total | remaining files get `state = "not_stored"` (listed, counted, not shown) |
+| `GIT_CALL_TIMEOUT_S` | 15 | registration refused, nothing published |
+| `REGISTER_BUDGET_S` | 180 | same, all phases (5.4) |
+| `GIT_OUTPUT_CAP_BYTES` | rev-list 64 KiB; diff-tree 4 MiB; commit objects 2 MiB; blobs the sum of chosen sizes plus 64 bytes per blob; stderr 64 KiB | the child is killed, registration refused |
+| `EXCERPT_CHARS` | 600 | excerpt cut and ends with `...` |
+| `MAX_HISTORY_ROWS` | 50 | "50 of N shown" |
+| `MAX_TASK_ROWS` | 20 | "20 of N shown" |
+| `MAX_OBLIGATION_ROWS` | 20 | "20 of N shown" |
 
-### 5.6 Turning two blobs into side-by-side rows
+### 5.6 Side-by-side rows without losing changes (reader finding 2)
 
-No Git diff output is used. The builder uses Python's `difflib.SequenceMatcher(None, left_lines, right_lines)` with default settings (default `autojunk=True`: deterministic, and bounded in practice by `MAX_LINES`; ESTIMATE: well under a second for 2,000 x 2,000 lines of ordinary code; the work order measures the worst case on the 2,000-line fixture and records it).
+**Rule: equality and change counts are decided from the raw bytes. Escaping and shortening apply only to the displayed cells.** No Git diff output is used; the builder uses `difflib.SequenceMatcher(None, a, b)` (default `autojunk`) over **raw lines**.
 
-Steps for one changed path (all text work is on already-decoded strings):
-1. **Binary?** A blob with a NUL byte in its first 8,000 bytes is binary (Git's own rule). `state = "binary"`, sizes shown, no content.
-2. **Symlink or submodule?** Mode `120000`: show the link target text (a blob of at most 4 KiB) as a one-line text; mode `160000`: a gitlink has no blob; `state = "submodule"`, show the two commit ids. Mode `100755` vs `100644` only: `state = "mode_only"`.
-3. **Missing object?** If `cat-file --batch` answers `<oid> missing`, `state = "missing_object"` (never fetched).
-4. **Decode** each side as UTF-8 with `errors="replace"`; `invalid_text = true` if any replacement happened. Split on `"\n"` only (not `str.splitlines`, which also splits on form feeds and line separators). If a line ends in `"\r"`, drop it and record `crlf = true` for that side.
-5. **Make the text inert** (section 8.3): replace every C0 control character except tab, the DEL character, and every Unicode bidirectional control character (U+202A to U+202E, U+2066 to U+2069, U+200E, U+200F) by a visible escape such as `<U+202E>`. Tabs stay.
-6. **Cut long lines** to `MAX_LINE_CHARS`.
-7. **Rows.** From `get_opcodes()`: `equal` runs longer than 6 lines keep 3 lines of context at each end and one `gap` row ("N unchanged lines") between; `replace` pairs left and right lines in order and leaves the surplus as `add` or `del`; `insert` -> `add`; `delete` -> `del`. A row is `{"t": "eq|chg|add|del|gap", "l": left line number or null, "r": right line number or null, "a": left text or null, "b": right text or null}`; a gap row is `{"t": "gap", "skipped": N}`.
-8. `stats = {"added": count of right lines in add/chg rows, "removed": count of left lines in del/chg rows}`.
+For one changed path:
+1. **Binary?** A NUL byte in the first 8,000 bytes (Git's own rule): `state = "binary"`, sizes only.
+2. **Symlink, submodule, mode only:** mode `120000` shows the link target text (a blob of at most 4 KiB) as one line; mode `160000` (a gitlink has no blob): `state = "submodule"`, both commit ids; modes differing only in the executable bit: `state = "mode_only"`.
+3. **Missing object** (`cat-file --batch` answers `<oid> missing`): `state = "missing_object"`; never fetched.
+4. **Raw lines.** Split each side's bytes on `b"\n"`. Each line is a pair `(line_bytes, has_eol)`: **a CR before the newline stays inside `line_bytes`** and the last line records whether the file ended with a newline. So `x` versus `x\r`, `x\n` versus `x` (no final newline) are different lines.
+5. **Opcodes** from `SequenceMatcher` on those pairs.
+6. **Display cells** (made after the decision): decode the line bytes as UTF-8 with replacement; replace every C0 control character except tab, DEL, and every bidirectional control (U+202A-U+202E, U+2066-U+2069, U+200E, U+200F) by the visible escape `<U+XXXX>`; cut at 2,000 characters.
+7. **Row kinds:** `eq`, `chg` (a `replace` pair), `add`, `del`, `gap` ("N unchanged lines"; an `equal` run longer than 6 lines keeps 3 lines of context at each end).
+8. **Every `chg` row carries why the bytes differ when the cells look the same.** If the two display cells are **equal text** (the lines differ only in bytes the preview hides), the row gets `same_preview: true` and `diff_at` (the first differing byte offset) plus `reason`: one of `line_ending` (CR present on one side only), `final_newline`, `invalid_utf8`, `escaped_or_cut` (the preview escaped or cut the difference away) or `other`. The page shows the row as **changed** with the words "bytes differ; the difference is not visible in this preview (<reason>)". Encoding differences that produce a NUL become `binary` (rule 1); other encoding differences are exactly the `invalid_utf8` and `other` reasons.
+9. `stats.added` counts right lines in `add` and `chg` rows; `stats.removed` counts left lines in `del` and `chg` rows. They come from the raw decision, so the counts are non-zero whenever any byte differs.
+10. A row is `{"t": "eq|chg|add|del|gap", "l": left line number or null, "r": right line number or null, "a": display cell or null, "b": display cell or null, "same_preview": bool, "diff_at": int or null, "reason": str or null}`; a gap row is `{"t": "gap", "skipped": N}`; a line with any replacement carries `"esc": true`.
 
-One file record (`files/NNNN.json`):
+**Collision cases** (golden file `tests/golden/compare_rows_collisions.json`, plus the rendered-view tests): (a) 2,000 identical characters followed by `allowed` versus `blocked`; (b) a real U+202E versus the literal text `<U+202E>`; (c) a line with byte `\xff` versus the same line with `\xfe`; (d) `x\n` versus `x\r\n`; (e) a file with and without its final newline; (f) two identical files except one byte after column 2,000. Each must give `chg`, `same_preview` where the cells match, and non-zero counts.
 
-```json
-{"schema_version": 1, "index": 1, "path": "greet.py", "status": "M",
- "old": {"oid": "...", "mode": "100644", "size": 97, "lines": 5, "crlf": false},
- "new": {"oid": "...", "mode": "100644", "size": 211, "lines": 9, "crlf": false},
- "state": "text", "invalid_text": false, "path_lossy": false,
- "stats": {"added": 4, "removed": 1}, "rows": [ {"t": "eq", "l": 1, "r": 1, "a": "def greet(name):", "b": "def greet(name):"} ],
- "rows_truncated": false}
-```
-
-`status` is one of `A`, `M`, `D`, `T` (type change). `--no-renames` means a moved file is a deletion plus an addition (ASSUMPTION: acceptable for slice 1; rename detection invokes a similarity engine whose cost is not bounded by our limits).
+One file record (`files/NNNN.json`): `schema_version, index, path, status, old {oid, mode, size, lines}, new {...}, state, invalid_text, path_lossy, stats, rows, rows_truncated`. `status` is `A`, `M`, `D` or `T`. `--no-renames` means a moved file is a deletion plus an addition (ASSUMPTION: acceptable for slice 1).
 
 ### 5.7 Why a snapshot and not a live read (D1)
+It keeps the standing rule; every limit lives in one place, in a command a person runs with a lock; and the endpoints can only open files under `.agenttalk/compare/<cid>/` chosen by a validated id and index, so the page cannot read outside the registered range **by construction**. The cost is that a comparison does not follow a moving branch; that is the meaning of "immutable base and head" (C2).
 
-- It keeps the standing rule: **the server never runs Git** (FACT, `WORK-BOARD-FEED.md`, `web.py` module docstring route list has no Git).
-- Every limit in C4 is enforced in one place, once, by a command a person runs, with a lock, instead of on every request by a handler thread. This removes the one thing the builder is weak at (concurrency) from the part of the system that has concurrency.
-- The page cannot read outside the registered range **by construction**: the three GET endpoints open only files under `.agenttalk/compare/<cid>/`, chosen by a validated id and a validated index.
-- The cost is that a comparison does not follow a moving branch. That is the intended meaning of "immutable base/head commits" (C2).
+### 5.8 What the snapshot exposes, and the operator's part (reader finding 12)
 
-### 5.8 Where the confidentiality boundary sits (C4, C5)
+- **The precise guarantee.** Reads are limited to the blobs of the paths **changed between the two registered commits**, on both sides. That avoids a repository-wide history browser. It does **not** make the content safe to publish: a changed or deleted credential file is among the old and new blobs, and so is any secret that was added or removed in the range.
+- **The operator's responsibility.** The operator chooses which repositories and ranges to register and must only register content that may sit in the store. In this build that is the fixture and agenttalk itself (public) (C5). A **content-selection policy for confidential repositories does not exist in slice 1 and registering one is out of scope** until the lead defines one.
+- **Best-effort withholding, not a promise.** A changed path whose file name matches `.env*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `id_rsa*`, `id_ed25519*`, `.netrc`, `credentials*` or `*.kdbx` is listed with `state = "withheld"` and **no content stored** (work order 2). This is a convenience, not a guarantee: secrets live in other names.
+- **Containment of reads.** Before the server opens a stored file it checks, for `compare/`, `compare/<cid>/` and the file itself, that the entry is not a symbolic link and (Windows) not a reparse point or junction (`os.lstat`, `stat.S_ISREG`, `st_file_attributes & FILE_ATTRIBUTE_REPARSE_POINT`), and that the resolved path is inside `compare/`. A violation is the "snapshot unreadable" state. The cid and index regexes already exclude separators; this protects against a link planted in the directory.
+- **Backup and recovery.** `recovery.py:162-173` copies every file under the store recursively. The snapshot text therefore ends up in store backups and recovery copies, and `compare remove` does not delete earlier backups. Retention of those copies is the backup's retention. The operator guide (`docs/COMPARE-VIEW.md`) says so.
+- **Nothing is sent anywhere.** The page loads only local assets (CSP, section 8.1), and the builder's model only sees the fixture and agenttalk source (C5). A test refuses a foreign repository when `AGENTTALK_COMPARE_FIXTURE_ONLY=1` is set: an alias whose canonical path is not under the test's temporary directory or the agenttalk checkout (ASSUMPTION: the lead can set that variable for the builder's seat; otherwise the written work-order rule is the control).
 
-- The snapshot holds **file text of the changed paths** (and commit subjects and author names) inside the store. For slice 1 the repository is the synthetic fixture or agenttalk itself, which is public.
-- A repository that holds client code is **never registered** during this build (C5). The builder's instructions say so in the work order header, and a test (section 9) asserts that `compare register` refuses an alias whose canonical path is not under the test's own temporary directory or the agenttalk checkout when the environment variable `AGENTTALK_COMPARE_FIXTURE_ONLY=1` is set (the builder's seat environment sets it). ASSUMPTION: the lead can set that variable for the builder's seat; if not, the work order's written rule is the control.
-- Nothing in this feature sends any content anywhere: the page loads only local assets (CSP, section 8.1), and the builder's model sees only the fixture and the agenttalk source it is editing.
-
-### 5.9 If the lead grants a server-side Git read (not recommended): the delta
-
-The same `compare_git` functions are called from a request handler. Required changes: a module-level `threading.BoundedSemaphore(1)` per store root with `acquire(timeout=3.0)` and the exact `ScanBusy` mapping to 503 (FACT pattern: `web.py:967-978`, `:4436-4454`); a per-request budget of 15 s; the object-level allowlist (only blob ids named by `diff-tree`, which the handler would have to recompute on each request or cache); and a security review of every handler thread that can hold a child process. The operator's decision of 2026-09-30 would need to be re-opened first.
+### 5.9 Not in the design
+A server-side Git read is **not** an option here (D1). It is not described further.
 
 ---
 
-## 6. The GET endpoints (all new, all GET and HEAD only)
+## 6. The GET endpoints (all new, GET and HEAD only)
 
-**General rules (FACT patterns, `web.py:4286-4454` and `:5076-5246`).**
-- Dispatch in `_route`, after the Host gate, the peer gate and the method gate that already exist. POST, PUT, DELETE and PATCH on these paths behave exactly as on every other path (405 or the existing action-gated path); the builder adds **no** `do_POST` branch (test `test_compare_paths_refuse_post_put_delete`).
-- Root selection: the same `_root_selection(self._request_params())` as `/api/work-board` (`:5098-5101`); an unknown root is `400 bad_root` through `_bad_root()`.
-- **Query strings are closed:** only `root` is accepted (once, non-empty). Any other key, or a repeated key, is `400 {"error": "bad_query", ...}`. (Defence in depth: nothing from a query string ever reaches a path.)
-- Responses use `_send_json` (so `nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store`, the default no-script CSP: FACT `:4372-4388`). The HTML shell uses `_DASHBOARD_CSP` like `/v2` (`:5206-5209`).
-- Response size caps are **checked after serialising**: if a body would exceed its cap the handler answers `500 {"error": "response_too_large"}` instead (it can only happen if a stored file violates its own limits; the snapshot reader should already have refused it).
-- **Concurrency gate** (the only threading code in the whole feature, copy it exactly):
+**General rules (FACT patterns, `web.py:4286-4454`, `:5076-5246`).**
+- Dispatch in `_route` after the existing Host, peer and method gates. POST, PUT, DELETE and PATCH on these paths behave exactly as on every other path; **no `do_POST` branch is added** (test `test_compare_paths_refuse_post_put_delete`).
+- **Root selection** is `_root_selection(self._request_params())` as for `/api/work-board`; an unknown root is `400 bad_root`.
+- **Query strings are closed:** only `root` (once, non-empty) is accepted. Any other key or a repeat is `400 {"error": "bad_query"}`. The page itself puts only `id` and `root` in its own address (the `/compare` HTML shell accepts exactly those two keys; anything else is the same 400).
+- Responses use `_send_json` (nosniff, `X-Frame-Options: DENY`, `Cache-Control: no-store`, default CSP). The HTML shell uses `_DASHBOARD_CSP`.
+- **Caps are checked after serialising**: an over-cap body becomes `500 {"error": "response_too_large"}`.
+- **Concurrency gate** (copy exactly; the only threading code of the feature):
 
 ```python
 _COMPARE_READ_LIMIT = 4            # at most 4 comparison reads at once per server
@@ -378,326 +372,378 @@ def _compare_slot():
         _compare_gate.release()
 ```
 
-  (One gate for the whole process, not per store: the gate protects handler threads, not data. `ScanBusy` and `_acquire_scan_slot` are FACT at `web.py:947-978`.) Each handler wraps its whole body in `with _compare_slot():`.
+  (`ScanBusy` and the pattern: `web.py:947-978`, `:4436-4454`.) Each handler wraps its whole body in `with _compare_slot():`. The gate limits handler threads; it does not make two reads consistent; section 7.1 does.
 
-### 6.1 `GET /compare` (HTML) and `GET /static/compare.css`, `/static/compare-model.js`, `/static/compare.js`
-
-HTML shell generated by a function `render_compare()` modelled on `render_console2()` (`web.py:723`), `csp=_DASHBOARD_CSP`. It carries no comparison data. The three assets are added to the exact-name allowlist in `_load_static_assets` (`web.py:810-820`) with the content types of their neighbours. Errors: none beyond the existing 404 for an unknown asset name.
+### 6.1 `GET /compare` and the three static files
+HTML shell from `render_compare()` modelled on `render_console2()` (`web.py:723`), `csp=_DASHBOARD_CSP`, no data inside. `compare.css`, `compare-model.js`, `compare.js` are added to `_load_static_assets` (`web.py:810-820`).
 
 ### 6.2 `GET /api/compare` (list)
-
-- **Inputs:** `root` (optional).
-- **Output (200):** `{"schema_version": 1, "target_root_project_id": "<project id>", "comparisons": [<registry entries, newest first, each with "banner": {"state", "text"}>], "errors": []}`.
-  The banner for the list row is computed with the same function as the detail page (section 7) from the cached board feed; if the evidence cannot be read the banner is `unknown` with the reason. The list reads **only** `registry.json` (<= 64 KiB) plus the cached board feed.
-- **Cap:** 64 KiB. **Limits:** 20 comparisons.
-- **Errors:** `400 bad_root` / `bad_query`; `200` with `"comparisons": []` and `"errors": ["no comparisons are registered"]` when the directory or file does not exist (an empty registry is normal, not an error); `200` with `"errors": ["registry unreadable: <reason>"]` and an empty list when the file is over its bound, malformed or of another schema (never a 500: the page shows the reason); `503 busy`.
+- **Inputs:** `root` optional.
+- **Output (200):** `{"schema_version": 1, "project": {"project_id", "label", "path"}, "generation": <board generation>, "comparisons": [<entry + "status": {...}>], "errors": []}`. Each row's `status` is the function of section 7.4, computed from **the registry entry plus the board item plus the board's coverage and the store session**: exactly the inputs the detail uses, so list and detail agree (the verdict relations are history only and are not inputs).
+- **Cap:** 64 KiB. **Limit:** 20 comparisons.
+- **Errors:** `400 bad_root` / `bad_query`; `200` with an empty list and `errors: ["no comparisons are registered"]` when nothing exists; `200` with an empty list and `errors: ["registry unreadable: <reason>"]` when the file is over its bound, malformed, of another schema or fails containment; `503 busy`.
 
 ### 6.3 `GET /api/compare/<cid>` (detail)
+- **Inputs:** `<cid>` must match `^cmp-[0-9a-f]{12}$` **before any disk access**; `root` optional.
+- **Output (200):** the registry entry, `commits`, `files` (index, path, status, state, counts, sizes), `project`, and `evidence` (section 7.5).
+- **Cap:** 512 KiB. **Limits:** 200 commits, 500 files, 50 history rows, 20 task rows, 20 obligation rows. The status is computed **before** any row limiting.
+- **Errors:** `400 bad_root` / `bad_query`; `404 {"error": "comparison not found"}` for an unlisted id or a missing directory; `200` with `"snapshot": {"status": "unreadable", "reason": ...}` and empty `commits`/`files` when a stored file is invalid (evidence is still computed); `503 busy`.
 
-- **Inputs:** `<cid>` must match `^cmp-[0-9a-f]{12}$` **before any disk access** (FACT pattern: `_MESSAGE_ID_RE` check at `web.py:5228-5231`); `root` optional.
-- **Output (200):**
+### 6.4 `GET /api/compare/<cid>/file/<n>`
+- **Inputs:** `<cid>` as above; `<n>` matches `^[1-9][0-9]{0,3}$` and is at most the manifest's file count; `root` optional.
+- **Output (200):** the stored file record, plus `id` and `n`.
+- **Cap:** 2 MiB.
+- **Errors:** `400`; `404 comparison not found` / `404 file not found`; `200` with `"state": "unreadable"` and `reason` for an invalid record; `503 busy`.
 
-```json
-{"schema_version": 1, "id": "cmp-...", "label": "...", "repo_alias": "fixture",
- "base": "<oid>", "head": "<oid>", "work_item": "demo-greeting|null",
- "created_at": "...", "counts": {...}, "truncated": {"files": false, "commits": false},
- "commits": [ {"oid": "...", "author_name": "...", "author_date": "...", "subject": "..."} ],
- "files": [ {"index": 1, "path": "greet.py", "status": "M", "state": "text",
-             "lines_added": 4, "lines_removed": 1, "old_size": 97, "new_size": 211} ],
- "evidence": { ...section 7.4... },
- "project": {"project_id": "...", "label": "...", "path": "..."}}
-```
-  `project` is `_root_info(root)` (FACT `web.py:345-350`). Commit author names and subjects are text.
-- **Cap:** 512 KiB. **Limits:** 200 commits, 500 files, 50 verdict rows, 20 outstanding rows.
-- **Errors:** `400 bad_root` / `bad_query`; `404 {"error": "comparison not found"}` for an id not in the registry **or** whose directory is missing; `200` with `"snapshot": {"status": "unreadable", "reason": "..."}` and empty `commits`/`files` when a stored file is over its bound or invalid (the evidence block is still computed); `503 busy`.
-
-### 6.4 `GET /api/compare/<cid>/file/<n>` (one side-by-side file)
-
-- **Inputs:** `<cid>` as above; `<n>` must match `^[1-9][0-9]{0,3}$` and be at most the manifest's file count; `root` optional.
-- **Output (200):** the file record from section 5.6, exactly as stored, plus `"id"` and `"n"`.
-- **Cap:** 2 MiB. **Limit:** the stored record is <= 1.5 MiB.
-- **Errors:** `400 bad_root` / `bad_query`; `404 comparison not found` / `404 file not found`; `200` with `"state": "unreadable"` and `"reason"` when the stored record is invalid; `503 busy`.
-
-### 6.5 What every handler must do before returning
-
-1. Validate path pieces (ids, index) by regex **first**. 2. Select the root. 3. Take the gate. 4. Open files only by joining `store.dir / "compare" / <validated cid> / ...` (no `..`, no separators can survive the regexes; test `test_no_path_traversal_in_cid_or_index`). 5. Read with the byte bound. 6. Validate shape. 7. Build the response. 8. Check the cap. 9. Send.
+### 6.5 Every handler, in order
+1. Validate path pieces by regex. 2. Select the root. 3. Take the gate. 4. Open files only under `store.dir / "compare" / <cid> / ...` after the containment checks (5.8). 5. Read with the byte bound. 6. Validate shape. 7. Build the response. 8. Check the cap. 9. Send.
 
 ---
 
-## 7. Binding verdicts to heads (C3)
+## 7. Tying the board's record to the comparison (C3)
 
-### 7.1 Where the evidence comes from (reuse, no new correlation)
+### 7.1 One consistent evidence projection (reader finding 5)
 
-For a comparison with `work_item = S`:
-1. **The reduced board item.** From the same cached feed `/api/work-board` serves: `service = (snapshots or {}).get(str(root.store.root.resolve()))`, then `service.board()` (FACT: `web.py:5102-5108`; `board()` is `envelope_snapshot.py:378`, "No source reads/rebuilds"). Find the item with `work_item == S` in `payload["items"]`. The feed also carries `coverage` (status, generated_at) and `errors`.
-2. **The messages of the active window**, to map a verdict's reply id to its request, opener and excerpt: `msgs, invalid, freshness = snapshots[...].active_with_freshness(cfg)` (FACT: the same call `/api/state` uses, `web.py:1858`; `envelope_snapshot.py:321`). Build one dict `by_id = {m.id: m for m in msgs}` per request (bounded by the envelope limit; ESTIMATE: milliseconds).
-3. **Never** run `_all_messages` or a store scan from these handlers (that would take the scan semaphore and the disk).
+Add **one method** to `SnapshotService` (`envelope_snapshot.py`, next to `board()` at `:378`): `compare_view(cfg)`. Under **one** `with self._lock:` it reads, from the same generation, a deep copy of the board feed, its coverage, the active messages (`self.current.active`), the invalid count, the freshness and the **generation number** (`value.generation`), and returns them together; it applies the same checks as `active_with_freshness` (config digest, building, real failure). FACT that this is safe: the worker publishes `self.current` and `self._board` inside one lock block (`envelope_snapshot.py`, end of refresh), so reading both under one lock yields one generation. About 30 lines, no behaviour change to `board()` or `active_with_freshness()`.
 
-If `snapshots` is `None` (a server built without workers, as some tests do), `service` is `None` and the evidence status is `board_unavailable` (FACT: the existing route already has this branch, `web.py:5103-5107`).
+The handlers call `compare_view`, never `board()` and `active_with_freshness()` separately, and never scan the store. The response prints the `generation` so a test can prove the join used one generation. If `snapshots` is `None` (a server without workers), the evidence status is `board_unavailable` (FACT: the existing route has this branch, `web.py:5103-5107`). **WO1 therefore edits `envelope_snapshot.py` (one added method) and adds a test for it**; the earlier "do not touch" list is amended accordingly.
 
-### 7.2 The relation of a verdict's head to the head on screen
+### 7.2 What status uses and what history uses
+- **Status** uses only: the registry entry, the board item for `work_item`, the board's coverage, and the store session. It never uses the verdict map, the messages or the manifest.
+- **History** (verdict rows, task rows, obligation rows) uses the verdict map, the obligations and the messages. If any history join fails, that row says so; **the status does not change** and is never made to look better or worse by a failed join.
 
-Let `H` = the comparison's head, `B` = its base, `C` = the stored commit list (oids). For a verdict filed under head `vh` (the key of `item["verdicts"]`; the string `"null"` means no head was named, see section 3 item 3):
+### 7.3 The binding checks (reader finding 3)
 
-| Relation | Rule | Plain text |
+A comparison is tied to the board item only when **all** of these hold; the first that fails sets the status to CANNOT TELL with the exact two values that differ:
+
+| # | Check | Source |
 |---|---|---|
-| `this_head` | `vh == H` | "THIS head" |
-| `earlier_in_range` | `vh in C` and `vh != H` | "an EARLIER head in this comparison" |
+| B1 | the comparison links a work item and a cycle | registry `work_item`, `work_cycle` |
+| B2 | the item is on the feed | feed `items` |
+| B3 | **session**: the comparison's `session_id` equals the store's current `session_id` | registry vs `store.load_config()["session_id"]` (idiom: `work_board_facts.py:312-313`, `:349-350`) |
+| B4 | **cycle**: the registry `work_cycle` equals the item's `cycle` | item `cycle` (`work_board.py:478`) |
+| B5 | **repository**: item `repo_binding` is a dict whose `repo` equals the comparison's `repo_alias`; `None` or `"ambiguous"` fails | item `repo_binding` (`:656-662`) |
+| B6 | **project**: the registry `project` equals the served root's project id | registry vs `root.store.project_id()` |
+| B7 | **commit**: the item's `candidate` equals the comparison's `head` | item `candidate` (`:532`) |
+
+A store reset changes the session, so B3 fails: the old comparison stays visible and its status is CANNOT TELL ("registered in an earlier store session"). A later cycle reusing the slug fails B4 and the page shows the board's cycle beside the registered one; the operator may `compare amend` to rebind it deliberately. Two repositories that contain the same commit fail B5 unless the work item declared this alias.
+
+### 7.4 The status function (one pure function; every row tested)
+
+Inputs: registry entry, board item (or the reason it is missing), board coverage, current store session, served project id. Output: `{"state", "text", "reasons"}`. Evaluate in order; the first rule that applies decides.
+
+| # | State | Applies when | Text |
+|---|---|---|---|
+| 1 | `cannot_tell` | no work item linked; the board is unavailable, building, stale, `last_known` or its coverage is not `complete`; the item is not on the feed; any of B3 to B7 fails; `item.column` or `workflow_column` is `unknown`; `item.issues` is not empty | `CANNOT TELL whether this head is ready.` plus one bullet per reason: the reducer's `reason` and each `issues` entry verbatim, or one of: `no work item is linked to this comparison`, `this work item is not on the board feed`, `the board is still building`, `the board is stale or incomplete`, `registered in an earlier store session`, `registered for cycle N; the board is on cycle M`, `the work item declares repository X, not Y` (or `declares no repository`), `the board's current candidate is <12 characters>, not this head` |
+| 2 | `done` | `column == "done"` **and** the integration value for this head is true **and** B5 holds | `DONE: this head is integrated in the configured target (<target from repo_binding>).` plus the reducer's reason |
+| 3 | `ready` | `column == "ready"` | `READY: the board places this head as ready (<reducer reason>).` |
+| 4 | `not_ready` | `column` is `fix_round`, `building` or `queued` | `NOT READY: <fix round / being built / not started> (<reducer reason>).` |
+| 5 | `waiting` | `column == "independent_review"` | `WAITING for a review (<reducer reason>).` |
+| 6 | `needs_operator` | `column == "needs_you"` | `NEEDS THE OPERATOR: an incident is open for this work.` |
+| 7 | `cannot_tell` | any other column, or `done` without a true integration value for this head | `CANNOT TELL: the board's placement is "<column>".` |
+
+**The page never prints "approved" in the status.** An independent GO is part of how the board reaches `ready`; the page reports the board's own word. **Integration** (reader finding 10) shows three ways: value true with B5 holding: "integrated in the configured target (<target>)"; value `False`: "checked: NOT integrated"; absent: "integration not checked"; anything with B5 failing: "integration cannot be tied to this repository". `<target>` is `repo_binding["target"]`, the declared target (FACT `:660`); if it is `None` the text says "the configured target".
+
+### 7.5 History rows (shown as history, never as status)
+
+Let `H` = the comparison's head, `B` = its base, `C` = the stored commit list. For a verdict filed under head `vh` (a key of `item["verdicts"]`; `"null"` means no head named):
+
+| Relation | Rule | Text |
+|---|---|---|
+| `this_head` | `vh == H` | "this head" |
+| `earlier_in_range` | `vh in C`, `vh != H` | "an EARLIER head in this comparison" |
 | `base` | `vh == B` | "the base (before these changes)" |
-| `outside_range` | `vh` is a full oid, not in `C`, not `B`, not `H`, and `truncated.commits` is false | "a commit outside this comparison" |
-| `unknown_relation` | `truncated.commits` is true and `vh` is not in `C` | "a commit we cannot place (the comparison has more than 200 commits)" |
+| `outside_range` | a full id not in `C`, not `B`, not `H`, and `truncated.commits` is false | "a commit outside this comparison" |
+| `unknown_relation` | `truncated.commits` is true and `vh` is not in `C` | "a commit we cannot place (more than 200 commits)" |
 | `no_head` | `vh == "null"` | "no commit was named" |
 
-This needs **no Git at read time**: `earlier_in_range` is exactly "an ancestor of H inside base..H", because `C` was produced by `rev-list H ^B` (section 5.3 C7). It also keeps working when the board gains new verdicts after the snapshot was taken.
+Relation uses only the stored commit list: no Git at read time. Row labels (exact strings; the page copies them):
 
-### 7.3 Row labels (exact strings; the page copies them, it never composes its own)
-
-| Verdict | Relation | Row label | Mark |
+| Verdict | Relation | Label | Mark |
 |---|---|---|---|
-| GO | `this_head` | `APPROVED: this head` | `[ok]` |
-| GO | `earlier_in_range` | `Approved an EARLIER head. The changes after it are NOT covered.` | `[!]` |
-| GO | any other | `Approval of a different head. It does not apply to this comparison.` | `[!]` |
-| FIX | `this_head` | `CHANGES REQUESTED on this head` | `[X]` |
-| FIX | other | `Changes were requested on <relation text>` | `[!]` |
-| HOLD | `this_head` | `ON HOLD / needs information on this head` | `[X]` |
-| HOLD | other | `A hold was recorded on <relation text>` | `[!]` |
-| (outstanding review request, no reply) | head of its opener | `Asked <reviewer>; no answer yet. For <relation text>` | `[ ]` |
+| GO | `this_head` | `Recorded GO on this head.` | `[ ]` |
+| GO | `earlier_in_range` | `A GO was recorded on an EARLIER head. The changes after it are NOT covered.` | `[!]` |
+| GO | other | `A GO was recorded on <relation text>. It does not apply to this comparison.` | `[!]` |
+| FIX | `this_head` | `Changes were requested on this head.` | `[ ]` |
+| FIX | other | `Changes were requested on <relation text>.` | `[ ]` |
+| HOLD | any | `A hold was recorded on <relation text>.` | `[ ]` |
 
-If the reducer says the reviewer is **not independent** (`independent == false`), append ` (the reviewer also built this work: not independent)` and **never** use `[ok]`.
+A non-independent reviewer gets ` (the reviewer also built this work: not independent)`. **A history row never uses `[ok]` and never uses the word APPROVED**; the only green mark anywhere is the status states `ready` and `done`, produced by the board's placement.
 
-### 7.4 The status banner (one pure function; test every row)
+### 7.6 Task, fix and review records (reader finding 8; included at the lead's decision)
 
-Inputs: the board item (or why it is missing), the board `coverage`, the verdict rows with their relations, the outstanding rows, `H`.
+Source: the board item's current-cycle `obligations` (`request_id, recipient, stage, state, verdict`, FACT `work_board.py:480-481`) joined to the messages of the **same generation** (7.1) by **identity**:
+- **Task rows** (stage `design`, `build`, `fix`): the **opener** is the message whose `meta.request_id == request_id` and `kind` is a task, from the requester; the **replies** are messages with `meta.request_id == request_id`, `from == recipient`, `kind` a task response (sorted by `ts`, at most 3 per request). Row fields: stage, requester, recipient, `ts`, opener excerpt (600 characters, inert text), obligation `state`, reply `status` and excerpt, `work_head` of the opener when present, transcript link.
+- **Review rows** (stages in `work_tags.REVIEWS`): the same join, for the obligation list, **plus** the history rows of 7.5 for those that reached a verdict.
+- **Identity, not order:** a record is joined only by `request_id` plus the recorded sender; never by timestamp or message order (FACT: the reducer itself refuses to, `work_board.py:3-4`).
+- **Missing and out-of-window states (each shown, never dropped):**
+  - obligation present, opener not in the live window: `opener is not in the live window (archived)`, with no excerpt and no link; the obligation's state is still shown (so a pending review is **not** hidden when its head cannot be recovered; its head reads `not available`);
+  - obligation `done` but no reply in the window: `reply is not in the live window`;
+  - a verdict reply id from the verdict map that is not among the messages: `reply 20261017-... was named by the board but is not in the live window`;
+  - the reducer's own missing-history entries (`item.issues` with evidence ids): listed under "records that could not be found".
+- Bounded: 20 task rows, 50 history rows, 20 obligation rows; "N of M shown".
+- **Deferred (C6):** round playback; the earlier cycles appear only as the reducer's own `previous_cycles` summary lines.
 
-Evaluate in this order; the first rule that applies decides:
-
-| # | State | Applies when | Banner text |
-|---|---|---|---|
-| 1 | `unknown` | no `work_item` linked; or the item is missing from the feed; or the feed is `building`, `stale` or `last_known`, or its coverage is not `complete`; or `item.column == "unknown"` or `item.workflow_column == "unknown"`; or `item.issues` is not empty; or the board's `item.candidate` is not `H` | `CANNOT TELL whether this head is approved.` followed by one bullet per reason, **verbatim from the board** (`item.reason`, each entry of `item.issues`, the coverage status, "this work item is not on the board feed", "no work item is linked to this comparison", "the board's current candidate is <12 chars>, not this head") |
-| 2 | `changes_requested` | a FIX or HOLD row with relation `this_head` exists | `NOT APPROVED: changes were requested on this head.` |
-| 3 | `approved` | a GO row with relation `this_head`, `independent == true`, exists; and rule 1 and 2 did not apply; and no outstanding review for `this_head` | `APPROVED: an independent review approved exactly this head.` plus, if the item's `integration` mapping has `H`, ` It is merged into <target>.` |
-| 4 | `awaiting` | an outstanding review exists for `this_head`, or the item has no verdict at all | `WAITING for a review of this head.` |
-| 5 | `older_only` | at least one GO row exists, all with relation other than `this_head` | `NOT APPROVED: the only approval is for a different head (<relation text>).` |
-| 6 | `none` | anything else | `NO REVIEW RECORDED for this head.` |
-
-**Never** show `approved` unless rule 3 applies. The banner state is part of the API (`evidence.banner.state`), so the list page, the detail page and the tests read the same value.
-
-`evidence` block returned in the detail response:
+### 7.7 `evidence` block (detail response)
 
 ```json
-{"status": "ok|no_work_item|not_on_board|board_building|board_unavailable|board_stale",
- "board": {"generated_at": "...", "coverage_status": "complete|...", "column": "unknown", "reason": "...",
-           "candidate": "<oid>|null", "issues": ["..."], "integration": {}},
- "banner": {"state": "unknown", "text": "CANNOT TELL ...", "reasons": ["..."]},
- "verdicts": [ {"head": "<oid>|null", "relation": "earlier_in_range", "reviewer": "seat", "vendor": "unverified",
-                "independent": true, "verdict": "GO", "label": "Approved an EARLIER head...", "mark": "[!]",
-                "reply_id": "...", "request_id": "...", "status": "approved", "ts": "...",
-                "excerpt": "...", "transcript": "/api/thread/<request_id>"|null, "reply_in_window": true} ],
- "outstanding": [ {"request_id": "...", "recipient": "seat", "stage": "read", "head": "<oid>|null", "relation": "this_head", "label": "..."} ],
+{"status": {"state": "cannot_tell", "text": "CANNOT TELL ...", "reasons": ["..."]},
+ "binding": {"session": "match|mismatch", "cycle": {"registered": 1, "board": 1},
+             "repository": {"alias": "fixture", "board": "fixture"}, "project": "match",
+             "candidate": "match|mismatch"},
+ "board": {"generated_at": "...", "coverage_status": "complete", "generation": "...",
+           "column": "unknown", "reason": "...", "candidate": "<oid>|null", "issues": ["..."],
+           "integration": "true|false|absent|not_tied"},
+ "history": [ {"head": "<oid>|null", "relation": "earlier_in_range", "reviewer": "seat", "vendor": "unverified",
+               "independent": true, "verdict": "GO", "label": "...", "mark": "[!]", "reply_id": "...",
+               "request_id": "...", "status": "approved", "ts": "...", "excerpt": "...",
+               "transcript": "/api/thread/<request_id>?root=<project id>", "reply_in_window": true} ],
+ "tasks": [ {"request_id": "...", "stage": "build|fix|design", "requester": "...", "recipient": "...",
+             "state": "done", "ts": "...", "head": "<oid>|null", "opener_excerpt": "...", "opener_in_window": true,
+             "replies": [ {"reply_id": "...", "status": "done", "ts": "...", "excerpt": "..."} ],
+             "note": null, "transcript": "..."} ],
+ "obligations": [ {"request_id": "...", "recipient": "...", "stage": "read", "state": "outstanding",
+                   "head": "<oid>|null", "head_note": "not available", "relation": "...", "label": "..."} ],
  "previous_cycles": [ {"cycle": 1, "outstanding": [], "note": null} ],
  "missing": [ {"reason": "missing required correlation history", "ids": ["..."]} ],
- "identity": {"project_id": "...", "board_generation": "..."} }
+ "counts": {"history": [shown, total], "tasks": [shown, total], "obligations": [shown, total]}}
 ```
 
-- `transcript` is the **existing** path `/api/thread/<request_id>` (FACT route `web.py:5223-5246`); the page opens it as a normal link (JSON). `null` if the reply was not in the active window (`reply_in_window: false`; the row then says "transcript is in the archive, not in the live window").
-- `request_id`, `status`, `ts`, `excerpt` come from `by_id[reply_id]` (`meta.request_id`, `meta.status`, `ts`, `body[:600]` after the same inert-text clean-up as code lines). If the reply is not in `by_id`, those fields are `null` and the row still shows (it never disappears).
-- `outstanding` comes from `item["obligations"]` (current cycle; entries with `state == "outstanding"` and `stage` in `work_tags.REVIEWS`), joined to the opener message by `request_id` to read `meta.work_head` (FACT: `reduce` gives obligations `{request_id, recipient, stage, state, verdict}` only, `work_board.py:480-481`).
-- `missing` is `item.issues` entries that carry evidence ids, plus the reducer's `evidence` list when `reason` is a conflict (FACT: `item["evidence"]` at `:500`).
-- **Identity binding (C3):** every verdict row carries its `reviewer` seat, `request_id`, `reply_id` and the page prints `project_id` and `board_generation` in the rationale footer. A verdict is **never** matched to a head by a message id order or a timestamp (FACT: the reducer itself refuses to, `work_board.py:3-4`). The only join is `reply_id -> message -> meta.request_id`, and the head comes from the reducer's own filing, not from the page.
-- The function that builds `evidence` is **pure** (takes the feed payload, the message dict, the manifest; returns the dict) so it can be tested without a server.
+`transcript` is the existing `/api/thread/<request_id>` path **with the same `root` the request used** (reader finding 6), or `null` when the opener or reply is not in the window. The function that builds `evidence` is **pure** (inputs: registry entry, manifest, one `compare_view` result, the session id, the project id) so it is tested without a server.
 
 ---
 
-## 8. How the page renders code safely (C4)
+## 8. Rendering code safely (C4)
 
 ### 8.1 Page policy
-- Document and assets are served with `_DASHBOARD_CSP`: `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'` (FACT, `web.py:216-218`). **No inline script, no inline style, no `eval`, no remote anything.** The shell has no `style=` attributes and no `<script>` body.
-- No third-party library, font or icon. The three files are written by hand.
+`_DASHBOARD_CSP` (FACT `web.py:216-218`: `default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'`). No inline script or style, no `eval`, nothing remote. No third-party library, font or icon.
 
 ### 8.2 Building the DOM
-- Every string from the API (paths, commit subjects, reviewer names, labels, excerpts, code lines) enters the page **only** through `document.createTextNode` or `element.textContent`. The words `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `DOMParser`, `createContextualFragment` and `eval` **must not appear** in `compare.js` or `compare-model.js` (test: a source grep that fails the build; FACT: the existing console states the same rule, `web.py:92-99`, "its client builds DOM via `textContent` only").
-- Links: the only `href` values the page creates are (a) `"/compare?id=" + id` where `id` matches `^cmp-[0-9a-f]{12}$`, (b) `"/api/thread/" + requestId` where the request id matches the server's `_MESSAGE_ID_RE`-style pattern (the page re-validates with the same regex before creating the element; a value that fails is shown as plain text, not as a link). No `javascript:` or `data:` can survive these checks.
-- Code lines use `white-space: pre` and `tab-size: 4` in `compare.css`; the two columns scroll horizontally independently of the page; line numbers are separate cells (so copying code does not copy numbers).
-- At most **400 rows** are added to the DOM at once; a "Show next 400 rows" button adds more (so a 2,000-line file never builds 4,000 nodes at once).
+- Every string from the API enters only through `createTextNode` or `textContent`. `innerHTML`, `outerHTML`, `insertAdjacentHTML`, `document.write`, `DOMParser`, `createContextualFragment` and `eval` must not appear in `compare.js` or `compare-model.js` (a source-grep test; FACT: the existing console states the same rule, `web.py:92-99`).
+- The only `href`s the page creates: `/compare?id=<cid>&root=<encoded project id>` (cid matches `^cmp-[0-9a-f]{12}$`) and the server-provided `transcript` path, **re-validated** against `^/api/thread/[A-Za-z0-9._-]{1,128}(\?root=[^&#\s]{1,200})?$`; a value failing it is shown as plain text. No `javascript:` or `data:` can pass.
+- **Address bar:** the page reads and writes only `id` and `root` (amended from "only `id`"). Both are validated (`id` by its pattern, `root` as an opaque string of at most 200 characters without control characters) before use.
+- Code lines use `white-space: pre`, `tab-size: 4`; the two columns scroll independently; line numbers are separate cells. At most **400 rows** are in the DOM at once; "Show next 400 rows" adds more.
 
-### 8.3 Inert text (done once, when the snapshot is made, and checked again by the page)
-- Replace C0 controls except tab, DEL, and the bidirectional controls U+202A-U+202E, U+2066-U+2069, U+200E, U+200F by their visible escape `<U+XXXX>`. A line that contained any replacement carries a small mark `[escaped]` in the page. The page repeats the check on what it receives (a snapshot written by something else cannot smuggle a control character in); the check lives in `compare-model.js` as a pure function with the same table as the Python one (a test runs both on one list of hostile strings and compares the outputs).
-- Lines are cut at 2,000 characters (section 5.5) and say how many characters were dropped.
+### 8.3 Inert text
+Display cells are made inert **once, after the comparison decision** (5.6 step 6), and the page checks again what it receives with a pure function in `compare-model.js` using the same table (a test runs both on one list of hostile strings and compares). A line with any replacement shows `[escaped]`. **Because escaping can make different lines look the same, the page never decides "changed" from what it displays**; it uses the row kind and `same_preview` from the snapshot.
 
 ### 8.4 What the page never does
-Never fetches anything except `/api/compare...` and the three static files. Never writes to the address bar except `?id=`. Never stores data in cookies or local storage. Never runs anything it received. Never calls POST.
+Never fetches anything except `/api/compare...`, `/api/thread/...` links the user opens, and the three static files. Never stores data in cookies or local storage. Never runs anything it received. Never calls POST.
 
 ---
 
-## 9. The synthetic fixture, the checkpoint, the tests
+## 9. The synthetic fixture and the checkpoint
 
-### 9.1 The fixture (built by a function, never committed as a repository)
+### 9.1 Fixture, pinned (reader finding 13)
 
-`tests/compare_fixture.py` defines `build_fixture(tmp_path)`; it runs `git init` in `tmp_path / "repo"` with a **fixed identity and fixed dates** (environment `GIT_AUTHOR_NAME="Fixture Author"`, `GIT_AUTHOR_EMAIL="fixture@example.invalid"`, the same for the committer, `GIT_AUTHOR_DATE` and `GIT_COMMITTER_DATE` of `2026-10-17T10:00:00+0000` plus one minute per commit), so object ids are reproducible on every machine. It writes three commits and returns their full ids:
+`tests/compare_fixture.py: build_fixture(tmp_path)` runs, with `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` pointing at the null device and `GIT_CONFIG_NOSYSTEM=1`:
+
+```
+git init --initial-branch=main --object-format=sha1
+git -c core.autocrlf=false -c core.safecrlf=false -c core.eol=lf -c commit.gpgsign=false
+    -c tag.gpgsign=false -c user.useConfigOnly=false commit ...
+```
+
+Fixed identity (`Fixture Author <fixture@example.invalid>`), fixed dates (`2026-10-17T10:00:00+0000` plus one minute per commit), no `.gitattributes`. **File bytes are written from Python `bytes` literals** (never through a text mode), so the object ids are reproducible on every platform; the test asserts the three commit ids equal constants recorded in the test (the first build records them; a later difference means the environment leaks into the fixture).
 
 | Commit | Files | Why |
 |---|---|---|
-| **BASE** | `greet.py` (5 lines, `greet(name)` returns `"Hello " + name`), `README.md` (3 lines), `data.bin` (64 bytes with a NUL), `unsafe.txt` (one line containing a bidi override character U+202E and the text `<script>alert(1)</script>`), `crlf.txt` (2 lines ending `\r\n`), `big.txt` (300,000 bytes of `x` lines) | covers text, binary, hostile text, CRLF, too-large |
-| **H1** (first build) | `greet.py` changed (adds a feature, with the bug: `greet(None)` raises), `big.txt` changed, `unsafe.txt` changed | the reviewed "first version" |
-| **H2** (the fix; the head on screen) | `greet.py` fixed (guard for `None`), `tests/test_greet.py` added, `README.md` changed, `data.bin` changed | the fixed version |
+| **BASE** | `greet.py`, `README.md`, `data.bin` (64 bytes with a NUL), `unsafe.txt` (a U+202E and `<script>alert(1)</script>`), `crlf.txt` (2 lines `\r\n`), `big.txt` (300,000 bytes), `collide.txt` (the collision lines of 5.6) | text, binary, hostile text, CRLF, too large, collisions |
+| **H1** (first build) | `greet.py` changed (the bug: `greet(None)` raises), `big.txt`, `unsafe.txt`, `collide.txt` | the reviewed first version |
+| **H2** (the fix; the head on screen) | `greet.py` fixed, `tests/test_greet.py` added, `README.md`, `data.bin` changed | the fixed version |
 
-Registration: `compare register --repo fixture --base BASE --head H2 --work-item demo-greeting --label "demo greeting"`, with a store whose config has `work_repos.fixture = {path: <repo>, targets: ["refs/heads/main"], default: true}` and branch `main` at H2.
+Registration: `compare register --repo fixture --base BASE --head H2 --work-item demo-greeting --work-cycle 1 --label "demo greeting"` with `work_repos.fixture = {path, targets: ["refs/heads/main"], default: true}` and `main` at H2.
 
-`build_story(bus, ids)` (using the `Bus` class from `tests/test_work_board_reducer.py:25-79`, FACT) publishes the recorded history for work item `demo-greeting`, through the real publication normaliser, with the fixture's ids as `work_head`:
+### 9.2 The recorded story (checkpoint fixture) and three more real-reducer fixtures
 
-1. `build` task `tk-build` to `qwen-agenttalk-dev-2`, reply `done` (policy `no_gates_reason`, like `reviewed()` at `test_work_board_reducer.py:78-83`).
-2. `read` review request `tk-read-1` to `codex-agenttalk-reviewer-1`, `work_head=H1`, reply **status `rejected`, verdict `FIX`** (the rejected review).
-3. `fix` task `tk-fix-1` to `qwen-agenttalk-dev-2`, reply `done` (the fix that produced H2).
-4. `read` review request `tk-read-2` to `claude-agenttalk-reviewer-3`, `work_head=H1`, reply **status `approved`, verdict `GO`** (the approval of an older head).
-5. `read` review request `tk-read-3` to `codex-agenttalk-reviewer-1`, `work_head=H2`, **no reply** (the review of the head on screen is still outstanding).
-6. One **raw** `review-result` from `codex-agenttalk-reviewer-1` with `in_reply_to` = `"20261017-000000-000000-miss"` (an id that is not in the store) and `request_id = tk-read-3`, inserted with `raw=True` (FACT: the helper supports it, `test_work_board_reducer.py:52-55`). The reducer flags it `MISSING` (FACT `work_board.py:240-241`): this is the **missing link**.
+`build_story(bus, ids)` uses the `Bus` helper (`tests/test_work_board_reducer.py:25-79`) through the real publication normaliser.
 
-**Expected result (the golden file `tests/golden/compare_checkpoint.json`, produced once by the builder and then frozen; a later change needs the reader's agreement):**
-- `evidence.banner.state == "unknown"`; `banner.reasons` contains `"missing required correlation history"` (FACT: `MISSING`, `work_board.py:24`) and the reducer's own reason for two surviving candidates (`"multiple candidates without supersession"`, FACT `work_board.py:453`). If the reducer words either differently, the golden file records the reducer's actual words; the builder **must not** edit the reducer to match this document.
-- `verdicts`: the FIX under H1 with relation `earlier_in_range`; the GO under H1 with relation `earlier_in_range`, label `Approved an EARLIER head. The changes after it are NOT covered.`; and `outstanding` has one row for `tk-read-3` with relation `this_head`.
-- No row carries `[ok]`.
+**Checkpoint story `demo-greeting`** (the conflicted demonstration the lead asked for):
+1. `build` task `tk-build` to `qwen-agenttalk-dev-2`, reply `done`.
+2. `read` review `tk-read-1` to `codex-agenttalk-reviewer-1`, `work_head=H1`: **rejected, FIX**.
+3. `fix` task `tk-fix-1`, reply `done` (this produced H2).
+4. `read` review `tk-read-2` to `claude-agenttalk-reviewer-3`, `work_head=H1`: **approved, GO** (the approval of an older head).
+5. `read` review `tk-read-3` to `codex-agenttalk-reviewer-1`, `work_head=H2`, **no reply**.
+6. One **raw** `review-result` with an `in_reply_to` that does not exist (FACT: `add(raw=True)`, `:52-55`): the **missing link**.
 
-### 9.2 The checkpoint demonstration (C7)
+Expected: status `cannot_tell` with the reducer's own reasons (`multiple candidates without supersession` is FACT at `work_board.py:453`; `missing required correlation history` is FACT at `:24`); history rows for the FIX and the GO on H1 both `earlier_in_range`, labelled as history, no green mark; the obligation row for `tk-read-3`; both task rows. If the reducer words anything differently, the golden file records the reducer's actual words; **the builder must not change the reducer to match this document**.
 
-Run after work order 3, by the lead and the Codex reader, not by the builder alone.
+**Three more fixtures, each its own real-reducer story and its own golden** (reader finding 1; `tests/test_compare_evidence.py`):
+- **F1 active fix after a GO:** a completed independent GO at H, then an outstanding `fix` task. Expected: status `not_ready` (column `fix_round`), text from the reducer's reason (`fix dispatched`/`running`); history still shows the GO on this head; **no `ready` and no green**.
+- **F2 discharged FIX at the same head:** FIX at H, then an explicit replacement review superseding it with a GO at H. Expected: status `ready`; history shows **both** the FIX and the GO (both `this_head`), neither hidden.
+- **F3 outstanding review whose opener left the live window:** an outstanding review obligation known only from archived history. Expected: status taken from the board (`waiting`, or `cannot_tell` if the board says so); the obligation row says `opener is not in the live window (archived)` and head `not available`; **the status does not become "nothing pending"**.
 
-1. Build the fixture and register as in 9.1; start the dashboard on loopback; open `/compare?id=<cid>`.
-2. **Reader 1** (a seat that was not told the story; the reader is shown only the page) answers in writing: (a) *Is the version on the right approved?* (b) *Why, or why not?* (c) *What is the one approval on record, and what does it cover?* (d) *Is anything missing from the record?* **Pass:** (a) "no / cannot tell", (b) names the missing record **or** the outstanding review, (c) says the approval is for an earlier version and does not cover the fix, (d) says one record is missing.
-3. **Reader 2** gets the **editor alternative**: the same two commits in the reader's own editor's diff, plus a one-page index the lead writes by hand (about 20 lines: item, commit ids, and the same list of tasks and reviews with their heads, from `/api/thread` links). Same four questions.
-4. **Record** for each reader: elapsed minutes from first sight to written answers, and correctness per question; for the builder: elapsed minutes and gateway spend per work order (settled spend from `agenttalk gateway status` before and after each order; **an `open` ledger line is a reservation ceiling, not money spent**, so the spend is the change in the settled October total, not the sum of open lines; FACT: the lead's relay of 2026-10-17 11:24 UTC).
-5. **Decision:** if reader 2 answered all four correctly in no more time than reader 1, **stop**: keep the index page, close the project. Otherwise continue to the deferred items only if the lead asks.
+### 9.3 The checkpoint (C7) after work order 1
 
-### 9.3 Kill signals, and where each is guarded
+Run by the lead and the Codex reader, not by the builder alone.
+1. Build the fixture, register, start the dashboard on loopback, open `/compare?id=<cid>&root=<project id>`.
+2. **Reader 1** (told nothing, shown only the page) answers in writing: (a) *Is the version on the right ready?* (b) *Why, or why not?* (c) *What approval is on record, and what does it cover?* (d) *Is anything missing from the record?* **Pass:** (a) no / cannot tell; (b) names the missing record or the unresolved placement; (c) says the GO is for an earlier version and does not cover the fix; (d) says one record is missing.
+3. **Reader 2** gets the editor alternative: the same two commits in the reader's own editor's diff plus a one-page index (about 20 lines, written by hand: item, commit ids, the tasks and reviews with their heads and `/api/thread` links). Same four questions.
+4. **Record** per reader: elapsed minutes and correctness per question; for the builder: elapsed minutes and spend as in section 11.2.
+5. **Decision:** if reader 2 answered all four correctly in no more time than reader 1, **stop**: keep the index page, close the project. Otherwise the lead decides whether to dispatch work orders 2 and 3.
 
-| C8 signal | Guard in this design |
+### 9.4 Kill signals, and where each is guarded
+
+| C8 signal | Guard |
 |---|---|
-| the screen implies approval of an unreviewed head | section 7.4: `approved` only by rule 3; tests `test_banner_*` (every row), `test_old_head_approval_is_never_green`, `test_null_head_key_is_no_head`, `test_unknown_board_never_shows_approved` |
-| needs client content sent to builders | section 5.8: fixture only; `AGENTTALK_COMPARE_FIXTURE_ONLY` test; the work-order header rule |
-| repository reads cannot be bounded | section 5: closed allowlist, caps on output, timeouts; tests `test_every_git_call_is_in_the_allowlist`, `test_output_cap_kills_the_child`, `test_timeout_refuses_and_writes_nothing` |
-| budget checkpoint arrives without the demonstration | section 9.2 happens after work order 3; the lead stops there |
+| the screen implies approval of an unreviewed head | status only from the board's placement (7.4) after the binding checks (7.3); never "approved" wording; tests F1, F2, F3 and `test_old_head_approval_is_never_green`, `test_unknown_board_never_cannot_be_ready` |
+| needs client content sent to builders | 5.8: fixture and agenttalk only; `AGENTTALK_COMPARE_FIXTURE_ONLY` test; the work-order header rule |
+| repository reads cannot be bounded | 5.2 allowlist; 5.4 reader; 5.5 limits; tests `test_every_git_call_is_in_the_allowlist`, `test_runaway_child_is_killed_and_resource_use_is_bounded`, `test_timeout_refuses_and_publishes_nothing` |
+| budget checkpoint arrives without the demonstration | the checkpoint is after work order 1; the allowance is 10 EUR (11.2) |
 
-### 9.4 The tests, by file (names are the contract; the builder may add more)
+---
 
-**`tests/test_compare_git.py`** (work order 1; uses real `git`, skipped with a clear message if `git` is older than 2.32)
-- `test_environment_drops_every_inherited_git_variable_and_sets_the_safe_ones` (plant `GIT_DIR`, `GIT_EXTERNAL_DIFF`, `git_pager` in lower case; assert they are absent in the child's environment, using a tiny wrapper script as `git_exe` that dumps its environment)
-- `test_every_git_call_is_in_the_allowlist` (call each wrapper with a forbidden subcommand or a flag outside the table; each raises before a process starts: assert no process was created by monkeypatching `subprocess.run`)
-- `test_unsafe_revision_text_is_refused_before_git_runs` (leading `-`, spaces, `;`, newline, 201 characters)
-- `test_shallow_and_partial_clones_are_refused` (a `--depth 1` clone; a repo whose local config has `extensions.partialclone`)
-- `test_base_must_be_an_ancestor_of_head`
-- `test_cat_file_returns_raw_bytes_despite_a_hostile_gitattributes_and_config` (section 5.4; asserts the marker file is absent)
-- `test_diff_tree_never_runs_an_external_diff` (`diff.external` and `core.pager` set to scripts that write a marker file; marker absent)
-- `test_only_blobs_named_by_the_range_are_requested` (spy on the stdin given to `cat-file --batch`; assert every oid is in the `diff-tree` list)
-- `test_output_cap_kills_the_child` (wrapper `git_exe` that prints more than the cap; assert the call fails and the child is gone)
-- `test_timeout_refuses_and_writes_nothing` (wrapper that sleeps; use a patched 1 s timeout)
-- `test_windows_paths_and_spaces` (a repo path with a space; on Windows the real `NUL` device is accepted for `GIT_CONFIG_GLOBAL`)
+## 10. Tests, by file (names are the contract; the builder may add more)
 
-**`tests/test_compare_snapshot.py`** (work order 1)
-- `test_register_is_idempotent_and_the_snapshot_is_immutable`
+**`tests/test_compare_git.py`** (real `git`; skipped with a stated reason below 2.32)
+- `test_environment_drops_every_inherited_git_variable_and_sets_the_safe_ones` (plant `GIT_DIR`, `GIT_EXTERNAL_DIFF`, lower-case `git_pager`; a wrapper `git_exe` dumps its environment)
+- `test_every_git_call_is_in_the_allowlist` (each forbidden subcommand or flag raises before a process starts; `Popen` is monkeypatched to fail the test if reached)
+- `test_unsafe_revision_text_is_refused_before_git_runs`
+- `test_shallow_and_partial_clones_are_refused`
+- `test_base_must_be_an_ancestor_of_head`, `test_a_range_with_a_merge_commit_is_refused`
+- `test_cat_file_returns_raw_bytes_despite_a_hostile_gitattributes_and_config` (filter and textconv scripts that would write a marker file; bytes unchanged; marker absent)
+- `test_diff_tree_never_runs_an_external_diff` (marker absent)
+- `test_only_blobs_named_by_the_range_are_requested` (spy on the id file given to `cat-file --batch`)
+- `test_runaway_child_is_killed_and_resource_use_is_bounded` (a wrapper that never stops writing to stdout: killed within about 1 second, reaped, output file smaller than the cap plus the measured overshoot, no leftover child process; the same for stderr; the same for a child that never exits, by deadline)
+- `test_child_is_reaped_on_every_error_path` (timeout, cap, non-zero exit, exception in the caller)
+- `test_deadline_covers_row_building_and_publication` (a patched clock passes the deadline between files; nothing is published)
+- `test_windows_paths_and_spaces` (a repo path with a space; on Windows the real `NUL` is accepted for `GIT_CONFIG_GLOBAL`)
+
+**`tests/test_compare_snapshot.py`**
 - `test_register_stores_ids_not_names_so_a_moved_branch_changes_nothing`
-- `test_second_concurrent_register_is_refused_at_once` (hold the lock in the test; `timeout=0`)
-- `test_limits_set_truncated_flags_and_never_crash` (monkeypatch the limits to small values; a 4-file range with limit 2)
-- `test_binary_symlink_submodule_mode_only_missing_object_states`
-- `test_text_is_made_inert` (bidi override, C0 controls, a `<script>` line, a 3,000-character line)
-- `test_crlf_is_recorded_and_not_shown_as_a_change`
+- `test_same_range_same_metadata_is_a_noop_that_verifies_the_snapshot`
+- `test_same_range_with_different_metadata_is_an_error_not_a_noop` (and `amend` fixes it, keeping the id)
+- `test_work_item_and_cycle_must_be_given_together`
+- `test_lock_refuses_a_second_writer_at_once` (hold the lock in the test, `timeout=0`; two real processes racing)
+- `test_publication_refuses_without_atomic_rename_and_leaves_no_staging` (patch `os.replace` to fail permanently: exit 2, no registry change, no `.staging-*`)
+- `test_interrupted_publication_leaves_a_registry_naming_only_complete_snapshots` (crash after the directory rename, before the registry; and after the first file)
+- `test_a_reader_polling_during_registration_never_sees_a_partial_file`
+- `test_remove_and_reconcile_free_a_slot_and_delete_orphans` (hand-deleted directory; orphan directory; stale `.staging-*`; concurrent register)
+- `test_register_deletes_an_orphan_directory_before_building`
+- `test_limits_set_truncated_flags_and_never_crash` (limits patched small)
+- `test_binary_symlink_submodule_mode_only_missing_object_withheld_states`
+- `test_text_is_made_inert_for_display_only`
+- `test_rows_decide_changes_from_raw_bytes` (all collision cases (a) to (f) of 5.6; counts non-zero; `same_preview` and `reason` as documented; golden `tests/golden/compare_rows_collisions.json`)
 - `test_the_rows_of_the_fixture_match_the_golden_rows` (`tests/golden/compare_rows_greet.json`)
-- `test_registry_reader_refuses_oversize_malformed_and_foreign_schema` (each of the three, byte-bounded)
+- `test_registry_reader_refuses_oversize_malformed_and_foreign_schema`
+- `test_readers_refuse_symlinks_and_junctions` (symlink where the platform allows; a junction on Windows; skipped with a stated reason elsewhere)
 - `test_fixture_only_environment_variable_refuses_foreign_repositories`
-- `test_atomic_write_order_registry_last` (fail the second file write; the registry still names only complete snapshots)
+- `test_fixture_object_ids_are_reproducible` (the three constants)
 
-**`tests/test_compare_evidence.py`** (work order 2; pure, no server)
-- `test_banner_unknown_when_*` (one case each: no work item, item missing, board building, board stale, coverage incomplete, column unknown, issues present, candidate is another head)
-- `test_banner_changes_requested_beats_everything_but_unknown`
-- `test_banner_approved_only_for_an_independent_go_on_exactly_this_head`
+**`tests/test_compare_evidence.py`** (pure, no server; real-reducer stories)
+- `test_status_cannot_tell_when_*` (no work item; item missing; board building; stale; incomplete; column unknown; issues; candidate is another head; **session changed after a reset**; **cycle mismatch**; **repository mismatch (two repositories share H)**; **alias changed by `amend`**; project mismatch)
+- `test_f1_active_fix_after_go_is_not_ready`, `test_f2_discharged_fix_with_replacement_go_is_ready_and_shows_both_verdicts`, `test_f3_outstanding_review_with_archived_opener_keeps_the_board_status`
 - `test_old_head_approval_is_never_green` (the checkpoint story)
-- `test_not_independent_go_is_never_ok`
-- `test_null_head_key_is_no_head` (feed round-tripped through `json.dumps`/`loads` so the `None` key is `"null"`)
-- `test_relations_use_the_stored_commit_list_only` (no git, no subprocess: monkeypatch `subprocess.run` to raise)
+- `test_history_rows_never_say_approved_and_never_use_ok`
+- `test_not_independent_go_is_labelled`
+- `test_null_head_key_is_no_head` (feed round-tripped through `json.dumps`/`loads`)
+- `test_relations_use_the_stored_commit_list_only` (`subprocess` patched to raise)
 - `test_truncated_commit_list_gives_unknown_relation`
-- `test_reply_outside_the_active_window_keeps_the_row_without_a_transcript`
+- `test_integration_true_false_absent_and_not_tied` (four separate cases; target text comes from the declared binding)
+- `test_status_is_computed_before_rows_are_limited` (more than 50 history rows)
+- `test_task_rows_join_by_request_id_and_sender_not_by_order` (two requests with overlapping ids in two roots are in `test_compare_web.py`)
+- `test_task_rows_show_missing_and_out_of_window_states` (opener archived; reply archived; reply named by the board but absent)
 - `test_excerpt_is_cut_and_made_inert`
-- `test_checkpoint_story_matches_the_golden_evidence` (`tests/golden/compare_checkpoint.json`)
+- `test_checkpoint_story_matches_the_golden_evidence` (`tests/golden/compare_checkpoint.json`) and one golden each for F1, F2, F3
 
-**`tests/test_compare_web.py`** (work order 2; real server in a thread, the style of `tests/test_web.py` and `tests/test_console2_web.py`)
+**`tests/test_envelope_snapshot_compare_view.py`**
+- `test_compare_view_reads_board_and_messages_from_one_generation` (a controlled refresh between the old two calls changes the answer; `compare_view` still returns one generation)
+- `test_compare_view_refuses_like_active_with_freshness` (building, config digest changed, real failure)
+
+**`tests/test_compare_web.py`** (real server in a thread, the style of `tests/test_web.py`)
 - `test_list_detail_and_file_endpoints_return_the_documented_shape`
+- `test_list_and_detail_status_agree` (with an outstanding obligation and with an archived request)
 - `test_head_requests_match_get_without_a_body`
-- `test_compare_paths_refuse_post_put_delete` (and GET-only even when actions are enabled)
-- `test_unknown_or_repeated_query_keys_are_400_bad_query`
-- `test_bad_root_is_400_bad_root`
-- `test_cid_and_index_are_validated_before_any_disk_access` (`cmp-../..`, `cmp-%2e%2e`, uppercase hex, index `0`, `00001`, `99999`)
-- `test_no_path_traversal_in_cid_or_index` (create a secret file next to the compare directory; no input reaches it)
-- `test_missing_empty_oversize_and_malformed_snapshots_are_error_states_not_500s`
-- `test_response_caps` (64 KiB list, 512 KiB detail, 2 MiB file)
-- `test_the_server_never_runs_git` (monkeypatch `subprocess` to raise during every compare request)
-- `test_fifth_concurrent_read_gets_503_with_retry_after` (hold four slots by calling `_compare_slot` in the test; the fifth answers 503 within about 3.5 s)
+- `test_compare_paths_refuse_post_put_delete` (also when actions are enabled)
+- `test_unknown_or_repeated_query_keys_are_400_bad_query`, `test_bad_root_is_400_bad_root`
+- `test_two_roots_with_overlapping_request_ids_and_different_bodies` (the transcript link and every link carry `root`; opening them returns the right body)
+- `test_cid_and_index_are_validated_before_any_disk_access`
+- `test_no_path_traversal_in_cid_or_index`
+- `test_missing_empty_oversize_malformed_and_linked_snapshots_are_error_states_not_500s`
+- `test_response_caps`
+- `test_the_server_never_runs_git` (`subprocess` patched to raise during every compare request)
+- `test_fifth_concurrent_read_gets_503_with_retry_after`
 - `test_headers_are_the_standard_set_and_the_shell_uses_the_dashboard_csp`
 - `test_static_assets_are_allowlisted_with_the_right_types`
 
-**`tests/compare_model.test.mjs`** and **`tests/compare_view.test.mjs`** (work order 3; same style as `tests/console2_board_model.test.mjs`)
-- model: `escapeInert` table matches Python's; relation/label/banner formatting copies the server strings; state machine for loading/ok/not found/busy/error.
-- view (DOM, same harness as `tests/console2_harness.mjs`): each page state of section 2.2; banner text for each state; rows for the checkpoint golden payload; "Show next 400 rows"; **a payload full of hostile strings creates no element other than the expected ones** (count nodes by tag; no `script`, no `img`, no `a` except the two permitted kinds); the source grep for forbidden calls; keyboard: Tab order reaches file list, side-by-side, rationale.
-- error path (lesson `process/dashboard-contract-needs-real-projection-test`): a **saved store** -> real `/api/compare/<cid>` payload -> rendered DOM, in one test, on the checkpoint fixture (extends `tests/test_console2_browser.py`'s approach; if no browser is available the DOM harness stands in and the work order says so).
+**`tests/compare_model.test.mjs`**, **`tests/compare_view.test.mjs`** (same style as `tests/console2_board_model.test.mjs`, harness `tests/console2_harness.mjs`)
+- model: `escapeInert` table matches Python's; status text, labels and relation text copy the server strings; the page-state machine; links carry `root`.
+- view: each state of section 2.2; the status banner for each state; the checkpoint golden payload; the collision rows show the **changed** mark and "differs in bytes" text; "Show next 400 rows"; a hostile payload creates no element but the expected ones (no `script`, `img`, and no `a` except the two permitted kinds); the source grep for forbidden calls; keyboard order.
+- error path (lesson `process/dashboard-contract-needs-real-projection-test`): a **saved store, then the real `/api/compare/<cid>` payload, then the rendered DOM**, in one test on the checkpoint fixture (a browser test if one is available; otherwise the DOM harness, and the work order says which).
 
-**Existing tests to keep green and one to update:** `tests/test_lock_order.py:80-86` (add `"compare_snapshot.py": 1`); `tests/test_console2_web.py` (unchanged; the new assets are separate); `tests/test_work_board_reducer.py` and `tests/test_work_board_feed.py` (**unchanged**: the design does not touch the reducer or the feed).
-
----
-
-## 10. The work, split into three work orders
-
-Each order is for the one builder (`qwen-agenttalk-dev-2`); a Codex seat reads the commit before the next order starts. **Standing rules for every order:** work only on the synthetic fixture and the agenttalk repository; no client file is opened; local branch only; run the named tests and the existing suites listed; reply with the head SHA copied from `git rev-parse HEAD`.
-
-### Work order 1: read the repository and take the snapshot (no HTTP, no page)
-
-- **Files (new):** `src/agenttalk/compare_git.py` (the environment, the closed allowlist, calls C0-C11, limits), `src/agenttalk/compare_snapshot.py` (registration, the row builder, the readers, the lock), `tests/compare_fixture.py` (section 9.1, repository only), `tests/test_compare_git.py`, `tests/test_compare_snapshot.py`, `tests/golden/compare_rows_greet.json`.
-- **Files (edited):** `src/agenttalk/cli.py` (a `compare` parser with `register`, `list`, `show`, handler `cmd_compare` modelled on `cmd_board` at `:8611` and the parser block at `:16703`); `tests/test_lock_order.py:80-86` (+ `"compare_snapshot.py": 1`); `docs/LOCK-ORDER.md` (a new row for `compare-register.lock`, rank 210 leaf, with one line of why); `CHANGELOG.md` (an Unreleased "Added" entry in plain words, written with the write-for-humans rules).
-- **Step 1 (before any code):** read `janitor.py`, `doctor.py` and `docs/BACKUP.md` for anything that enumerates directories under `.agenttalk/`; report what you found in the commit message (decision D3).
-- **Acceptance:** every test named under `test_compare_git.py` and `test_compare_snapshot.py` in section 9.4 passes; `pytest tests/test_work_board_facts.py tests/test_lock_order.py` still passes; `agenttalk compare register` on the fixture prints the new id, a second run prints the same id and changes nothing, `compare list` and `compare show <cid> --json` print the documented fields; **no test or command in this order starts a thread**.
-- **Done means:** the above, plus `git diff --stat` touches only the listed files, plus the commit message lists the measured worst-case time of the 2,000-line row builder on the host that ran it (section 5.6).
-- **ESTIMATE:** about 420 lines of product code, 520 of tests; one builder session of 4 to 8 model turns plus one rework round; 3 to 8 EUR (ASSUMPTION, see section 0).
-
-### Work order 2: the evidence binding and the three GET endpoints
-
-- **Files (new):** `src/agenttalk/compare_evidence.py` (the pure function of section 7: relations, labels, banner; no I/O), `tests/test_compare_evidence.py`, `tests/test_compare_web.py`, `tests/golden/compare_checkpoint.json`.
-- **Files (edited):** `src/agenttalk/web.py` (module docstring route list; `_COMPARE_*` constants and `_compare_slot`; the three routes inside `_route` after `/api/work-board` at `:5098-5109`; `render_compare()` and the `/compare` route next to `/v2` at `:5206-5209`; the three asset names in `_load_static_assets` at `:810-820`, files may be empty placeholders until order 3); `tests/compare_fixture.py` (add `build_story`).
-- **Does not touch:** `work_board.py`, `work_board_feed.py`, `work_board_facts.py`, `envelope_snapshot.py`, `console2*.js`.
-- **Acceptance:** every test named under `test_compare_evidence.py` and `test_compare_web.py` in section 9.4 passes; the golden checkpoint file is produced from the fixture and **frozen** (the commit message states the reducer's actual words for each reason); `pytest tests/test_web.py tests/test_web_host_gate.py tests/test_console2_web.py tests/test_work_board_reducer.py tests/test_work_board_feed.py` still passes unchanged; `grep -n "subprocess" src/agenttalk/compare_evidence.py` prints nothing; the only threading code added to `web.py` is the 12 lines of section 6.
-- **Done means:** the above, plus a short `docs/COMPARE-VIEW.md` "API reference" section copying section 6 (so the next reader has one place), plus the reply names the three response sizes measured on the fixture.
-- **ESTIMATE:** about 330 lines of product code (`compare_evidence.py` 190, `web.py` 140), 470 of tests; 4 to 8 turns plus one rework round; 3 to 8 EUR (ASSUMPTION).
-
-### Work order 3: the page, the model, the demonstration
-
-- **Files (new):** `src/agenttalk/web_static/compare.css`, `compare-model.js` (pure; dual Node and browser like `console2-board-model.js`, FACT: `docs/STEP-WORK-BOARD.md:17`), `compare.js`, `tests/compare_model.test.mjs`, `tests/compare_view.test.mjs`, `docs/COMPARE-VIEW.md` (operator guide in plain words: what the page shows, how to register, how to read the banner, what the limits are, how to run the checkpoint).
-- **Files (edited):** `tests/test_console2_browser.py` or a new `tests/test_compare_browser.py` (the saved-store-to-DOM test; skipped with a stated reason if no browser is installed); `CHANGELOG.md` (extend the entry).
-- **Acceptance:** every `.mjs` test named in section 9.4 passes under `node --test`; the page renders every state of section 2.2 against canned API payloads; the saved-store-to-DOM test passes on the checkpoint fixture; the source grep forbids `innerHTML` and friends; `pytest tests/test_console2_web.py` passes unchanged; **the lead runs the checkpoint of section 9.2** and the result (both readers' answers, elapsed minutes, spend) is written to `docs/COMPARE-VIEW.md` under "Checkpoint 1" by the lead, not the builder.
-- **Done means:** the above, plus screenshots of the list page, the detail page on the checkpoint fixture, and one error state, saved under `docs/images/` (small PNGs, no personal data).
-- **ESTIMATE:** about 760 lines of product code (`compare.js` 420, `compare-model.js` 200, `compare.css` 140), 400 of tests; 6 to 10 turns plus one or two rework rounds; 4 to 10 EUR (ASSUMPTION).
-
-### Totals and the question "how much work is it?"
-- **ESTIMATE:** product code about 1,500 lines, tests about 1,400 lines, docs about 250 lines; three builder orders and three Codex reads; **8 to 25 EUR** of builder spend (ASSUMPTION; recorded cheap turns today are 0.4 to 1.0 EUR for a read, and an open ledger line is a ceiling, not a charge); **about a day and a half** of elapsed time (ESTIMATE: three orders of 3 to 6 hours each, with the reads between them).
-- **Cheaper alternative** (the one the challenge named): the editor's own diff plus a one-page index that the lead writes by hand. **ESTIMATE:** one to two hours, no new code. That is the second reader's material at the checkpoint.
+**Existing tests kept green:** `tests/test_lock_order.py:80-86` (updated), `tests/test_console2_web.py` (unchanged), `tests/test_work_board_reducer.py`, `tests/test_work_board_feed.py` (unchanged), and the envelope-snapshot tests that exist today (the added method must not change them).
 
 ---
 
-## 11. Risks I see, and how the design answers them
+## 11. The work orders
+
+Each order is for the one builder (`qwen-agenttalk-dev-2`); `codex-agenttalk-reviewer-1` reads the commit afterwards. **Standing rules for every order:** the fixture and the agenttalk repository only; no client file is opened; local branch only; run the named tests and the existing suites listed; reply with the head SHA copied from `git rev-parse HEAD`; stop and report when the order's acceptance tests pass or after 12 turns, whichever is first (ASSUMPTION: a turn cap is the only brake the builder can apply itself; section 11.2 says who watches spend).
+
+### Work order 1: the thin end-to-end slice (then the checkpoint)
+
+Scope: **snapshot plus CLI, the evidence join for one comparison, the three GET endpoints, and a minimal page** with the status rule of 7.4 and the lossless rows of 5.6, on the synthetic fixture. **Not in WO1:** `amend`, `remove`, `--reconcile`, withholding by file name, the symlink and junction checks beyond a plain regular-file check, the per-file states other than text and binary, "Show next 400 rows", the browser projection test, screenshots.
+
+- **Files (new):** `src/agenttalk/compare_git.py` (environment, allowlist, `_run`, calls C0-C11, limits), `src/agenttalk/compare_snapshot.py` (register, list, show, row builder, readers, strict publication, the lock), `src/agenttalk/compare_evidence.py` (pure: binding checks, status, history, tasks), `src/agenttalk/web_static/compare.css`, `compare-model.js`, `compare.js` (minimal), `tests/compare_fixture.py` (repository, story, F1-F3), `tests/test_compare_git.py`, `tests/test_compare_snapshot.py`, `tests/test_compare_evidence.py`, `tests/test_envelope_snapshot_compare_view.py`, `tests/test_compare_web.py`, `tests/compare_model.test.mjs`, `tests/compare_view.test.mjs`, goldens under `tests/golden/`.
+- **Files (edited):** `src/agenttalk/cli.py` (`compare register|list|show`, modelled on `cmd_board` at `:8611`, parser near `:16703`); `src/agenttalk/envelope_snapshot.py` (the one added `compare_view` method, next to `board()` at `:378`); `src/agenttalk/web.py` (docstring route list; `_COMPARE_*` constants and `_compare_slot`; the routes after `/api/work-board` at `:5098-5109`; `render_compare()` next to `/v2` at `:5206-5209`; the three asset names at `:810-820`); `tests/test_lock_order.py:80-86`; `docs/LOCK-ORDER.md`; `CHANGELOG.md` (an Unreleased "Added" entry in plain words).
+- **Does not touch:** `work_board.py`, `work_board_feed.py`, `work_board_facts.py`, `_atomic.py`, `console2*.js`.
+- **Step 1 (before any code):** read `janitor.py`, `doctor.py`, `recovery.py` and `docs/BACKUP.md` for anything that enumerates the store; report in the commit message what the snapshots do there (D3).
+- **Acceptance:** every test named in section 10 for the files above, **except** those marked WO2 below, passes; `pytest tests/test_work_board_facts.py tests/test_lock_order.py tests/test_web.py tests/test_web_host_gate.py tests/test_console2_web.py tests/test_work_board_reducer.py tests/test_work_board_feed.py` and the existing envelope-snapshot tests still pass unchanged; `node --test` passes the two `.mjs` files; `agenttalk compare register` on the fixture prints the new id, a second run prints the same id; the page on the checkpoint fixture shows the status banner, the file list, one side-by-side file and the rationale panel; **`grep -n "subprocess\|Popen" src/agenttalk/compare_evidence.py src/agenttalk/web.py` prints nothing new**; the only threading code added to `web.py` is the gate of section 6.
+  *WO2 tests (not required in WO1):* amend, remove and reconcile tests; withheld, symlink, submodule, mode-only and missing-object states; junction containment; the full list of page states beyond loading, ok, not found and error.
+- **Done means:** the above, plus `git diff --stat` touches only the listed files, plus the commit message lists the measured worst-case time of the 2,000-line row builder and the measured overshoot of the runaway-child test.
+- **ESTIMATE:** about 1,000 lines of product code (`compare_git.py` 220, `compare_snapshot.py` 330, `compare_evidence.py` 230, `web.py` 120, `envelope_snapshot.py` 30, CLI 70, JS and CSS 450 of which minimal) and 950 of tests (the checkpoint needs the fixtures, goldens and one real-process race); about 12 turns including one rework round after the read. **6 to 10 EUR of Qwen spend, with a hard allowance of 10 EUR for WO1 including its rework round** (ASSUMPTION: this is the order most likely to reach the allowance; if the lead wants it thinner, drop the task rows of 7.6 to WO2 and say so before dispatch).
+
+### Checkpoint (after WO1's read and rework)
+Section 9.3. **WO2 and WO3 are dispatched only after a GO there.**
+
+### Work order 2: lifecycle and hardening (after a GO)
+- **Files:** `compare_snapshot.py` (amend, remove, reconcile, withheld paths, symlink/junction containment, all per-file states), `compare_git.py` (any gap the read found), tests for the WO2 list, `docs/LOCK-ORDER.md` if the lock site count changes.
+- **Acceptance:** every WO2 test of section 10 passes; the WO1 suites stay green.
+- **Done means:** the above plus a manual note in `docs/COMPARE-VIEW.md` on how a full registry is reconciled.
+- **ESTIMATE:** about 380 lines of product code and 500 of tests; 3 to 6 EUR (ASSUMPTION).
+
+### Work order 3: the finished page, docs, screenshots (after a GO)
+- **Files:** `compare.js`, `compare-model.js`, `compare.css` (all states of 2.2, "Show next 400 rows", keyboard order, the project selector on every link), `tests/test_compare_browser.py` (the saved-store-to-DOM test; skipped with a stated reason if no browser exists), the `.mjs` tests, `docs/COMPARE-VIEW.md` (an operator guide in plain words: what the page shows, how to register, how to read the status, the limits, the backup consequence, how to run the checkpoint), `CHANGELOG.md`.
+- **Acceptance:** every `.mjs` test of section 10 passes; `pytest tests/test_console2_web.py` passes unchanged; the saved-store-to-DOM test passes on the checkpoint fixture.
+- **Done means:** the above plus screenshots of the list, the checkpoint detail page and one error state under `docs/images/` (small PNGs, no personal data).
+- **ESTIMATE:** about 400 lines of product code and 250 of tests; 3 to 6 EUR (ASSUMPTION).
+
+### 11.1 Totals (corrected, reader finding 13)
+- **ESTIMATE:** product code about 1,780 lines (1,000 + 380 + 400), tests about 1,700 lines (950 + 500 + 250), docs about 250 lines.
+- **Spend:** the sum of the three ranges is **12 to 22 EUR** (6-10 + 3-6 + 3-6), of which WO1 has the hard allowance of 10 EUR. These are guesses with no measured build workload behind them.
+- **Elapsed time:** about two days including the reads and the checkpoint (ESTIMATE).
+- **Cheaper alternative:** an editor diff plus a hand-written index page, one to two hours and no new code. That is reader 2's material.
+
+### 11.2 How spend is attributed to this seat, and what is measurable
+- **FACT:** the child-turn receipts the gateway exposes (`ovh_gateway.py:3960-3970`) carry `seq`, `closed_at`, `calls`, tokens, `actual_micro_eur`, `charge_period`, `outcome` and a hashed lease reference. **They carry no seat name.** An open ledger line is a reservation ceiling, not money spent.
+- **Measurable (ASSUMPTION that the lead can read receipts with `agenttalk gateway receipts --json --after <seq>`, FACT that the command exists at `cli.py:10305-10347`):** the lead notes the highest receipt `seq` **before dispatching** the order and after the builder's reply and after each rework turn, and sums `actual_micro_eur` of the receipts in between. That is the settled spend of **every** Qwen turn in the window, **not only this seat's**.
+- **Contamination:** if another Qwen seat runs during the window, the figure is an **upper bound** for this order. The lead either keeps other Qwen seats idle during WO1 or reports the figure as an upper bound. The order's own per-seat attribution cannot be proven from receipts alone; it can be cross-checked by the builder's own turn count (12-turn cap) and the commit times.
+- **Stop rule:** the lead reads the receipts after each builder turn; at **10 EUR** (settled sum for the window, including the rework round after the read) the lead stops and reports. The gateway cap is not changed. The Codex read is another vendor's cost and is not in this figure.
+
+---
+
+## 12. Risks, and how the design answers them
 
 | # | Risk | Answer |
 |---|---|---|
-| R1 | A hostile repository tries to run code through a diff driver, a filter, a hook or fsmonitor | closed allowlist; only plumbing; `--no-ext-diff --no-textconv`; `cat-file --batch` without `--filters`; `core.fsmonitor=false`; global and system config ignored; a planted-marker test for each |
-| R2 | The page shows a green approval for a head nobody reviewed | one pure banner function; `approved` only by rule 3; golden fixture with an old-head approval; the list page reuses the same function |
-| R3 | A change breaks console v2 (its board tests are exact-equality tests: FACT `tests/test_work_board_reducer.py:186,342`; `tests/test_console2_browser.py:224`) | the design adds no field to the reducer or the feed and no change to `console2*.js` (D5) |
-| R4 | The builder introduces a race | the only thread-related code is the 12-line semaphore of section 6 (copied, not designed); registration uses the existing lock helper with `timeout=0`; the Git module is single-threaded with `input=` calls |
-| R5 | The snapshot hides that the repository moved on | by design: the comparison names two commit ids and says so; the page shows `created_at`; "follow a branch" is deferred |
-| R6 | Windows differences (NUL device, paths, `git.exe` lookup, CRLF) | section 5.3 notes; a Windows test; CRLF is bytes-in bytes-out and recorded as a flag, never as a change |
-| R7 | A partial clone or shallow checkout makes missing objects look like deletions | both refused at registration; `missing_object` is its own state |
-| R8 | The recorded rationale is mistaken for complete reasoning | the panel is titled "Recorded rationale", carries the sentence "what the team wrote down about this work; not a full account", and the excerpt is capped |
-| R9 | Evidence changes after the snapshot (new reviews) | evidence is **not** snapshotted: it is read live from the cached board on each request; only code and commit facts are immutable |
-| R10 | The store directory grows | 20 comparisons x at most 16 MiB; the registry refuses the 21st; the operator removes by deleting a directory (message prints the path) |
+| R1 | A hostile repository runs code through a diff driver, filter, hook or fsmonitor | closed allowlist; plumbing only; `--no-ext-diff --no-textconv`; `cat-file --batch` without `--filters`; fsmonitor off; global and system config ignored; a planted-marker test for each |
+| R2 | The page shows a green status for a head nobody reviewed, or an old approval | status only from the board's placement after seven binding checks; history never green and never "approved"; F1, F2, F3 and the checkpoint story |
+| R3 | A change breaks console v2 | no change to the reducer, the feed or `console2*.js`; `web.py` and `envelope_snapshot.py` are edited, so the v2, work-board and snapshot suites are in the acceptance list and must pass unchanged (the new assets are separate files, but shared code is not isolated by that) |
+| R4 | The builder introduces a race | the only thread code is the copied 12-line gate; the Git module is single-threaded with file-based I/O; one lock for writers; strict publication order for readers |
+| R5 | The snapshot hides that the repository moved on | by design: two ids and `created_at` are shown; "follow a branch" is deferred |
+| R6 | Windows differences (NUL device, paths, `git.exe` lookup, CRLF, atomic rename, junctions) | section 5 notes; Windows-specific tests; **CRLF is read as bytes and kept inside the line for comparison, so a line-ending change is a visible change; only the display cell shows a line without its trailing CR** |
+| R7 | A partial clone or shallow checkout makes missing objects look like deletions | refused at registration; `missing_object` is its own state |
+| R8 | The recorded rationale is mistaken for complete reasoning | titled "Recorded rationale", carries "what the team wrote down about this work; not a full account"; excerpts capped |
+| R9 | Evidence changes after the snapshot | evidence is **not** snapshotted: it is read from the cached board on each request, from one generation; only code and commit facts are immutable |
+| R10 | The store grows | 20 comparisons of at most 16 MiB; the 21st is refused; `compare remove` and `--reconcile` free room |
+| R11 | Comparison snapshots end up in backups | stated in 5.8 and the operator guide; `compare remove` does not purge earlier backups |
+| R12 | WO1 is large for a 10 EUR allowance | the allowance and the stop rule are explicit (11.2); the cut line is named in WO1 |
 
 ---
 
-## 12. What this design deliberately leaves out (C6) and what would follow
-Line-pinned findings; round-by-round playback; a history backfill; syntax colouring; rename detection; intra-line highlighting; following a branch; a command to add a repository alias; a link from console v2; comparing non-linear ranges; any write action. Each can be a later slice **only if** the checkpoint shows the linkage helps.
+## 13. Left out on purpose (C6), and what would follow
+Line-pinned findings; round-by-round playback; a history backfill; syntax colouring; rename detection; intra-line highlighting; following a branch; a command to add a repository alias; a link from console v2; non-linear ranges (merge commits are refused); a content-selection policy for confidential repositories; any write action. Each can be a later slice **only if** the checkpoint shows the linkage helps.
 
-## 13. Self-check before sending this design to the reader
-- Every line reference was read at `bdc775cb`; the reader should spot-check at least: `work_board.py:459-469`, `:147-172`, `:493-501`; `web.py:216-218`, `:801-829`, `:967-978`, `:4436-4454`, `:5098-5109`, `:5206-5221`; `work_board_facts.py:133-155`, `:158-185`, `:229-233`; `lock_order.py:12-47`; `tests/test_lock_order.py:80-86`.
-- Claims marked ASSUMPTION that the reader can settle quickly: `GIT_CONFIG_GLOBAL=NUL` on Git for Windows; `diff-tree --end-of-options` on Git 2.32; nothing in `janitor.py` or `doctor.py` flags an unknown `.agenttalk/compare/` directory; Apple Git's version.
-- **What I did not do:** I ran no Git command and no test, and wrote no code (design round). The command forms in section 5.3 are therefore **untested**; work order 1 tests each of them on the three platforms the lead has.
+## 14. Self-check before sending this design to the reader
+- Line references read at `bdc775cb`; the reader should spot-check: `work_board.py:24`, `:240-241`, `:453`, `:459-469`, `:474`, `:480-481`, `:538-592`, `:656-662`; `envelope_snapshot.py:321-350`, `:378-397`; `web.py:216-218`, `:801-829`, `:967-978`, `:4436-4454`, `:4889-4908`, `:5098-5109`; `work_board_facts.py:133-155`, `:312-313`, `:349-350`; `_atomic.py:46-51`, `:60-81`; `recovery.py:162-173`; `ovh_gateway.py:3960-3970`; `lock_order.py:12-47`; `tests/test_lock_order.py:80-86`.
+- ASSUMPTIONS the reader can settle quickly: `GIT_CONFIG_GLOBAL=NUL` on Git for Windows; `diff-tree --end-of-options` on Git 2.32; Apple Git's version; that `agenttalk gateway receipts` is usable by the lead in the way 11.2 describes; that nothing else enumerates the store directory in a way the snapshots disturb (I read `recovery.py` only; `janitor.py` and `doctor.py` are WO1 step 1).
+- **What I did not do:** I ran no Git command and no test, and wrote no code. The command forms in 5.3 are therefore **untested** (the reader ran C9 successfully on Windows in the round-1 read); WO1 tests each one.
