@@ -656,7 +656,17 @@ def terminal_responses(messages: list[Message], requester: str, *,
             responded, _, replies = _broadcast_responses(group, bcast)
             pending = [m.recipient for m in bcast if m.recipient not in responded and m.recipient not in retired]
             if replies and not pending:
-                found[rid] = (min(bcast, key=lambda m: m.id), replies[-1])
+                # the reply that FIRST completed the audience stays the result: a later follow-up from a member must
+                # not change its id (relay closings are keyed by it)
+                audience = {m.recipient for m in bcast}
+                heard: set[str] = set()
+                completing = replies[-1]
+                for reply in replies:
+                    heard.add(reply.sender)
+                    if all(a in heard or a in retired for a in audience):
+                        completing = reply
+                        break
+                found[rid] = (min(bcast, key=lambda m: m.id), completing)
             continue
         opener = next((m for m in group if m.kind in OPENER_KINDS), None)
         if opener is None or opener.sender != requester:

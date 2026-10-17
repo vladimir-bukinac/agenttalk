@@ -70,15 +70,17 @@ def test_a_managed_leads_completion_says_so(tmp_path: Path) -> None:
 
 def test_a_sweep_writes_only_the_machine_record_of_the_machine_parts(tmp_path: Path) -> None:
     s = _store(tmp_path)
+    s.set_managed_lead_loop("lead")
+    lease = s.acquire_lead_loop_lease("lead", owner_pid=1, ttl_seconds=600)
     routine.complete(s, "lead", "gates", now_epoch=1.0)
-    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T10:00:00Z", lease_id="L1",
+    assert routine.record_sweep(s, "lead", controller_start="2026-10-17T10:00:00Z", lease_id=lease["lease_id"],
                                 attempted=ALL_SECTIONS, failed=[], now_epoch=100.0)
     rec = routine.read(s, "lead")
     assert _judged(rec, "gates")["at"].startswith("1970-01-01T00:00:01")             # untouched by the sweep
     assert set(rec["parts"]) == {"gates", "bus", "relay"} and not set(rec["parts"]) & set(routine.MANUAL_PARTS)
     machine = _machine(rec, "bus")
     assert machine["kind"] == "sweep" and machine["mode"] == "managed"
-    assert machine["controller_start"] == "2026-10-17T10:00:00Z" and machine["lease_id"] == "L1"
+    assert machine["controller_start"] == "2026-10-17T10:00:00Z" and machine["lease_id"] == lease["lease_id"]
 
 
 def test_a_sweep_keeps_the_leads_own_completion_of_the_same_part(tmp_path: Path) -> None:
@@ -137,11 +139,15 @@ def test_an_old_controllers_write_is_refused_and_leaves_the_newer_record_unchang
 
 def test_a_controller_whose_lease_has_moved_on_is_refused_inside_the_lock(tmp_path: Path) -> None:
     s = _store(tmp_path)
+    s.set_managed_lead_loop("lead")
+    lease = s.acquire_lead_loop_lease("lead", owner_pid=1, ttl_seconds=600)
     assert not routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS,
-                                    failed=[], lease_id="old", still_owner=lambda: False)
+                                    failed=[], lease_id="old", still_owner=lambda: True)
+    assert not routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS,
+                                    failed=[], lease_id=lease["lease_id"], still_owner=lambda: False)
     assert not routine.record_path(s, "lead").exists()
     assert routine.record_sweep(s, "lead", controller_start="2026-10-17T12:00:00Z", attempted=ALL_SECTIONS,
-                                failed=[], lease_id="live", still_owner=lambda: True)
+                                failed=[], lease_id=lease["lease_id"], still_owner=lambda: True)
 
 
 def test_a_torn_or_missing_record_reads_as_nothing_recorded(tmp_path: Path) -> None:

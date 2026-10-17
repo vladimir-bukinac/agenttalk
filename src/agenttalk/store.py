@@ -3814,6 +3814,11 @@ class Store:
                 raise ValueError("relay_to names %s, which %s not on the roster (or is the sender itself)"
                                  % (", ".join(repr(u.strip()) for u in unknown),
                                     "is" if len(unknown) == 1 else "are"))
+        if kind in OPENER_KINDS and "," in str(meta.get("request_id") or ""):
+            # waiting_on and relay_to are comma-separated lists: an id with a comma could never be waited on
+            # unambiguously (it would split into two unrelated ids), so it is refused where a request opens
+            raise ValueError(
+                "request_id %r contains a comma; waiting_on lists are comma-separated" % meta["request_id"])
         if kind in OPENER_KINDS and "epoch_at_send" not in meta:
             meta["epoch_at_send"] = self.current_epoch()
         msg = Message(

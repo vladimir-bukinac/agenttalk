@@ -82,12 +82,20 @@ def read(store: Store, agent: str) -> dict:
 
 
 def update(store: Store, agent: str, mutate: Callable[[dict], None], *, controller_start: str | None = None,
-           still_owner: Callable[[], bool] | None = None) -> bool:
-    """Serialised read-modify-write. A CONTROLLER write passes its own ``controller_start`` (and ``still_owner``,
-    which re-checks inside the lock that its lease is still the live one): it is refused (False) when the stored
-    record belongs to a LATER controller start or the lease has moved on. Returns True when the record was written."""
+           still_owner: Callable[[], bool] | None = None, lease_id: str | None = None) -> bool:
+    """Serialised read-modify-write. A CONTROLLER write passes its own ``controller_start`` and the ``lease_id`` of the
+    lease it acquired: it is refused (False) when the stored record belongs to a LATER controller start or the live
+    lease is not its own. The lease lock (rank 190) is held through the whole write, outside the record lock (rank
+    210, ascending order), so a replacement cannot acquire the lease between the ownership check and the write.
+    ``still_owner`` is an extra caller-supplied check. Returns True when the record was written."""
+    import contextlib
     store.state_dir.mkdir(parents=True, exist_ok=True)
-    with store._exclusive_lock(_lock_path(store, agent), timeout=5.0, what="lead routine record"):
+    with contextlib.ExitStack() as stack:
+        if controller_start is not None and lease_id is not None:
+            stack.enter_context(store._lead_loop_lease_lock(agent))
+        stack.enter_context(store._exclusive_lock(_lock_path(store, agent), timeout=5.0, what="lead routine record"))
+        if lease_id is not None and (store.read_lead_loop_lease(agent) or {}).get("lease_id") != lease_id:
+            return False
         record = read(store, agent)
         stored = record.get("controller_start")
         if controller_start is not None:
@@ -147,7 +155,8 @@ def record_sweep(store: Store, agent: str, *, controller_start: str, attempted: 
                 slot["machine"] = {"at": at, "kind": "sweep", "mode": "managed", "controller_start": controller_start,
                                    "lease_id": lease_id, "failed": [], "unattempted": [], "covered": list(needed)}
 
-    return update(store, agent, mutate, controller_start=controller_start, still_owner=still_owner)
+    return update(store, agent, mutate, controller_start=controller_start, still_owner=still_owner,
+                  lease_id=lease_id)
 
 
 def status_field(store: Store, agent: str, *, now_epoch: float | None = None) -> dict | None:

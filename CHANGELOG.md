@@ -30,7 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   routine record keeps the sweep's findings and the lead's own word apart for every part.
   A hand-off is no longer closed by an older one, a cancelled or incomplete request no longer produces
   one, a mistyped seat name in `relay_to` is refused when the request is sent, and the reminders stay
-  fair when more than twenty hand-offs are open.
+  fair however many hand-offs are open. A seat that waits again can be answered again, the operator is
+  told about an overdue hand-off at the third reminder and then once a day, and a request id with a comma
+  is refused when the request is opened.
   (Technical detail: derived obligations in `lead_relay.py`; `Store.send_operation` gained a
   `precheck` run inside the publication lock; `Store.archive_messages_batched` recomputes the
   protected floor under the rank-100 and rank-160 locks; routine record in

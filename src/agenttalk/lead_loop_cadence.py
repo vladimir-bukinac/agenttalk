@@ -220,12 +220,14 @@ def build_cadence_snapshot(store, agent: str, *, now_epoch: float,
 
     # owed hand-offs of finished results (derived from the bus; lead loop, slice 1)
     try:
-        # every open obligation, not the first few: the per-sweep bound is applied AFTER the reminder dedup
-        # (cadence_actionable), so an old obligation that stays open cannot starve the newer ones
+        # EVERY open obligation: the per-sweep bound is applied AFTER the reminder dedup (cadence_actionable) and the
+        # prompt gets a bounded copy (snapshot_for_prompt), so an old obligation that stays open cannot starve a newer
+        # one at any count. The one remaining bound is memory: one small record per open hand-off, which the live
+        # history (compaction) already bounds.
         snap["relay"] = [
             {"seat": o.seat, "request_id": o.request_id, "result_id": o.result_id, "state": o.state, "since": o.since,
              "declaration_id": o.declaration_id, "age_seconds": _relay.age_seconds(o, now_epoch)}
-            for o in _relay.open_obligations(_relay.obligations_for(store, agent))[:RELAY_SNAPSHOT_CAP]]
+            for o in _relay.open_obligations(_relay.obligations_for(store, agent))]
     except Exception:  # noqa: BLE001
         snap["relay"] = []
         failed.append("relay")
@@ -235,8 +237,19 @@ def build_cadence_snapshot(store, agent: str, *, now_epoch: float,
     return snap
 
 
-RELAY_SNAPSHOT_CAP = 500        # open hand-offs one snapshot carries
 RELAY_ITEMS_PER_SWEEP = 20      # relay items one sweep turn raises (the rest stay due for the next sweep)
+RELAY_PROMPT_LIMIT = 20         # relay entries the prompt copy of the snapshot lists (the total is stated)
+
+
+def snapshot_for_prompt(snapshot: dict) -> dict:
+    """The snapshot as the model prompt carries it: the same data with the relay list cut to ``RELAY_PROMPT_LIMIT``
+    entries and ``relay_open_total`` giving the real count. The sweep decides on the FULL snapshot; only what is
+    shown is bounded (the due items arrive separately, already bounded per sweep)."""
+    out = dict(snapshot)
+    relay_list = list(snapshot.get("relay") or [])
+    out["relay"] = relay_list[:RELAY_PROMPT_LIMIT]
+    out["relay_open_total"] = len(relay_list)
+    return out
 
 
 def bucket_value(value: object) -> int:
@@ -303,7 +316,7 @@ def cadence_actionable(snapshot: dict, cstate: dict, *, now_epoch: float,
         if bucket <= 0 or bucket <= bucket_value(relay_last.get(key)):
             continue
         due.append({"type": "relay_overdue", "key": key, "bucket": bucket,
-                    "escalate": bucket >= _relay.RELAY_ESCALATE_BUCKET, "seat": ob.get("seat"),
+                    "escalate": _relay.escalates(bucket), "seat": ob.get("seat"),
                     "request_id": ob.get("request_id"), "result_id": ob.get("result_id"),
                     "state": ob.get("state"), "age_seconds": age})
     # bound the turn, not the snapshot: the oldest first, and what does not fit stays due for the next sweep

@@ -13090,7 +13090,6 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
                     written = lead_routine.record_sweep(
                         store, agent, controller_start=str(lease.get("acquired_at") or ""),
                         lease_id=lease_id,
-                        still_owner=lambda: (store.read_lead_loop_lease(agent) or {}).get("lease_id") == lease_id,
                         attempted=list(snap.get("attempted_sections") or []),
                         failed=list(snap.get("failed_sections") or []), now_epoch=now_epoch)
                     if not written:
@@ -13106,7 +13105,7 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
                 _note_sweep()
                 return wloop.CadenceResult(ran=True, ok=True, drove_turn=False)
             try:
-                ok = bool(cadence_drive(snap, items))
+                ok = bool(cadence_drive(_cad.snapshot_for_prompt(snap), items))
             except _LeadLoopLeaseLost:
                 raise
             except Exception:  # noqa: BLE001 - any drive error is a cadence failure

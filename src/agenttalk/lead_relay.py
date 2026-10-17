@@ -51,7 +51,7 @@ OUTCOME_NOT_NEEDED = "not-needed"
 OUTCOME_UNRESOLVED = "unresolved"
 
 RELAY_DEADLINE_SECONDS = 600.0     # ESTIMATE: twice the default sweep interval
-RELAY_ESCALATE_BUCKET = 3          # the third reminder also goes to the operator
+RELAY_ESCALATE_BUCKET = 3          # the third reminder also goes to the operator, then one reminder a day (below)
 NOTICE_LIMIT = 10
 UNRESOLVED_TEXT = "unresolved: result no longer in live history"
 
@@ -139,14 +139,17 @@ def is_closing(m: Message, lead: str) -> bool:
     outcome = meta.get("relay_outcome") or OUTCOME_FORWARDED
     if outcome not in (OUTCOME_FORWARDED, OUTCOME_NOT_NEEDED, OUTCOME_UNRESOLVED):
         return False
-    if meta.get("relay_nonce") != handoff_nonce(lead, ref, m.recipient, outcome):
+    if meta.get("relay_nonce") != handoff_nonce(lead, ref, m.recipient, outcome, str(meta.get("relay_decl") or "")):
         return False
     return outcome != OUTCOME_NOT_NEEDED or bool((m.body or "").strip())
 
 
 def _closings(messages: list[Message], lead: str) -> tuple[dict[tuple[str, str], Message],
                                                            dict[tuple[str, str], Message]]:
-    """``({(relay_of, seat): closing}, {(request id, seat): closing})`` of the lead's valid closing messages.
+    """``({(kind, relay_of, seat): closing}, {(request id, seat): closing})`` of the lead's valid closing messages.
+
+    ``kind`` is "result" (a forwarded or not-needed closing of a result id) or "unresolved" (a note about a request
+    id): the two id namespaces never meet, so a note can not stand in for a real result's closing.
 
     The second map holds forwarded and not-needed closings by the request they name, so a declaration whose
     request and result were archived first (compaction runs in batches) still finds its closing."""
@@ -156,7 +159,8 @@ def _closings(messages: list[Message], lead: str) -> tuple[dict[tuple[str, str],
         if not is_closing(m, lead):
             continue
         meta = _meta(m)
-        by_ref[(meta["relay_of"], m.recipient)] = m
+        kind = "unresolved" if meta.get("relay_outcome") == OUTCOME_UNRESOLVED else "result"
+        by_ref[(kind, meta["relay_of"], m.recipient)] = m
         req = meta.get("relay_request")
         if isinstance(req, str) and req and meta.get("relay_outcome") != OUTCOME_UNRESOLVED:
             by_request[(req, m.recipient)] = m
@@ -182,7 +186,7 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
         is_cancelled = bool(cancel_id and cancel_id > decl.id)
         if rid in results:
             result = results[rid][1]
-            closing = closings.get((result.id, seat))
+            closing = closings.get(("result", result.id, seat))
             if closing is not None and closing.id <= decl.id:
                 closing = None      # an older hand-off does not answer a declaration made after it
             since = decl.ts if _epoch(decl.ts) > _epoch(result.ts) else result.ts
@@ -199,7 +203,7 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
         elif rid in openers or rid in foreign:
             continue    # the result has not arrived yet (or the request is another seat's): nothing owed now
         else:
-            closing = closings.get((rid, seat))
+            closing = closings.get(("unresolved", rid, seat))
             kept = closings_by_request.get((rid, seat))
             if (closing is not None and closing.id > decl.id
                     and _meta(closing).get("relay_outcome") == OUTCOME_UNRESOLVED):
@@ -220,44 +224,20 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
     return found
 
 
-def _retained_closing_for(m: Message, rid: str) -> bool:
-    """True when the (valid) closing ``m`` answers a declaration for request ``rid`` that has left live history:
-    an unresolved note names the request itself, a forwarded or not-needed closing names it as ``relay_request``."""
-    meta = _meta(m)
-    if meta.get("relay_outcome") == OUTCOME_UNRESOLVED:
-        return meta.get("relay_of") == rid
-    return meta.get("relay_request") == rid
-
-
 def derive_for_seat(messages: list[Message], seat: str, *, retired: Iterable[str] = ()) -> list[Obligation]:
-    """What each lead's derivation says about the declarations of ``seat`` (the read-only ``relay waiting`` view)."""
+    """What the leads' derivations say about the declarations of ``seat`` (the read-only ``relay waiting`` view).
+
+    One projection, not two: the seat view runs the lead derivation for every lead that opened a request or that a
+    declaration of ``seat`` is addressed to, so cancels, closings and retained closings follow the same owner
+    scope in both views."""
     msgs = sorted(messages, key=lambda m: m.id)
     leads = {m.sender for m in msgs if m.kind in OPENER_KINDS}
+    leads |= {m.recipient for m in msgs if m.sender == seat and _csv(_meta(m).get("waiting_on"))}
     seen: dict[tuple[str, str, str], Obligation] = {}
     for lead in sorted(leads):
         for ob in derive(msgs, lead, retired=retired):
             if ob.seat == seat:
                 seen[(ob.lead, ob.request_id, ob.seat)] = ob
-    orphan_rids = {rid for m in msgs if m.sender == seat for rid in _csv(_meta(m).get("waiting_on"))}
-    known = {ob.request_id for ob in seen.values()}
-    groups = _threads.group_messages_by_request_id(msgs)
-    live_rids = {rid for rid, group in groups.items() if any(m.kind in OPENER_KINDS for m in group)}
-    for rid in sorted(orphan_rids - known - live_rids):
-        decl = next(m for m in reversed(msgs) if m.sender == seat and rid in _csv(_meta(m).get("waiting_on")))
-        cancel = [m for m in msgs if m.sender == seat and rid in _csv(_meta(m).get("waiting_off")) and m.id > decl.id]
-        closing = next((m for m in reversed(msgs) if m.recipient == seat and m.id > decl.id and is_closing(m, m.sender)
-                        and _retained_closing_for(m, rid)), None)
-        if closing is not None:
-            outcome = _meta(closing).get("relay_outcome")
-            state = (CLOSED_UNRESOLVED if outcome == OUTCOME_UNRESOLVED
-                     else CLOSED_NOT_NEEDED if outcome == OUTCOME_NOT_NEEDED else CLOSED_FORWARDED)
-            seen[(closing.sender, rid, seat)] = Obligation(closing.sender, seat, rid, _meta(closing).get("relay_of")
-                                                           if state != CLOSED_UNRESOLVED else None, state, decl.ts,
-                                                           decl.id, closing.id)
-        elif cancel:
-            seen[("?", rid, seat)] = Obligation("?", seat, rid, None, CANCELLED, decl.ts, decl.id)
-        else:
-            seen[("?", rid, seat)] = Obligation("?", seat, rid, None, UNRESOLVED, decl.ts, decl.id)
     return sorted(seen.values(), key=lambda o: (_epoch(o.since), o.request_id))
 
 
@@ -303,6 +283,12 @@ _SAFE_TOKEN = re.compile(r"[A-Za-z0-9._:@+=-]{1,128}")
 def _is_safe_token(value: object) -> bool:
     """A request id comes from another seat; a copyable command may carry it only when it is plainly shell-safe."""
     return isinstance(value, str) and _SAFE_TOKEN.fullmatch(value) is not None
+
+
+def escalates(bucket: int) -> bool:
+    """Whether the reminder of ``bucket`` also goes to the operator: the third (4 times the deadline), then only the
+    daily ones (bucket 5 and later). Bucket 4 (8 times the deadline) is a reminder to the lead alone."""
+    return bucket == RELAY_ESCALATE_BUCKET or bucket >= 5
 
 
 def _human_age(seconds: float) -> str:
@@ -373,10 +359,35 @@ def notice_for(store: Store, agent: str, *, now_epoch: float | None = None) -> s
     return "\n".join(lines)
 
 
-def handoff_nonce(lead: str, target: str, seat: str, outcome: str) -> str:
-    """Stable identity of one hand-off: one nonce per lead, result (or request, if unresolved) and recipient."""
+def handoff_nonce(lead: str, target: str, seat: str, outcome: str, generation: str = "") -> str:
+    """Stable identity of one hand-off: one nonce per lead, result (or request, if unresolved), recipient and
+    declaration generation (the id of the seat's current declaration; "" when the seat had not declared). A retry
+    inside one generation is the same hand-off; a seat that declares again is owed a new one."""
     kind = "unresolved" if outcome == OUTCOME_UNRESOLVED else "result"
-    return hashlib.sha256(("relay\0%s\0%s\0%s\0%s" % (lead, kind, target, seat)).encode("utf-8")).hexdigest()[:32]
+    text = "relay\0%s\0%s\0%s\0%s" % (lead, kind, target, seat)
+    if generation:
+        text += "\0" + generation
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:32]
+
+
+def _declaration_generation(store: Store, lead: str, seat: str, outcome: str, target: str) -> str:
+    """The id of the declaration this hand-off answers ("" when the seat has none): the publication identity of a
+    seat that waits again differs from the first one, so it can be closed again. When the declaration or the result
+    has left live history, the generation of the retained closing is reused, so an exact rerun is still the same
+    publication."""
+    msgs = sorted(store.valid_messages(), key=lambda m: m.id)
+    if outcome == OUTCOME_UNRESOLVED:
+        rid = target
+    else:
+        shown = next((m for m in msgs if m.id == target), None)
+        rid = _meta(shown).get("request_id") if shown is not None else None
+    declared, _, _ = _decisions(msgs, lead)
+    decl = declared.get((seat, rid)) if isinstance(rid, str) else None
+    if decl is not None:
+        return decl.id
+    kind = "unresolved" if outcome == OUTCOME_UNRESOLVED else "result"
+    retained = _closings(msgs, lead)[0].get((kind, target, seat))
+    return str(_meta(retained).get("relay_decl") or "") if retained is not None else ""
 
 
 def publish_handoff(store: Store, lead: str, seat: str, *, result_id: str | None = None,
@@ -408,7 +419,10 @@ def publish_handoff(store: Store, lead: str, seat: str, *, result_id: str | None
         if not text:
             raise RelayRefused("a reason (--none-needed --reason) is required" if outcome == OUTCOME_NOT_NEEDED
                                else "the decision text is required (-m)")
-    meta = {"relay_of": target, "relay_nonce": handoff_nonce(lead, target, seat, outcome)}
+    generation = _declaration_generation(store, lead, seat, outcome, target)
+    meta = {"relay_of": target, "relay_nonce": handoff_nonce(lead, target, seat, outcome, generation)}
+    if generation:
+        meta["relay_decl"] = generation
     if outcome != OUTCOME_FORWARDED:
         meta["relay_outcome"] = outcome
     if outcome != OUTCOME_UNRESOLVED:
@@ -431,7 +445,9 @@ def publish_handoff(store: Store, lead: str, seat: str, *, result_id: str | None
                 raise RelayRefused("request %s is still in live history; use --result-id once its result arrives"
                                    % request_id)
             return
-        found = {terminal.id: rid for rid, (_, terminal) in _threads.terminal_responses(msgs, lead).items()}
+        retired_now = set(store.retired_agents())
+        found = {terminal.id: rid
+                 for rid, (_, terminal) in _threads.terminal_responses(msgs, lead, retired=retired_now).items()}
         if result_id not in found:
             raise RelayRefused("%s is not a finished result of a request opened by %s in live history"
                                % (result_id, lead))
