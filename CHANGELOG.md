@@ -10,6 +10,255 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A new skill, `thinking-games`, for the few moments when a different way of thinking helps.**
+  Some decisions get better when someone looks at them from a different angle. The new skill gives
+  agents short thinking games, and roleplay cards to think from, for a few named moments only: at
+  the start of a new design, before it is challenged (the challenge skill is where an independent
+  agent asks whether the work should be done at all); after two failed attempts on the same
+  assumption, outside a round of fixes ordered by a review (then only the "reality probe", which
+  ends in a real test); and as a side round on product ideas, after agents have given their ideas
+  the plain way. It is not for routine work, fixes ordered by a review, releases or every task. One
+  game per moment is enough (in a team round, one per pair or group).
+
+  How it works: two lists of ideas are written from the same short description of the decision,
+  one the usual way and one with a game. The second list is written by another agent, or by a fresh
+  one that never saw the first list; when that is not possible, the round is labelled "not
+  independent". Every idea says what it would do, what it should improve, how it would most likely
+  fail, and a cheap way to test it. The lists are merged, and someone who wrote neither marks each
+  idea adopt, reject or already in the plan, with one line on why. A short quick start at the top
+  of the skill covers just these steps.
+
+  What is in it: thirteen games, for example "forbid the favourite" (plan without the obvious
+  answer, then bring it back), "pull one assumption" and "evidence from the future" (write the
+  support ticket from a future where the idea works). Twelve roleplay cards give a viewpoint to
+  think from, such as an attacker, an auditor, the on-call engineer woken at night or the person
+  who will make the decision. Five formats are for pairs or groups, such as a courtroom or a red
+  team against a blue team. In a team round, each pair or group picks a different game and works
+  alone before they compare.
+
+  The safety rules: what a roleplay card claims is a guess to be tested, never a fact. Tests and
+  probes run only on copies or test environments, never on live systems or anyone else's. A
+  simulated decision-maker is labelled as simulated, never speaks in the real person's name, never
+  replaces asking them, and never hides an option from them. "Nothing useful" is an accepted
+  result, a game never decides what is in scope, and whether to do the work at all stays with the
+  challenge skill.
+
+  Each round leaves a one-line score of what was adopted and which game or roleplay card it came
+  from. A card is judged only after at least five plays; one that never added a useful idea that
+  only it found can then be reworked or dropped. An honest note: the evidence is small. One blind
+  trial of three runs tried three of the games. The game list was never judged better than the
+  ordinary list, and once worse. The gain came from merging two independent lists, each of which
+  added useful ideas the other missed, and judging the lists took more agent time than playing
+  the game. The roleplay cards, the formats, the team round and the other ten games are untried. That a
+  game makes the second list more different than a second ordinary list would is a hope the scores
+  will test, not a finding.
+
+  What you will notice: nothing changes on its own. Agents are meant to use the skill only at those
+  moments, and it is meant to be named in a lead's work order (the written task a team lead gives
+  an agent).
+
+  What you need to do: run `agenttalk install-skills` to install it.
+
+  Technical details: `src/agenttalk/skills/devkit/thinking-games/SKILL.md` (category `production`,
+  `planning-artifact` evidence). It is listed in the shared routing index, section 3.2 of
+  `docs/ROLES-SKILLS-PROCEDURES.md`, the user manual's skill table and the devkit list in
+  `tests/test_install_skills.py`.
+
+- **A migration playbook, and the lessons behind it, now ship with agenttalk.** Everything the
+  maintainers' teams learned from their own migrations (Python 2 to 3, Django, PHP and Laravel, Java
+  and Spring, Docker and Kubernetes, payment code) used to live only in their own lesson stores,
+  so a new user started with none of it.
+
+  What you will notice: a new guide, `docs/MIGRATION-PLAYBOOK.md`, for a team that moves a
+  codebase to a newer framework, language version or platform and must show that it still behaves
+  the same. It has seven stages (assess, baseline, one step at a time, prove, concurrency and data,
+  packaging and runtime, review and hand-over). Each rule names the stack it applies to, when it
+  applies, why, and one check you can run. It starts with the twelve rules to apply first, and
+  keeps general practice that was not measured in these runs in its own marked section. The same
+  124 lessons are in `src/agenttalk/knowledge_packs/migration.jsonl`, one per line, for tools that
+  load them into a team's lesson store; the command that does that is a separate, later change.
+  Many rules rest on a single case, and the guide says so.
+
+  What you need to do: nothing. Read the guide before a migration.
+
+  Technical details: the pack lines carry `key`, `scope`, `trigger`, `body`, `applies_to` (with exactly
+  one `stage-*` tag), `evidence`, `pack` and `pack_version`; keys are bare slugs.
+  `tests/test_migration_pack.py` checks the format and that the guide and the pack stay in step. The
+  guide ships in the source package.
+
+### Fixed
+
+- **A background Claude agent that cannot find `claude` now gets advice about Claude, not about Codex
+  (#508, item 1).** Before an agent's first turn, its wrapper (the program that runs the agent in the
+  background) checks that it can start the agent's AI tool. When it could not, it always gave the same
+  advice: "set AGENTTALK_CODEX to the native codex.exe". A Claude agent on Linux was told how to fix a
+  Codex install on Windows.
+
+  What you will notice: before this, every agent got the Codex advice. Now the advice names the agent's
+  own tool and fits the computer it runs on. A Claude agent is told to give the full path of `claude`
+  after `--`, with the usual place as an example (`~/.local/bin/claude` on Linux and macOS,
+  `C:\Users\<you>\.local\bin\claude.exe` on Windows) and the command that prints it (`command -v claude`,
+  or `where.exe claude` on Windows, which works in both PowerShell and the Command Prompt). A Codex agent is still told about `AGENTTALK_CODEX`, and "native
+  codex.exe" appears only on Windows. The same applies when the path points at a Windows helper script
+  (`.cmd`, `.bat` or `.ps1`) that the wrapper cannot start directly.
+
+  What you need to do: nothing.
+
+  Technical details: new `wrapper/run.py` `_launch_cli_remediation(cli, is_windows=...)`, used by both
+  refusals in `preflight_launch_runtime` (executable not found, and a shim). `preflight_launch_runtime`
+  takes an optional `is_windows` (default: the running system). Any other `--cli` value gets "pass the
+  full path of the <cli> executable after --". Tests in `tests/test_wrapper_loop.py`:
+  `test_launch_preflight_missing_claude_gives_claude_advice_not_codex`,
+  `test_launch_preflight_missing_codex_gives_codex_advice_not_claude`,
+  `test_launch_preflight_missing_cli_advice_fits_the_platform` (four cases) and
+  `test_launch_preflight_claude_shim_gives_no_codex_advice`.
+
+- **When an agent cannot start and no supervisor is running, the notice now says how to start it again
+  (#508, item 2).** When an agent's wrapper cannot start the agent's AI tool, it sends a notice to the
+  person or agent who looks after the team. The notice ended with "run: agenttalk request-restart". That
+  command only asks the supervisor (the background program that starts and restarts agents) to restart
+  the agent; with no supervisor running, nothing happens.
+
+  What you will notice: before this, the notice always said to run `agenttalk request-restart`. Now it
+  says that only when a supervisor is running. Otherwise it says that no supervisor is running, so
+  `request-restart` would do nothing: fix the launch command as the advice in the notice says, then start
+  the agent again the way it was started (for example with the same `agenttalk wrap` command).
+
+  What you need to do: nothing.
+
+  Technical details: new `cli._supervisor_running(store)`: a valid supervisor instance marker
+  (`Store.read_supervisor_instance`) whose owner process is not confirmed gone (`_owner_identity_gone`).
+  When the owner's liveness cannot be checked, the supervisor counts as running and the old advice stays.
+  Used by `_launch_config_blocked_notifier`. The notice for an agent parked on a message ("wrapper
+  config-blocked") still says `request-restart`; it is not part of this change. Tests in
+  `tests/test_wrapper_loop.py`: `test_cmd_wrap_launch_blocked_without_supervisor_says_start_again`,
+  `test_cmd_wrap_launch_blocked_with_dead_supervisor_says_start_again` and
+  `test_cmd_wrap_launch_blocked_with_live_supervisor_keeps_request_restart`.
+
+- **A work order sent to an agent that has never started now says so, instead of blaming an old
+  version (#508, item 3).** `agenttalk task` refuses to send a work order to an agent whose agenttalk
+  version is too old to read one, because that agent would quietly drop it. An agent that had never
+  started has no version on record, so it was refused as if it ran an old version, with "(unknown)"
+  as its version.
+
+  What you will notice: before this, a work order to a new agent that had not run yet was refused
+  with "the recipient is on an agenttalk build that predates task-kind support ... (unknown)". Now,
+  when the agent has no heartbeat (the "I am alive" stamp an agent writes while it runs) and no
+  health record at all, the refusal says the agent has not started yet, so agenttalk cannot tell
+  whether its version can read a work order. It says to start the agent first, or to send with
+  `--force`: then the order waits in the agent's queue and is read when the agent starts, if it runs
+  agenttalk 0.88 or later. With `--force` the notice says the same. An agent that has run but never
+  reported its version is still refused as "(unknown)", as before. The guide for leads
+  (`docs/LEAD-SETUP-BRIEF.md`, "Known rough edges") quotes the new message.
+
+  What you need to do: nothing. Start the agent, then send the work order again.
+
+  Technical details: new `cli._never_started(store, agent)`: `Store.read_heartbeat` is `None` and
+  the health file (`Store.health_path`) does not exist. `cmd_task` uses it for the refusal and the
+  `--force` notice. `_recipients_behind_kind` and `agenttalk broadcast --kind task` are unchanged.
+  Tests in `tests/test_cli.py`: `test_task_to_a_seat_that_never_started_says_so_not_old_build`,
+  `test_task_force_to_a_seat_that_never_started_says_when_it_arrives` and
+  `test_task_to_a_seat_with_only_a_heartbeat_still_reports_unknown_build`.
+
+- **`agenttalk knowledge search --tags <tag>` now works without a search word (#508, item 5).** A
+  lesson in the team's knowledge store carries a few short tags (for example `shell`), so it can be
+  found again later. Searching by tag alone failed, because the search always demanded a word as
+  well.
+
+  What you will notice: before this, `knowledge search --tags shell` stopped with "the following
+  arguments are required: query". Now it lists every lesson tagged `shell`; add a word to narrow the
+  list. A search with neither a word nor `--tags` still stops, and now says how to search by tag. The
+  guide for leads (`docs/LEAD-SETUP-BRIEF.md`) no longer says a word is needed.
+
+  What you need to do: nothing.
+
+  Technical details: the `query` argument of `knowledge search` is optional (`nargs="?"`); `cmd_knowledge`
+  refuses a search with no query and no `--tags` (exit 2). An empty query (`""`) still matches every
+  note, as before. `knowledge.select_knowledge_view` already supported no query, so the stored notes
+  and the selection are unchanged. We made the tag-only search work rather than only improving the
+  error, because it needed no new stored field or command. Tests in `tests/test_knowledge.py`:
+  `test_search_by_tag_alone_needs_no_search_word` and
+  `test_search_without_a_word_or_tags_says_how_to_search_by_tag`.
+
+- **`agenttalk knowledge publish` now reports three more kinds of problem in the same refusal as the
+  others (#513).** Saving a lesson or a note to the team's knowledge store takes several options. Most problems were already
+  listed together, but three kinds came separately, so a new user had to run the command again for
+  each one: a missing `--key` or `-m`, a `--scope` that is not one of the allowed words, and a domain
+  (the part of the project a note belongs to) that the team's domain list does not accept, such as
+  `process` for a note that is not a lesson.
+
+  What you will notice: before this, a missing `-m` or an unknown `--scope` stopped the command before
+  anything else was checked, and a refused domain was reported only after every other option was
+  right. Now these three are listed together with the problems that were already grouped, one per
+  line. Some refusals still come on their own:
+  - The command-line reader stops first, and alone, at a missing or unknown `--type` (it decides which
+    other options are needed), at an unknown `--anchor-kind` value, and at an option it does not know.
+  - A `--verified-against` that does not name a commit, or a key that already holds a note of another
+    type, is reported only once everything else is right.
+
+  Nothing is saved while any problem is listed.
+
+  What you need to do: nothing.
+
+  Technical details: `--key` and `-m` are no longer `required=` in the parser, and `--scope` on
+  `knowledge publish` no longer uses argparse `choices` (the help still lists the allowed words);
+  `_kn_publish_preflight` checks all three (`kn.LESSON_SCOPES`). When the preflight finds problems and
+  a domain applies (`--domain` given, or a lesson), `cmd_knowledge` also runs
+  `_knowledge_resolve_domain_for_publish` on a fresh read of `domains.json` and adds its error (an
+  unreadable or invalid `domains.json` is listed too). This relaxes an earlier rule, "all field errors
+  before any registry, Git or ledger I/O": the read-only registry read may now happen on the error path; Git and the ledger are still untouched, and the binding check
+  still runs under the lock. Tests in `tests/test_knowledge.py`:
+  `test_publish_lists_missing_key_message_scope_and_dates_in_one_refusal`,
+  `test_publish_names_a_refused_domain_with_the_other_problems`,
+  `test_publish_lists_a_broken_registry_with_the_field_errors`, and the renamed
+  `test_publish_preflight_reports_all_errors_before_git_or_ledger_io`.
+
+- **`agenttalk knowledge publish` now says which domain it stored the note in (#508, item 6).** Every
+  lesson has a scope (what kind of lesson it is, for example `ops`) and is stored in a domain (the
+  part of the project it belongs to; lessons go to `process` unless you give `--domain`). The two are
+  easy to mix up. A lesson published with `--scope ops` is stored in domain `process`, so the next
+  command, for example `knowledge curate verify --domain ops`, found nothing.
+
+  What you will notice: before this, `publish` printed only `published note <id> process/<key>`, and
+  the help did not say that `--scope` leaves the domain alone. Now a second line says
+  `stored in domain process`, adds "(--scope ops labels the lesson; it does not choose the domain)"
+  when the two differ, and gives the command to verify the note with the right domain. The help for
+  `--scope` and `--domain` says the same. What is stored has not changed.
+
+  What you need to do: nothing. Use the domain that `publish` prints in the next command.
+
+  Technical details: `cmd_knowledge` (publish) prints the extra line after the unchanged first line;
+  the `--scope` and `--domain` help texts of `knowledge publish` changed. Tests in
+  `tests/test_knowledge.py`: `test_publish_output_names_the_domain_a_lesson_was_stored_in`,
+  `test_publish_output_for_a_note_names_its_domain_without_a_scope_hint` and
+  `test_publish_help_says_scope_does_not_choose_the_domain`.
+
+- **The operations guide now explains what to do when an agent looks stuck (#497).** Two causes were
+  not written down anywhere an operator would look.
+
+  What you will notice: `docs/OPERATIONS.md` has a new section, "An agent looks stuck", and a row
+  for it in "If something is wrong, start here". It says two things. First, after you update Claude
+  Code or Codex, restart the agents that run under `agenttalk wrap`: each one finds its tool's file
+  once, when it starts, and an update can replace or remove that file. Second, an agent that shows
+  "working" for far longer than a turn usually takes may have a hung tool rather than a busy one. The
+  guide says which case the wrapper already ends by itself on Linux and Windows: a Codex agent under
+  `wrap --loop`, after 30 minutes with a program it started alive for 10, by default. It also says
+  plainly that on macOS this watchdog never ends a turn today. Everywhere else the operator watches the
+  agent's log and restarts the agent by hand. The guide notes that a quiet log alone does not prove
+  a hang.
+
+  What you need to do: nothing. No program behaviour changed; spotting a hung tool automatically, and
+  making the watchdog work on macOS, are not part of this change.
+
+  Technical details: documentation only (`docs/OPERATIONS.md`). The watchdog facts come from
+  `wrapper/turn_watchdog.py`: `TurnWatchdogConfig` defaults to 1800 s and 600 s, and is on by default
+  only for a continuous `wrap --loop --cli codex` (see `cmd_wrap`). The process list comes from
+  `_snapshot_posix` (`ps -axo pid=,ppid=,etimes=,comm=`) or `_snapshot_windows` (the PowerShell
+  recorded by `supervise --select-pwsh`). Apple's `ps` has `etime` but no `etimes`, so on macOS the list is never available. The
+  watchdog then does nothing, by design: it never kills without a list.
+
 ## [0.102.0] - 2026-10-16
 
 **In short:** a team is easier to watch, an agent that has run for a long time can be given a

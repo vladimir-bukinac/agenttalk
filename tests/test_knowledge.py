@@ -855,15 +855,16 @@ def test_cli_curate_routes_single_durable_writer(
     assert calls["n"] == 2
 
 
-def test_publish_preflight_reports_all_errors_before_registry_git_or_ledger_io(
+def test_publish_preflight_reports_all_errors_before_git_or_ledger_io(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture) -> None:
+    # Rough edge 4: the read-only registry check may run on the error path,
+    # so a refused domain is listed too; Git and the ledger stay untouched.
     root = _repo(tmp_path)
 
     def forbidden(*args, **kwargs):
         raise AssertionError("preflight errors must stop before I/O")
 
-    monkeypatch.setattr(cli, "_load_domain_registry", forbidden)
     monkeypatch.setattr(cli, "_kn_full_head", forbidden)
     monkeypatch.setattr(kn, "write_event_locked", forbidden)
     rc = _run([
@@ -1863,6 +1864,120 @@ def test_mixed_view_filters_search_caps_and_explicit_json_compatibility(
         ["knowledge", "pull", "--type", "gotcha", "--scope", "process"],
     ):
         assert _run(argv, root) == 2
+
+
+def test_search_by_tag_alone_needs_no_search_word(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # #508 item 5: `knowledge search --tags <tag>` failed without a search word.
+    root = _repo(tmp_path)
+    for key, tag in (("process.one", "orbit"), ("process.two", "parser")):
+        assert _lesson_pub(root, key=key, applies_to=tag, body=f"body {key}") == 0
+        assert _lesson_verify(root, key) == 0
+    capsys.readouterr()
+    assert _run(["knowledge", "search", "--tags", "orbit", "--json"], root) == 0
+    found = json.loads(capsys.readouterr().out)
+    assert [row["key"] for row in found["lessons"]] == ["process.one"]
+
+
+def test_search_without_a_word_or_tags_says_how_to_search_by_tag(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root = _repo(tmp_path)
+    try:
+        rc = _run(["knowledge", "search", "--scope", "process"], root)
+    except SystemExit as exc:
+        rc = exc.code
+    assert rc == 2
+    assert "or --tags" in capsys.readouterr().err
+
+
+def _run_refused(argv: list[str], root: Path) -> int:
+    try:
+        return _run(argv, root)
+    except SystemExit as exc:
+        return exc.code
+
+
+def test_publish_lists_missing_key_message_scope_and_dates_in_one_refusal(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # Rough edge 4: a missing message, a wrong scope and a missing date were
+    # reported one per run.
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    rc = _run_refused(["knowledge", "publish", "--from", "dev", "--type", "lesson",
+                       "--scope", "operations", "--trigger", "t", "--evidence-ref",
+                       "rr-1", "--review-after", FUTURE_REVIEW], root)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--key is required" in err
+    assert "-m/--message is required" in err
+    assert "--scope must be one of" in err
+    assert "--expires-at is required for --type lesson" in err
+    assert kn.read_events(Store(root))[0] == []
+
+
+def test_publish_names_a_refused_domain_with_the_other_problems(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # Rough edge 4: a note refused for its domain heard about it only after
+    # every other option was fixed (this registry does not list process).
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    rc = _run_refused(["knowledge", "publish", "--from", "dev", "--type", "gotcha",
+                       "--domain", "process", "--key", "process.trap",
+                       "-m", "the insight"], root)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "anchor-kind is required for non-lesson notes" in err
+    assert "unknown domain 'process'" in err
+
+
+def test_publish_lists_a_broken_registry_with_the_field_errors(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root = _repo(tmp_path)
+    (Store(root).dir / "domains.json").write_text("{not json", encoding="utf-8")
+    capsys.readouterr()
+    rc = _run_refused(["knowledge", "publish", "--from", "dev", "--type", "gotcha",
+                       "--domain", "cli", "--key", "cli.trap", "--anchor-kind",
+                       "path", "--path", "src/cli.py"], root)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "-m/--message is required" in err
+    assert "is not valid JSON" in err
+
+
+def test_publish_output_names_the_domain_a_lesson_was_stored_in(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    # #508 item 6: --scope ops stores the lesson in domain process, and the
+    # next command (curate verify --domain) needs process, not ops.
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    assert _run(["knowledge", "publish", "--from", "dev", "--type", "lesson",
+                 "--key", "ops.restart", "--scope", "ops", "--trigger", "t",
+                 "--evidence-ref", "rr-1", "--review-after", FUTURE_REVIEW,
+                 "--expires-at", FUTURE_EXPIRES, "-m", "the insight"], root) == 0
+    out = capsys.readouterr().out
+    assert "stored in domain process" in out
+    assert "--scope ops labels the lesson; it does not choose the domain" in out
+    assert "agenttalk knowledge curate verify --domain process --key ops.restart" in out
+    assert _lesson_verify(root, "ops.restart") == 0
+
+
+def test_publish_output_for_a_note_names_its_domain_without_a_scope_hint(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root = _repo(tmp_path)
+    capsys.readouterr()
+    assert _pub(root, key="cli.trap") == 0
+    out = capsys.readouterr().out
+    assert "stored in domain cli" in out
+    assert "--scope" not in out
+
+
+def test_publish_help_says_scope_does_not_choose_the_domain(
+        capsys: pytest.CaptureFixture) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["knowledge", "publish", "--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "it does not choose the domain" in out
+    assert "prints the domain it used" in out
 
 
 def test_unrelated_orbit_domain_edit_is_caution_not_global_hard_stale(

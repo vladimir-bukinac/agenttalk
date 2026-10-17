@@ -6420,14 +6420,22 @@ def _kn_publish_preflight(args, actor: str) -> tuple[list[str], dict | None, dic
     from agenttalk import knowledge as kn
 
     errors: list[str] = []
-    try:
-        kn.validate_key(args.key)
-    except kn.KnowledgeError as exc:
-        errors.append(str(exc))
-    try:
-        kn.validate_body(args.message)
-    except kn.KnowledgeError as exc:
-        errors.append(str(exc))
+    # --key and -m are checked here, not by argparse, so that a missing one is
+    # listed with every other problem in one refusal.
+    if args.key is None:
+        errors.append("--key is required")
+    else:
+        try:
+            kn.validate_key(args.key)
+        except kn.KnowledgeError as exc:
+            errors.append(str(exc))
+    if args.message is None:
+        errors.append("-m/--message is required")
+    else:
+        try:
+            kn.validate_body(args.message)
+        except kn.KnowledgeError as exc:
+            errors.append(str(exc))
 
     is_lesson = args.type == kn.TYPE_LESSON
     if not is_lesson and not args.domain:
@@ -6489,6 +6497,9 @@ def _kn_publish_preflight(args, actor: str) -> tuple[list[str], dict | None, dic
             continue
         if not getattr(args, field, None):
             errors.append(f"{flag} is required for --type lesson")
+    scope = getattr(args, "scope", None)
+    if scope and scope not in kn.LESSON_SCOPES:
+        errors.append(f"--scope must be one of: {', '.join(sorted(kn.LESSON_SCOPES))}")
 
     for field, flag in (("trigger", "--trigger"), ("evidence_ref", "--evidence-ref")):
         value = getattr(args, field, None)
@@ -6606,6 +6617,16 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
     if action == "publish":
         actor = _resolve_self(getattr(args, "actor", None), roster=roster)
         errors, anchor, lesson = _kn_publish_preflight(args, actor)
+        if errors and (args.domain or args.type == kn.TYPE_LESSON):
+            # Name a refused domain in the same refusal, not only after every
+            # other option is fixed. A read-only registry check: Git and the
+            # ledger are still untouched, and the binding check runs again
+            # under the lock.
+            try:
+                _knowledge_resolve_domain_for_publish(
+                    store, args, _load_domain_registry(store))
+            except (kn.KnowledgeError, dom.DomainError) as exc:
+                errors.append(str(exc))
         if errors:
             for error in errors:
                 sys.stderr.write(f"agenttalk knowledge publish: {error}\n")
@@ -6660,6 +6681,14 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
                 return 2
             kn.write_event_locked(store, evt)
         print(f"published note {evt['id']} {domain_id}/{args.key} ({args.type}, uncurated)")
+        # #508 item 6: a lesson's --scope is easy to mistake for its domain, and
+        # the next command (curate, search --domain) needs the domain.
+        scope = getattr(args, "scope", None)
+        scope_hint = (
+            f" (--scope {scope} labels the lesson; it does not choose the domain)"
+            if scope and scope != domain_id else "")
+        print(f"stored in domain {domain_id}{scope_hint}. To verify it: agenttalk "
+              f"knowledge curate verify --domain {domain_id} --key {args.key}")
         return 0
 
     if action == "curate":
@@ -6739,6 +6768,11 @@ def cmd_knowledge(args: argparse.Namespace) -> int:
                     f"agenttalk knowledge: --{field.replace('_', '-')} must be zero or greater.\n"
                 )
                 return 2
+        if action == "search" and args.query is None and not lesson_tags:
+            sys.stderr.write(
+                "agenttalk knowledge search: give a search word, or --tags <tag> "
+                "to list every lesson with that tag.\n")
+            return 2
         exact_key = getattr(args, "key", None) if action == "search" else None
         if exact_key is not None and not getattr(args, "domain", None):
             sys.stderr.write("agenttalk knowledge search: --key needs --domain.\n")
@@ -8059,6 +8093,11 @@ def _recipients_behind_kind(store: Store, recipients: list[str], *,
     return behind
 
 
+def _never_started(store: Store, agent: str) -> bool:
+    """No heartbeat and no health record: the agent has never run here."""
+    return store.read_heartbeat(agent) is None and not store.health_path(agent).exists()
+
+
 def cmd_task(args: argparse.Namespace) -> int:
     """Send a `task`: a lead work order the recipient must execute (or
     explicitly decline) under standing guardrails — the ONE kind whose body
@@ -8135,7 +8174,20 @@ def cmd_task(args: argparse.Namespace) -> int:
     force_notice = None
     if behind:
         names = ", ".join(f"{name} ({version})" for name, version in behind)
+        # #508 item 3: a seat with no heartbeat and no health record has never
+        # started, so its build is not known to be old.
+        floor = ".".join(str(part) for part in store_mod.KIND_SUPPORT_FLOOR["task"])
+        not_started = _never_started(store, recipient)
         if not getattr(args, "force", False):
+            if not_started:
+                sys.stderr.write(
+                    f"agenttalk task: refusing — {recipient} has not started yet "
+                    "(no heartbeat and no health record), so it is not known "
+                    "whether its agenttalk build can read a task. Start it "
+                    "first, or re-run with --force to send now: the task waits "
+                    f"in its queue, and it reads it when it starts if it runs "
+                    f"agenttalk {floor} or later.\n")
+                return 2
             sys.stderr.write(
                 "agenttalk task: refusing — the recipient is on an agenttalk "
                 "build that predates task-kind support and would silently "
@@ -8148,10 +8200,16 @@ def cmd_task(args: argparse.Namespace) -> int:
         # finding: the code must match its own docstring/help/CHANGELOG claim
         # that --force "prints exactly who will not see the message," not just
         # silently override the refusal.
-        force_notice = (
-            f"agenttalk task: --force — sending anyway. This recipient will "
-            f"NOT see it (agenttalk build predates task-kind support): "
-            f"{names}.\n")
+        if not_started:
+            force_notice = (
+                f"agenttalk task: --force — sending anyway. {recipient} has not "
+                "started yet (no heartbeat and no health record); it reads the "
+                f"task when it starts if it runs agenttalk {floor} or later.\n")
+        else:
+            force_notice = (
+                f"agenttalk task: --force — sending anyway. This recipient will "
+                f"NOT see it (agenttalk build predates task-kind support): "
+                f"{names}.\n")
     minted_id = _maybe_autogen_request_id("task", meta)
     msg = store.send(
         sender=sender,
@@ -12095,6 +12153,16 @@ def _cadence_health_notifier(store, agent: str):
     return emit
 
 
+def _supervisor_running(store) -> bool:
+    """A valid supervisor instance marker whose owner is not confirmed gone.
+
+    An owner whose liveness cannot be probed counts as running, so the
+    request-restart advice is replaced only when no supervisor can act on it.
+    """
+    rec = store.read_supervisor_instance()
+    return rec is not None and not _owner_identity_gone(rec.get("pid"), rec.get("pid_start"))
+
+
 def _launch_config_blocked_notifier(store, agent: str):
     """Operator escalation for a pre-loop wrapper launch preflight failure."""
     def emit(summary: str) -> bool:
@@ -12102,12 +12170,23 @@ def _launch_config_blocked_notifier(store, agent: str):
             target = store.operator_facing() or store.sole_lead()
             if not target or target == agent:
                 return False
+            # #508 item 2: request-restart only asks a supervisor to relaunch
+            # the agent, so without one it would do nothing.
+            if _supervisor_running(store):
+                next_step = ("After repairing the launch config, run: "
+                             f"agenttalk request-restart --for {agent}")
+            else:
+                next_step = (
+                    "No supervisor is running, so agenttalk request-restart would "
+                    "do nothing: repair the launch config as the remediation says, "
+                    f"then start {agent} again the way it was started (for example "
+                    "the same agenttalk wrap command)"
+                )
             body = (
                 f"[wrapper-launch-config-blocked] agent {agent} did not enter the "
                 "wrapper loop because launch/runtime preflight failed before any "
                 "message was consumed. Cursor, attempts, and dead-letter state are "
-                f"unchanged. Command/error/remediation: {summary}. After repairing "
-                f"the launch config, run: agenttalk request-restart --for {agent}"
+                f"unchanged. Command/error/remediation: {summary}. {next_step}"
             )
             store.send(
                 sender=agent,
@@ -16440,15 +16519,18 @@ def build_parser() -> argparse.ArgumentParser:
              "to the virtual process domain.")
     knpub.add_argument("--from", dest="actor", help="Publishing agent.")
     knpub.add_argument("--domain", help="Domain id; required except for lessons (default: process). "
-                       "Without a domain registry, all note types can use --domain process.")
+                       "Without a domain registry, all note types can use --domain process. "
+                       "publish prints the domain it used; curate and search need that one.")
     knpub.add_argument("--type", required=True,
                        choices=sorted(["seam", "gotcha", "decision", "pointer", "lesson"]))
-    knpub.add_argument("--key", required=True, help="Stable note key (latest-by-key).")
-    knpub.add_argument("-m", "--message", required=True, help="The insight (not a copy of the anchor).")
+    knpub.add_argument("--key", help="Stable note key (latest-by-key). Required.")
+    knpub.add_argument("-m", "--message",
+                       help="The insight (not a copy of the anchor). Required.")
     knpub.add_argument("--verified-against", dest="verified_against",
                        help="Ref/SHA the insight was verified against (default: HEAD).")
-    knpub.add_argument("--scope", choices=lesson_scope_choices,
-                       help="Lesson scope (required for --type lesson).")
+    knpub.add_argument("--scope", metavar="{" + ",".join(lesson_scope_choices) + "}",
+                       help="Lesson scope (required for --type lesson). It labels the "
+                            "kind of lesson; it does not choose the domain (see --domain).")
     knpub.add_argument("--trigger", help="Lesson trigger text (required for --type lesson).")
     knpub.add_argument("--evidence-ref", dest="evidence_ref",
                        help="Lesson evidence reference (required for --type lesson).")
@@ -16493,10 +16575,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     knsearch = knsub.add_parser(
         "search", help="Substring search over pointer and lesson fields.")
-    knsearch.add_argument("query", help="Search string.")
+    knsearch.add_argument("query", nargs="?",
+                          help="Search string. Optional with --tags, which then lists "
+                               "every lesson with one of those tags.")
     knsearch.add_argument("--domain")
     knsearch.add_argument("--key", help="Only the note with exactly this key (needs --domain); "
-                                       "applied before --limit. The search string is still required.")
+                                       "applied before --limit. Still needs a search "
+                                       "string or --tags.")
     knsearch.add_argument("--type", choices=sorted(["seam", "gotcha", "decision", "pointer", "lesson"]))
     knsearch.add_argument("--scope", choices=lesson_scope_choices,
                           help="Limit lesson search to a scope.")

@@ -2606,6 +2606,44 @@ def test_task_refuses_when_recipient_advertises_no_version_at_all(
     assert "beta (unknown)" in capsys.readouterr().err
 
 
+def test_task_to_a_seat_that_never_started_says_so_not_old_build(
+    store: Store, store_root: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    # #508 item 3: no heartbeat and no health record at all means the seat
+    # has never started, not that its build is old.
+    store.set_role("alpha", "lead")
+    _run_expect_exit(["task", "--from", "alpha", "--to", "beta", "-m", "go"], store_root, 2)
+    err = capsys.readouterr().err
+    assert "beta has not started yet" in err
+    assert "predates" not in err
+    assert "--force" in err
+    assert store.messages_for("beta") == []
+
+
+def test_task_force_to_a_seat_that_never_started_says_when_it_arrives(
+    store: Store, store_root: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    store.set_role("alpha", "lead")
+    rc = _run(["task", "--from", "alpha", "--to", "beta", "--force", "-m", "go"], store_root)
+    assert rc == 0
+    assert store.messages_for("beta")[-1].kind == "task"
+    err = capsys.readouterr().err
+    assert "beta has not started yet" in err
+    assert "when it starts" in err
+    assert "predates" not in err
+
+
+def test_task_to_a_seat_with_only_a_heartbeat_still_reports_unknown_build(
+    store: Store, store_root: Path, capsys: pytest.CaptureFixture,
+) -> None:
+    store.set_role("alpha", "lead")
+    store.write_heartbeat("beta")
+    _run_expect_exit(["task", "--from", "alpha", "--to", "beta", "-m", "go"], store_root, 2)
+    err = capsys.readouterr().err
+    assert "beta (unknown)" in err
+    assert "not started" not in err
+
+
 def test_task_force_sends_anyway_past_the_version_gate(
     store: Store, store_root: Path, capsys: pytest.CaptureFixture,
 ) -> None:

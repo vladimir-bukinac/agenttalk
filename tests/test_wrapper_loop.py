@@ -3108,6 +3108,68 @@ def test_launch_preflight_uses_agenttalk_codex_override(tmp_path) -> None:
     assert res.argv == [str(native.resolve()), "exec"]
 
 
+def _missing_cli_remediation(monkeypatch, tmp_path, cli: str, **kwargs) -> str:
+    monkeypatch.setattr(run.shutil, "which", lambda _name: None)
+    env = {"AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path)}
+    res = run.preflight_launch_runtime(
+        [cli, "-p"], cli, tmp_path, env,
+        runner=lambda *_args: (0, "agenttalk 0.test"), **kwargs)
+    assert res.blocked is not None
+    assert "executable not found on PATH" in res.blocked
+    return res.blocked.split("remediation=", 1)[1]
+
+
+def test_launch_preflight_missing_claude_gives_claude_advice_not_codex(
+    monkeypatch, tmp_path,
+) -> None:
+    # #508 item 1: a Claude seat without claude on the PATH was told to set
+    # AGENTTALK_CODEX to the native codex.exe.
+    remediation = _missing_cli_remediation(monkeypatch, tmp_path, "claude")
+    assert "claude" in remediation
+    assert "codex" not in remediation.lower()
+
+
+def test_launch_preflight_missing_codex_gives_codex_advice_not_claude(
+    monkeypatch, tmp_path,
+) -> None:
+    remediation = _missing_cli_remediation(monkeypatch, tmp_path, "codex")
+    assert "AGENTTALK_CODEX" in remediation
+    assert "claude" not in remediation.lower()
+
+
+@pytest.mark.parametrize(("cli", "is_windows", "expected", "absent"), [
+    ("claude", False, "~/.local/bin/claude", ".exe"),
+    ("claude", True, "claude.exe", "~/"),
+    # Codex read P3: in PowerShell `where` is Where-Object and %VAR% does not
+    # expand, so the Windows advice must work in both PowerShell and cmd.
+    ("claude", True, "'where.exe claude'", "%"),
+    ("claude", True, "C:\\Users\\<you>\\.local\\bin\\claude.exe", "'where claude'"),
+    ("codex", False, "command -v codex", ".exe"),
+    ("codex", True, "native codex.exe", "command -v"),
+])
+def test_launch_preflight_missing_cli_advice_fits_the_platform(
+    monkeypatch, tmp_path, cli, is_windows, expected, absent,
+) -> None:
+    remediation = _missing_cli_remediation(
+        monkeypatch, tmp_path, cli, is_windows=is_windows)
+    assert expected in remediation
+    assert absent not in remediation
+
+
+def test_launch_preflight_claude_shim_gives_no_codex_advice(tmp_path) -> None:
+    shim = tmp_path / "claude.cmd"
+    shim.write_text("@echo off\r\n", encoding="utf-8")
+    env = {"AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path)}
+    res = run.preflight_launch_runtime(
+        [str(shim)], "claude", tmp_path, env,
+        runner=lambda *_args: (0, "agenttalk 0.test"))
+    assert res.blocked is not None
+    assert ".cmd/.bat/.ps1 shim" in res.blocked
+    remediation = res.blocked.split("remediation=", 1)[1]
+    assert "claude" in remediation
+    assert "codex" not in remediation.lower()
+
+
 def test_agenttalk_runtime_preflight_ignores_ambiguous_probe_failures(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -3984,6 +4046,49 @@ def test_cmd_wrap_launch_preflight_blocks_before_consuming_message(tmp_path) -> 
     assert notice.subject == "wrapper launch config-blocked"
     assert "before any message was consumed" in notice.body
     assert "missing-codex.exe" in notice.body
+
+
+def _launch_blocked_notice_body(tmp_path, s: Store) -> str:
+    s.set_operator_facing("alpha")
+    rc = cli.main([
+        "--root", str(tmp_path),
+        "wrap", "--for", "beta", "--cli", "codex", "--loop",
+        "--", str(tmp_path / "missing-codex.exe"),
+    ])
+    assert rc == 1
+    notice = s.messages_for("alpha")[-1]
+    assert notice.subject == "wrapper launch config-blocked"
+    return notice.body
+
+
+def test_cmd_wrap_launch_blocked_without_supervisor_says_start_again(tmp_path) -> None:
+    # #508 item 2: request-restart only asks a supervisor to restart the seat;
+    # with no supervisor running it does nothing.
+    body = _launch_blocked_notice_body(tmp_path, _store(tmp_path))
+    assert "run: agenttalk request-restart" not in body
+    assert "No supervisor is running" in body
+    assert "start beta again the way it was started" in body
+
+
+def test_cmd_wrap_launch_blocked_with_live_supervisor_keeps_request_restart(
+    tmp_path,
+) -> None:
+    s = _store(tmp_path)
+    assert s.claim_supervisor_instance(pid=os.getpid()) is not None
+    body = _launch_blocked_notice_body(tmp_path, s)
+    assert "run: agenttalk request-restart --for beta" in body
+    assert "No supervisor is running" not in body
+
+
+def test_cmd_wrap_launch_blocked_with_dead_supervisor_says_start_again(
+    tmp_path, monkeypatch,
+) -> None:
+    s = _store(tmp_path)
+    assert s.claim_supervisor_instance(pid=os.getpid()) is not None
+    monkeypatch.setattr(cli, "_owner_identity_gone", lambda *_args: True)
+    body = _launch_blocked_notice_body(tmp_path, s)
+    assert "run: agenttalk request-restart" not in body
+    assert "start beta again the way it was started" in body
 
 
 def test_cmd_wrap_preflight_success_clears_config_blocked_hold(

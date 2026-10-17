@@ -32,6 +32,7 @@ unique evidence).
 | Documentation accuracy / audience / prose review | review-docs |
 | Failure-path / contract-drift / release-readiness assurance | review-failure-injection / review-contract-drift / review-release-readiness |
 | Release / milestone multi-lens close | system-review-protocol |
+| A second, independent list of ideas at a named moment (design start, two failed attempts on one assumption outside a review-ordered fix round, product-ideas side round) | thinking-games |
 
 ## Core precedence
 
@@ -66,6 +67,8 @@ unique evidence).
   docs examples, doctests, link checks, command snippets, generated-reference drift checks,
   or code-vs-doc assertions; use test-docs.
 - Do NOT use qa-strategy to avoid writing or running obvious tests.
+- Do NOT use thinking-games on routine work, review-ordered fixes or releases, or to decide
+  scope; whether the work should be done at all is the challenge skill's question.
 - Do NOT use fix-ci to guess at a failure without reading the failing log/output.
 - Do NOT let duplicated green evidence count as independent coverage: two reviewers citing the
   same run + scope corroborate ONE evidence item, they are not two proofs.
