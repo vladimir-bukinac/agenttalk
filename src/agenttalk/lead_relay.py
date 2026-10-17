@@ -194,7 +194,16 @@ def derive_for_seat(messages: list[Message], seat: str, *, retired: Iterable[str
     live_rids = {rid for rid, group in groups.items() if any(m.kind in OPENER_KINDS for m in group)}
     for rid in sorted(orphan_rids - known - live_rids):
         decl = next(m for m in reversed(msgs) if m.sender == seat and rid in _csv(_meta(m).get("waiting_on")))
-        seen[("?", rid, seat)] = Obligation("?", seat, rid, None, UNRESOLVED, decl.ts, decl.id)
+        cancel = [m for m in msgs if m.sender == seat and rid in _csv(_meta(m).get("waiting_off")) and m.id > decl.id]
+        closing = next((m for m in reversed(msgs) if m.recipient == seat and _meta(m).get("relay_of") == rid
+                        and _meta(m).get("relay_outcome") == OUTCOME_UNRESOLVED), None)
+        if closing is not None:
+            seen[(closing.sender, rid, seat)] = Obligation(closing.sender, seat, rid, None, CLOSED_UNRESOLVED, decl.ts,
+                                                           decl.id, closing.id)
+        elif cancel:
+            seen[("?", rid, seat)] = Obligation("?", seat, rid, None, CANCELLED, decl.ts, decl.id)
+        else:
+            seen[("?", rid, seat)] = Obligation("?", seat, rid, None, UNRESOLVED, decl.ts, decl.id)
     return sorted(seen.values(), key=lambda o: (_epoch(o.since), o.request_id))
 
 

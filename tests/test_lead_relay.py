@@ -100,7 +100,7 @@ def test_a_retired_seat_closes_the_obligation(tmp_path: Path) -> None:
     _request(s, "R1")
     _result(s, "R1")
     _declare(s, "builder", "R1")
-    s.retire_agent("builder") if hasattr(s, "retire_agent") else pytest.skip("no retire_agent in this tree")
+    s.retire_agent("builder")
     assert _states(s) == {("builder", "R1"): relay.CLOSED_RECIPIENT_RETIRED}
 
 

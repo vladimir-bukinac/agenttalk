@@ -64,6 +64,7 @@ from agenttalk import reply_transport
 from agenttalk import lanes as lane_mod
 from agenttalk import install_skills as iskl
 from agenttalk import lead_loop_runtime
+from agenttalk import lead_relay
 from agenttalk import launch_admission
 from agenttalk import onboarding as ob
 from agenttalk import signing as _signing
@@ -7857,8 +7858,12 @@ def cmd_relay(args: argparse.Namespace) -> int:
         return _relay_operator_answer(store, sender, roster, args)
     if sub == "operator-command":
         return _relay_operator_command(store, sender, roster, args)
+    if sub == "result":
+        return _relay_result(store, sender, roster, args)
+    if sub == "waiting":
+        return _relay_waiting(store, sender, args)
     sys.stderr.write("agenttalk relay: a subcommand is required "
-                     "(operator-answer | operator-command).\n")
+                     "(operator-answer | operator-command | result | waiting).\n")
     return 2
 
 
@@ -8002,6 +8007,59 @@ def _relay_operator_command(store, sender: str, roster: list, args) -> int:
         print(render(msg, header=f"AGENTTALK :: RELAY operator-command  {sender} -> {target}"))
     if meta.get("request_id"):
         print(f"request_id={meta['request_id']}")
+    return 0
+
+
+def _relay_result(store, sender: str, roster: list, args) -> int:
+    """relay result: hand a finished result's decision to a waiting seat ONCE, or record why nothing is needed.
+
+    One atomic publication (``lead_relay.publish_handoff``): a rerun, a second process and a crash between the
+    send and the intent update all end in exactly one message; a different payload under the same identity is refused.
+    """
+    if args.none_needed and args.unresolved:
+        sys.stderr.write("agenttalk relay result: --none-needed and --unresolved exclude each other.\n")
+        return 2
+    outcome = (lead_relay.OUTCOME_NOT_NEEDED if args.none_needed
+               else lead_relay.OUTCOME_UNRESOLVED if args.unresolved else lead_relay.OUTCOME_FORWARDED)
+    try:
+        validate_agent_name(args.to)
+    except ValueError as e:
+        sys.stderr.write(f"agenttalk relay result: {e}\n")
+        return 2
+    has_text = getattr(args, "message", None) is not None or getattr(args, "file", None)
+    text = _read_body(args) if (outcome == lead_relay.OUTCOME_FORWARDED or has_text) else ""
+    try:
+        msg, created = lead_relay.publish_handoff(
+            store, sender, args.to, result_id=args.result_id, request_id=args.request_id, body=text,
+            outcome=outcome, reason=args.reason or text)
+    except lead_relay.RelayRefused as e:
+        sys.stderr.write(f"agenttalk relay result: refused: {e}\n")
+        return 2
+    except ValueError as e:
+        sys.stderr.write(f"agenttalk relay result: refused: {e}\n")
+        return 2
+    if not getattr(args, "quiet", False):
+        if created:
+            print(f"relay: sent {msg.id} to {args.to} ({outcome})")
+        else:
+            print(f"relay: already sent {msg.id} to {args.to} ({outcome}); nothing was sent again")
+    return 0
+
+
+def _relay_waiting(store, sender: str, args) -> int:
+    """relay waiting: the read-only, non-consuming list of a seat's declarations with their derived state."""
+    seat = sender
+    obligations = lead_relay.derive_for_seat(store.valid_messages(), seat, retired=store.retired_agents())
+    if getattr(args, "json", False):
+        print(json.dumps([{"lead": o.lead, "seat": o.seat, "request_id": o.request_id, "result_id": o.result_id,
+                           "state": o.state, "since": o.since} for o in obligations], indent=2))
+        return 0
+    if not obligations:
+        print(f"relay waiting: {seat} has no declaration (waiting_on) on the bus.")
+        return 0
+    for o in obligations:
+        extra = f" ({lead_relay.UNRESOLVED_TEXT})" if o.state == lead_relay.UNRESOLVED else ""
+        print(f"  {o.request_id}: {o.state}{extra}; lead {o.lead}; since {o.since}")
     return 0
 
 
@@ -9276,6 +9334,20 @@ def _do_recv_json(
     return 0
 
 
+def _emit_owed_notice(store: Store, agent: str, rc: int, *, quiet: bool = False) -> None:
+    """After a consuming command has done its own work: print the owed-relay block of a lead (lead loop, slice 1).
+
+    READ-ONLY: it moves no cursor and no thread-seen pointer, prints nothing for a seat that is not a lead or has
+    nothing open, never changes the exit code, and is skipped under --json (the wrapper reads that output) and
+    --quiet. Any problem reading the bus is swallowed: the notice is advisory.
+    """
+    if rc != 0 or quiet:
+        return
+    text = lead_relay.notice_for(store, agent)
+    if text:
+        _write_stdout_line(text)
+
+
 def cmd_recv(args: argparse.Namespace) -> int:
     store = _get_store(args)
     agent = _resolve_self(args.agent, roster=store.load_config().get("agents") or [])
@@ -9285,7 +9357,7 @@ def cmd_recv(args: argparse.Namespace) -> int:
     if getattr(args, "json", False):
         return _do_recv_json(store, agent, since=args.since, ack=args.ack,
                              include_control=args.include_control, limit=args.limit)
-    return _do_recv(
+    rc = _do_recv(
         store,
         agent,
         since=args.since,
@@ -9297,6 +9369,8 @@ def cmd_recv(args: argparse.Namespace) -> int:
         # deliberate history browsing, so don't nag there.
         emit_hint=args.since is None,
     )
+    _emit_owed_notice(store, agent, rc, quiet=args.quiet)
+    return rc
 
 
 def cmd_drain(args: argparse.Namespace) -> int:
@@ -9311,7 +9385,7 @@ def cmd_drain(args: argparse.Namespace) -> int:
     blocked = _guard_lead_loop_consumer(store, agent, verb="drain")
     if blocked is not None:
         return blocked
-    return _do_recv(
+    rc = _do_recv(
         store,
         agent,
         since=None,  # drain always consumes from the cursor forward
@@ -9321,6 +9395,8 @@ def cmd_drain(args: argparse.Namespace) -> int:
         limit=args.limit,
         emit_hint=False,  # drain IS the remedy; never hint
     )
+    _emit_owed_notice(store, agent, rc, quiet=args.quiet)
+    return rc
 
 
 def _write_waiting_marker(
@@ -9623,6 +9699,19 @@ def _scoped_wait(store: Store, agent: str, args: argparse.Namespace, wait_token:
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
+    """`wait`, then the lead's owed-relay block (global and scoped waits alike; see ``_emit_owed_notice``)."""
+    rc = _cmd_wait_core(args)
+    if rc == 0 and not getattr(args, "quiet", False):
+        try:
+            store = _get_store(args)
+            agent = _resolve_self(args.agent, roster=store.load_config().get("agents") or [])
+        except (SystemExit, Exception):  # noqa: BLE001 - advisory only; the wait itself already succeeded
+            return rc
+        _emit_owed_notice(store, agent, rc)
+    return rc
+
+
+def _cmd_wait_core(args: argparse.Namespace) -> int:
     store = _get_store(args)
     agent = _resolve_self(args.agent, roster=store.load_config().get("agents") or [])
     blocked = _guard_lead_loop_consumer(store, agent, verb="wait")
@@ -16490,6 +16579,32 @@ def build_parser() -> argparse.ArgumentParser:
     roc.add_argument("--reason", help="Reason for --override (audited).")
     roc.add_argument("--quiet", action="store_true")
     roc.set_defaults(func=cmd_relay)
+
+    rrs = relaysub.add_parser(
+        "result",
+        help="Hand a finished result's decision to a seat that waits for it, exactly once (or record that "
+             "nothing is needed, or that the request is no longer in live history).")
+    rrs.add_argument("--from", dest="sender", help="The lead handing over (default: resolved self).")
+    rrs.add_argument("--to", dest="to", required=True, help="The waiting seat.")
+    rrs.add_argument("--result-id", dest="result_id",
+                     help="Id of the finished result message (the owed-relay block names it).")
+    rrs.add_argument("--request-id", dest="request_id", help="With --unresolved: the request id the seat declared.")
+    rrs.add_argument("-m", "--message", dest="message", help="The decision text.")
+    rrs.add_argument("--file", help="Read the decision text from a file (`-` = stdin).")
+    rrs.add_argument("--none-needed", dest="none_needed", action="store_true",
+                     help="Close this seat's obligation without a decision (needs --reason).")
+    rrs.add_argument("--unresolved", action="store_true",
+                     help="Close an obligation whose request is no longer in live history (needs --request-id).")
+    rrs.add_argument("--reason", help="Why nothing is needed (with --none-needed).")
+    rrs.add_argument("--quiet", action="store_true")
+    rrs.set_defaults(func=cmd_relay)
+
+    rwt = relaysub.add_parser(
+        "waiting",
+        help="Read-only: the declarations a seat made (waiting_on) and their derived state. Consumes nothing.")
+    rwt.add_argument("--for", "--from", dest="sender", help="The waiting seat (default: resolved self).")
+    rwt.add_argument("--json", action="store_true")
+    rwt.set_defaults(func=cmd_relay)
 
     # ----- knowledge (mixed pointer notes and lessons; capture-open, curate-gated) -----
     pkn = sub.add_parser(
