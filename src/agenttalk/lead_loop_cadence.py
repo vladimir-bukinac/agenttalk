@@ -222,8 +222,9 @@ def build_cadence_snapshot(store, agent: str, *, now_epoch: float,
     try:
         # EVERY open obligation: the per-sweep bound is applied AFTER the reminder dedup (cadence_actionable) and the
         # prompt gets a bounded copy (snapshot_for_prompt), so an old obligation that stays open cannot starve a newer
-        # one at any count. The one remaining bound is memory: one small record per open hand-off, which the live
-        # history (compaction) already bounds.
+        # one at any count. The one remaining bound is memory: one small record per open hand-off, so it grows with
+        # the number of live open hand-offs; this slice enforces no ceiling (compaction keeps what an open hand-off
+        # needs, so it does not bound that number).
         snap["relay"] = [
             {"seat": o.seat, "request_id": o.request_id, "result_id": o.result_id, "state": o.state, "since": o.since,
              "declaration_id": o.declaration_id, "age_seconds": _relay.age_seconds(o, now_epoch)}

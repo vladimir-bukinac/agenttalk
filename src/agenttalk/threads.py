@@ -659,11 +659,14 @@ def terminal_responses(messages: list[Message], requester: str, *,
                 # the reply that FIRST completed the audience stays the result: a later follow-up from a member must
                 # not change its id (relay closings are keyed by it)
                 audience = {m.recipient for m in bcast}
+                # retirement stands in only for a member who never replied: one who replied (and retired later)
+                # keeps their reply, so the completing reply, and the id relay closings are keyed by, cannot move
+                excused = retired - {r.sender for r in replies}
                 heard: set[str] = set()
                 completing = replies[-1]
                 for reply in replies:
                     heard.add(reply.sender)
-                    if all(a in heard or a in retired for a in audience):
+                    if all(a in heard or a in excused for a in audience):
                         completing = reply
                         break
                 found[rid] = (min(bcast, key=lambda m: m.id), completing)

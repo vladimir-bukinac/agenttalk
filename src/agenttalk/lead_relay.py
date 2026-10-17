@@ -144,6 +144,17 @@ def is_closing(m: Message, lead: str) -> bool:
     return outcome != OUTCOME_NOT_NEEDED or bool((m.body or "").strip())
 
 
+def closes(closing: Message, decl: Message) -> bool:
+    """Whether ``closing`` answers the declaration ``decl``: the one its ``relay_decl`` names. A closing for an older
+    declaration never closes a newer one, whatever the message order says (a delayed command can append it after
+    the seat declared again). A closing without a generation (written by hand, before declarations were named)
+    answers only a declaration that came before it."""
+    named = _meta(closing).get("relay_decl")
+    if isinstance(named, str) and named:
+        return named == decl.id
+    return closing.id > decl.id
+
+
 def _closings(messages: list[Message], lead: str) -> tuple[dict[tuple[str, str], Message],
                                                            dict[tuple[str, str], Message]]:
     """``({(kind, relay_of, seat): closing}, {(request id, seat): closing})`` of the lead's valid closing messages.
@@ -187,8 +198,8 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
         if rid in results:
             result = results[rid][1]
             closing = closings.get(("result", result.id, seat))
-            if closing is not None and closing.id <= decl.id:
-                closing = None      # an older hand-off does not answer a declaration made after it
+            if closing is not None and not closes(closing, decl):
+                closing = None      # a hand-off for another declaration does not answer this one
             since = decl.ts if _epoch(decl.ts) > _epoch(result.ts) else result.ts
             if closing is not None:
                 outcome = _meta(closing).get("relay_outcome")
@@ -205,10 +216,10 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
         else:
             closing = closings.get(("unresolved", rid, seat))
             kept = closings_by_request.get((rid, seat))
-            if (closing is not None and closing.id > decl.id
+            if (closing is not None and closes(closing, decl)
                     and _meta(closing).get("relay_outcome") == OUTCOME_UNRESOLVED):
                 found.append(Obligation(lead, seat, rid, None, CLOSED_UNRESOLVED, decl.ts, decl.id, closing.id))
-            elif kept is not None and kept.id > decl.id and not is_cancelled:
+            elif kept is not None and closes(kept, decl) and not is_cancelled:
                 # the request and its result were archived, the declaration and the closing were not
                 state = (CLOSED_NOT_NEEDED if _meta(kept).get("relay_outcome") == OUTCOME_NOT_NEEDED
                          else CLOSED_FORWARDED)
@@ -419,6 +430,20 @@ def publish_handoff(store: Store, lead: str, seat: str, *, result_id: str | None
         if not text:
             raise RelayRefused("a reason (--none-needed --reason) is required" if outcome == OUTCOME_NOT_NEEDED
                                else "the decision text is required (-m)")
+    for _attempt in range(4):
+        try:
+            return _publish_once(store, lead, seat, outcome, target, text, result_id, request_id)
+        except _GenerationMoved:
+            continue            # the seat declared again while the command ran: answer the NEW declaration
+    raise RelayRefused("%s declared again too often while the hand-off was being sent; run the command again" % seat)
+
+
+class _GenerationMoved(Exception):
+    """The seat's declaration changed between the generation read and the publication (internal; retried)."""
+
+
+def _publish_once(store: Store, lead: str, seat: str, outcome: str, target: str, text: str,
+                  result_id: str | None, request_id: str | None) -> tuple[Message, bool]:
     generation = _declaration_generation(store, lead, seat, outcome, target)
     meta = {"relay_of": target, "relay_nonce": handoff_nonce(lead, target, seat, outcome, generation)}
     if generation:
@@ -436,6 +461,10 @@ def publish_handoff(store: Store, lead: str, seat: str, *, result_id: str | None
     digest = Store._operation_digest_for_intent(intent, text)
 
     def precheck() -> None:
+        # inside the publication lock: the generation current NOW must be the one this closing names. (An ordinary
+        # reply does not take this lock, so the projection also checks relay_decl; this keeps the usual case exact.)
+        if _declaration_generation(store, lead, seat, outcome, target) != generation:
+            raise _GenerationMoved()
         msgs = store.valid_messages()
         if seat not in store.load_config().get("agents", []):
             raise RelayRefused("%r is not on the roster" % seat)
