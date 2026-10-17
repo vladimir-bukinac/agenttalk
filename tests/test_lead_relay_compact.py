@@ -153,3 +153,50 @@ def test_a_dry_run_moves_nothing_and_takes_no_lock(tmp_path: Path) -> None:
     res = cli._run_compaction(s, s.load_config(), keep_count=1, keep_age_days=0.0, dry_run=True,
                               now=_later())
     assert res["archived"] and _live_ids(s) == before
+
+
+def test_the_floor_is_recomputed_for_every_batch(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    ids = _old_fillers(s, 6)
+    calls: list[int] = []
+
+    def floor_fn() -> str:
+        calls.append(1)
+        # a declaration that appears after the first batch protects what is left: the later floor is lower
+        return "~" if len(calls) == 1 else ids[3]
+
+    floor, records = s.archive_messages_batched(floor_fn, batch_size=2)
+    assert len(calls) >= 2 and floor == ids[3]
+    assert {r["id"] for r in records} <= set(ids[:3])
+    assert set(ids[3:]) <= _live_ids(s)
+
+
+def test_the_floor_is_computed_while_both_publication_locks_are_held(tmp_path: Path) -> None:
+    s = _store(tmp_path)
+    _old_fillers(s, 2)
+    outcome: dict = {}
+
+    def other_publisher() -> None:
+        try:
+            with s._message_publication_lock(timeout=0.3):
+                outcome["got_mutex"] = True
+        except Exception as exc:  # noqa: BLE001 - the refusal is the expected path
+            outcome["refused"] = type(exc).__name__
+
+    def blocked_operation() -> None:
+        try:
+            with s._exclusive_lock(s.state_dir / "operation-publication.lock", timeout=0.3, what="probe"):
+                outcome["got_operation_lock"] = True
+        except Exception as exc:  # noqa: BLE001
+            outcome["op_refused"] = type(exc).__name__
+
+    def floor_fn() -> str:
+        for target in (other_publisher, blocked_operation):
+            t = threading.Thread(target=target)
+            t.start()
+            t.join(timeout=30)
+        return ""
+
+    s.archive_messages_batched(floor_fn, batch_size=2)
+    assert "got_mutex" not in outcome and "refused" in outcome, outcome
+    assert "got_operation_lock" not in outcome and "op_refused" in outcome, outcome
