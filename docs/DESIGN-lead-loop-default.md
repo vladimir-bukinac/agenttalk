@@ -16,7 +16,7 @@ How to read the tags. **FACT** = I read it in this tree at the commit above (a p
 
 **The seats waiting on a result.** A builder that waits on a review verdict or a gate result gets the lead's decision, or an explicit "nothing needed", sent once. If the lead is slow, a reminder follows and then an escalation until the obligation closes. The design promises a best-effort target, not a deadline (section 6).
 
-**What slice 1 promises, and what it does not.** Slice 1 makes the owed hand-off of a **finished** result **visible**, **forwardable once** and **reminded**, **best effort**, **for declared waiters only**. It does not promise delivery, a time, or that every waiting seat is found. **A seat that never declared that it waits (`waiting_on`, or `relay_to` from the lead) is invisible to this mechanism**: no obligation exists for it, nothing is reminded, and `status` says nothing about it. That is the normal case for a builder that does not know to declare, and it is the design's largest limit; the lead skill text must say it in the same plain words. Nothing in this document is a guarantee, and no test is allowed to be read as one.
+**What slice 1 promises, and what it does not.** Slice 1 makes the owed hand-off of a **finished** result **visible**, **forwardable once** and **reminded**, **best effort**, **for declared waiters only**. It does not promise delivery, a time, or that every waiting seat is found. **A seat that never declared that it waits (`waiting_on`, or `relay_to` from the lead) is invisible to this mechanism**: no obligation exists for it, nothing is reminded, and `status` says nothing about it. That is the normal case for a builder that does not know to declare, and it is the design's largest limit; the lead skill text must say it in the same plain words. Nothing in this document promises delivery, and no test is allowed to be read as a promise of it.
 
 **What ships when.** Slice 1 is the relay obligations, the atomic hand-off, coverage of every consuming path, visible owed and overdue records, best-effort reminders and a last-completion field that says exactly what completed. Default-on, the routine-health label, snapshots and rule watching come later; their contracts are settled in sections 7 to 9 now, because default-on is the operator's requirement.
 
@@ -255,7 +255,7 @@ Fixture store, fake clock, fake model child (ASSUMPTION: the existing wrapper te
 
 | Reshape point | Answer in the design |
 |---|---|
-| scope the promise as best effort, say an undeclared waiter is invisible, no "guarantee" anywhere | section 1 ("What slice 1 promises, and what it does not"); two wordings removed; case 12e |
+| scope the promise as best effort, say an undeclared waiter is invisible, no wording that over-promises | section 1 ("What slice 1 promises, and what it does not"); two wordings removed; case 12e |
 | acceptance case for the scoped wrapper path | case 12c (a) and (b), with the honest fallback if the CLI scoped path cannot print the notice |
 | acceptance case for a late declaration after the result was consumed and archived | case 12d (the `unresolved` outcome of section 5) |
 | a third design read | **declined by the lead's rule of one final read; replaced** by a build step 0 spike of the three load-bearing assumptions and a first code read of the five P2 contracts (section 15, "Build order") |
