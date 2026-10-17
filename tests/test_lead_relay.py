@@ -352,8 +352,9 @@ def test_the_reask_rule_is_the_one_derive_threads_uses(tmp_path: Path) -> None:
     assert thread.state != "closed" and "R1" not in threads.terminal_responses(s.valid_messages(), "lead")
 
 
-def _closing_meta(result: str, **over) -> dict:
-    meta = {"relay_of": result, "relay_nonce": relay.handoff_nonce("lead", result, "builder", relay.OUTCOME_FORWARDED)}
+def _closing_meta(result: str, decl: str, **over) -> dict:
+    meta = {"relay_of": result, "relay_decl": decl,
+            "relay_nonce": relay.handoff_nonce("lead", result, "builder", relay.OUTCOME_FORWARDED, decl)}
     meta.update(over)
     return {k: v for k, v in meta.items() if v is not None}
 
@@ -362,21 +363,22 @@ def _closing_meta(result: str, **over) -> dict:
                                    "not-needed without a reason"])
 def test_a_partial_closing_marker_closes_nothing(tmp_path: Path, label: str) -> None:
     s = _store(tmp_path)
-    _request(s, "R1", relay_to="builder")
+    decl = _request(s, "R1", relay_to="builder")
     result = _result(s, "R1")
     body = "a note"
     if label == "no nonce":
-        meta = _closing_meta(result, relay_nonce=None)
+        meta = _closing_meta(result, decl, relay_nonce=None)
     elif label == "wrong nonce":
-        meta = _closing_meta(result, relay_nonce="0" * 32)
+        meta = _closing_meta(result, decl, relay_nonce="0" * 32)
     elif label == "nonce of another seat":
-        meta = _closing_meta(result, relay_nonce=relay.handoff_nonce("lead", result, "other", relay.OUTCOME_FORWARDED))
+        meta = _closing_meta(result, decl, relay_nonce=relay.handoff_nonce(
+            "lead", result, "other", relay.OUTCOME_FORWARDED, decl))
     elif label == "unknown outcome":
-        meta = _closing_meta(result, relay_outcome="banana")
+        meta = _closing_meta(result, decl, relay_outcome="banana")
     else:
         body = " "
-        meta = _closing_meta(result, relay_outcome="not-needed",
-                             relay_nonce=relay.handoff_nonce("lead", result, "builder", relay.OUTCOME_NOT_NEEDED))
+        meta = _closing_meta(result, decl, relay_outcome="not-needed",
+                             relay_nonce=relay.handoff_nonce("lead", result, "builder", relay.OUTCOME_NOT_NEEDED, decl))
     s.send(sender="lead", recipient="builder", body=body, meta=meta)
     assert _states(s) == {("builder", "R1"): relay.OWED}, label
     assert [o.state for o in relay.derive_for_seat(s.valid_messages(), "builder")] == [relay.OWED]
@@ -384,9 +386,9 @@ def test_a_partial_closing_marker_closes_nothing(tmp_path: Path, label: str) -> 
 
 def test_the_full_closing_tuple_closes_and_an_absent_outcome_means_forwarded(tmp_path: Path) -> None:
     s = _store(tmp_path)
-    _request(s, "R1", relay_to="builder")
+    decl = _request(s, "R1", relay_to="builder")
     result = _result(s, "R1")
-    s.send(sender="lead", recipient="builder", body="merge it", meta=_closing_meta(result))
+    s.send(sender="lead", recipient="builder", body="merge it", meta=_closing_meta(result, decl))
     assert _states(s) == {("builder", "R1"): relay.CLOSED_FORWARDED}
 
 

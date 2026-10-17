@@ -150,8 +150,10 @@ def test_the_seat_view_ignores_another_leads_cancel(tmp_path: Path) -> None:
 
 def test_the_seat_view_ignores_another_leads_closing(tmp_path: Path) -> None:
     s = _store(tmp_path)
-    _declare(s, "builder", "GONE", to="lead")
-    relay.publish_handoff(s, "lead2", "builder", request_id="GONE", outcome=relay.OUTCOME_UNRESOLVED)
+    decl = _declare(s, "builder", "GONE", to="lead")
+    note = {"relay_of": "GONE", "relay_outcome": relay.OUTCOME_UNRESOLVED, "relay_decl": decl,
+            "relay_nonce": relay.handoff_nonce("lead2", "GONE", "builder", relay.OUTCOME_UNRESOLVED, decl)}
+    s.send(sender="lead2", recipient="builder", body="unresolved", meta=note)       # a valid closing of ANOTHER lead
     assert _states(s, "lead") == {("builder", "GONE"): relay.UNRESOLVED}
     states = [(o.lead, o.state) for o in relay.derive_for_seat(s.valid_messages(), "builder")]
     assert states == [("lead", relay.UNRESOLVED)]

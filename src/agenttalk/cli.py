@@ -8203,7 +8203,7 @@ def cmd_lead_routine(args: argparse.Namespace) -> int:
         return 0
     if sub == "status":
         field = lead_routine.status_field(store, agent)
-        notice = lead_relay.notice_for(store, agent)
+        notice = lead_relay.notice_for(store, agent, force=True)   # explicit: shown whatever the role now is
         if args.json:
             print(json.dumps({"agent": agent, "lead_routine": field}, indent=2))
             return 0
