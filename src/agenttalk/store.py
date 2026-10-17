@@ -6338,7 +6338,7 @@ class Store:
         return self.state_dir / f"{validate_agent_name(agent)}.lead-loop-cadence.json"
 
     def _default_cadence_state(self) -> dict:
-        return {"last_tick_epoch": 0.0, "last_reminded": {}, "escalation_dedup": {},
+        return {"last_tick_epoch": 0.0, "last_reminded": {}, "escalation_dedup": {}, "relay_reminded": {},
                 "cadence_fails": 0, "backoff_until_epoch": 0.0, "health_escalated": False}
 
     def read_lead_loop_cadence(self, agent: str) -> dict:
@@ -6377,10 +6377,12 @@ class Store:
 
         lr = data.get("last_reminded")
         ed = data.get("escalation_dedup")
+        rr = data.get("relay_reminded")
         return {
             "last_tick_epoch": _f("last_tick_epoch"),
             "last_reminded": lr if isinstance(lr, dict) else {},
             "escalation_dedup": ed if isinstance(ed, dict) else {},
+            "relay_reminded": rr if isinstance(rr, dict) else {},
             "cadence_fails": _i("cadence_fails"),
             "backoff_until_epoch": _f("backoff_until_epoch"),
             "health_escalated": bool(data.get("health_escalated")),

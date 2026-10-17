@@ -65,6 +65,7 @@ from agenttalk import lanes as lane_mod
 from agenttalk import install_skills as iskl
 from agenttalk import lead_loop_runtime
 from agenttalk import lead_relay
+from agenttalk import lead_routine
 from agenttalk import launch_admission
 from agenttalk import onboarding as ob
 from agenttalk import signing as _signing
@@ -887,6 +888,10 @@ def _gather_status(store: Store) -> dict:
             hsa = lead_loop_runtime.resolve_timing(
                 store, a, supervisor_config=sup_cfg or None)["heartbeat_stale_after"]
             row["lead_loop"] = store.lead_loop_state(a, heartbeat_stale_after=hsa)
+        if lead_relay.is_lead_like(store, a):       # additive: only a lead with something recorded or owed
+            routine_field = lead_routine.status_field(store, a)
+            if routine_field is not None:
+                row["lead_routine"] = routine_field
         agents.append(row)
     # Same projection list_invalid_messages() applies, over the SAME raw
     # scan result already paid for above instead of a second full walk
@@ -8078,6 +8083,46 @@ def _relay_waiting(store, sender: str, args) -> int:
     return 0
 
 
+def cmd_lead_routine(args: argparse.Namespace) -> int:
+    """lead-routine complete | status: the lead routine's record (what completed, by what, when; owed hand-offs)."""
+    store = _get_store(args)
+    roster = store.load_config().get("agents") or []
+    agent = _resolve_self(args.agent, roster=roster)
+    sub = getattr(args, "lr_cmd", None)
+    if sub == "complete":
+        try:
+            entry = lead_routine.complete(store, agent, args.part, kind="self-reported", note=args.note or "")
+        except ValueError as e:
+            sys.stderr.write(f"agenttalk lead-routine complete: {e}\n")
+            return 2
+        print(f"lead-routine: {agent} completed part {args.part!r} at {entry['at']} (self-reported)")
+        return 0
+    if sub == "status":
+        field = lead_routine.status_field(store, agent)
+        notice = lead_relay.notice_for(store, agent)
+        if args.json:
+            print(json.dumps({"agent": agent, "lead_routine": field}, indent=2))
+            return 0
+        if field is None:
+            print(f"lead-routine: nothing recorded and nothing owed for {agent}.")
+            return 0
+        sweep = field["sweep"]
+        print(f"lead-routine for {agent}: open hand-offs {field['open_relays']} (overdue {field['overdue_relays']})")
+        if sweep:
+            print(f"  last sweep {sweep.get('at')}: attempted {len(sweep.get('attempted') or [])}, "
+                  f"failed {sweep.get('failed') or 'none'}")
+        for name, entry in sorted(field["parts"].items()):
+            print(f"  part {name}: {entry.get('kind', '?')} at {entry.get('at', '?')}"
+                  + (f", failed {entry['failed']}" if entry.get("failed") else ""))
+        for name, entry in sorted(field["manual_parts"].items()):
+            print(f"  manual part {name}: {entry.get('at')} (not covered by automatic health)")
+        if notice:
+            print(notice)
+        return 0
+    sys.stderr.write("agenttalk lead-routine: a subcommand is required (complete | status).\n")
+    return 2
+
+
 def cmd_propose(args: argparse.Namespace) -> int:
     """Send a `proposal`: a concrete solution/approach for the peer to
     accept / reject / counter.
@@ -12929,10 +12974,22 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
                 raise
             except Exception:  # noqa: BLE001 - snapshot/actionability failure == cadence failure
                 return _fail()
+            def _note_sweep() -> None:
+                # what this sweep attempted and covered (lead routine record); a failed write never fails the sweep
+                try:
+                    lease = store.read_lead_loop_lease(agent) or {}
+                    lead_routine.record_sweep(
+                        store, agent, controller_start=str(lease.get("acquired_at") or ""),
+                        attempted=list(snap.get("attempted_sections") or []),
+                        failed=list(snap.get("failed_sections") or []), now_epoch=now_epoch)
+                except Exception:  # noqa: BLE001, S110  # nosec B110
+                    pass
+
             if not items:
                 # due but nothing actionable: record the sweep (no model turn spent).
                 store.write_lead_loop_cadence(agent, _cad.apply_tick_success(
                     cstate, now_epoch=now_epoch, reminded_keys=[], escalation_keys=[]))
+                _note_sweep()
                 return wloop.CadenceResult(ran=True, ok=True, drove_turn=False)
             try:
                 ok = bool(cadence_drive(snap, items))
@@ -12948,7 +13005,9 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
                                if it.get("type") in ("dead_letter", "unrouted_escalation")]
             store.write_lead_loop_cadence(agent, _cad.apply_tick_success(
                 cstate, now_epoch=now_epoch, reminded_keys=reminded_keys,
-                escalation_keys=escalation_keys))
+                escalation_keys=escalation_keys,
+                relay_reminded={it["key"]: it["bucket"] for it in items if it.get("type") == "relay_overdue"}))
+            _note_sweep()
             runtime_writer.idle()
             return wloop.CadenceResult(ran=True, ok=True, drove_turn=True)
 
@@ -16620,6 +16679,25 @@ def build_parser() -> argparse.ArgumentParser:
     rwt.add_argument("--for", "--from", dest="sender", help="The waiting seat (default: resolved self).")
     rwt.add_argument("--json", action="store_true")
     rwt.set_defaults(func=cmd_relay)
+
+    # ----- lead-routine (lead loop slice 1: the record of what the routine completed) -----
+    plr = sub.add_parser(
+        "lead-routine",
+        help="The lead routine's record: complete a part, show what completed and what is owed.")
+    plr.set_defaults(func=cmd_lead_routine, lr_cmd=None)
+    lrsub = plr.add_subparsers(dest="lr_cmd")
+    lrc = lrsub.add_parser(
+        "complete", help="Record that you completed a part of the routine (self-reported; changes only that part).")
+    lrc.add_argument("--for", dest="agent", help="The lead (default: $AGENTTALK_SELF).")
+    lrc.add_argument("--part", required=True, choices=list(lead_routine.ALL_PARTS),
+                     help="The part completed; handover, resources and scheduled are manual and not covered by "
+                          "automatic health.")
+    lrc.add_argument("--note", help="A short note (kept up to 200 characters).")
+    lrc.set_defaults(func=cmd_lead_routine)
+    lrs = lrsub.add_parser("status", help="Read-only: what completed, the last sweep, the owed hand-offs.")
+    lrs.add_argument("--for", dest="agent", help="The lead (default: $AGENTTALK_SELF).")
+    lrs.add_argument("--json", action="store_true")
+    lrs.set_defaults(func=cmd_lead_routine)
 
     # ----- knowledge (mixed pointer notes and lessons; capture-open, curate-gated) -----
     pkn = sub.add_parser(
