@@ -1254,6 +1254,13 @@ def _compute_keep_floor(store: Store, cfg: dict, *, keep_count: int,
     except Exception:  # noqa: BLE001 — a derivation error must archive NOTHING
         components["thread"] = ""
 
+    # relay: a request group, a result or a declaration that an OWED (or unresolved) hand-off depends on stays live
+    # (lead loop, slice 1: the obligation is derived from these messages, so archiving them would erase it).
+    try:
+        components["relay"] = lead_relay.protected_floor(msgs, retired=set(store.retired_agents()))
+    except Exception:  # noqa: BLE001 — a derivation error must archive NOTHING
+        components["relay"] = ""
+
     # keeptail: keep newest keep_count AND everything younger than keep_age
     # (the UNION => the lower of the two boundaries).
     ids = sorted(m.id for m in msgs)
@@ -1275,9 +1282,17 @@ def _run_compaction(store: Store, cfg: dict, *, keep_count: int,
                     now: datetime | None = None) -> dict:
     """Compute the floor and move (or plan) the prefix. Stamps the throttle
     record on a real run."""
-    keep_floor, capped_by, components = _compute_keep_floor(
-        store, cfg, keep_count=keep_count, keep_age_days=keep_age_days, now=now)
-    records = store.archive_messages_below(keep_floor, dry_run=dry_run)
+    last: dict = {}
+
+    def floor_fn() -> str:
+        # recomputed inside the publication locks for EVERY batch (Store.archive_messages_batched), so a
+        # declaration published between two batches is seen before the next files are moved
+        last["floor"], last["capped_by"], last["components"] = _compute_keep_floor(
+            store, cfg, keep_count=keep_count, keep_age_days=keep_age_days, now=now)
+        return last["floor"]
+
+    _, records = store.archive_messages_batched(floor_fn, dry_run=dry_run)
+    keep_floor, capped_by, components = last["floor"], last["capped_by"], last["components"]
     if not dry_run:
         store.write_compact_stamp({
             "at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),

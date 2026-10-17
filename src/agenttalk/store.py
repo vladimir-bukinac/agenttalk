@@ -6840,8 +6840,32 @@ class Store:
         except OSError:
             return 0
 
-    def archive_messages_below(self, keep_floor: str, *,
-                               dry_run: bool = False) -> list[dict]:
+    def archive_messages_batched(self, floor_fn: Callable[[], str], *, dry_run: bool = False,
+                                 batch_size: int = 200) -> tuple[str, list[dict]]:
+        """Archive in batches, each under the publication locks, with the floor recomputed inside them.
+
+        Lock order is the one ``send_operation`` uses: ``state/operation-publication.lock`` (rank 100), then the
+        message-publication mutex (rank 160), released between batches. A declaration (an ordinary ``send``)
+        waits for the mutex, so it is either published before the recheck (and protects its request group) or after
+        the batch (and finds the request archived: the ``unresolved`` outcome of lead_relay). A dry run takes no
+        lock and moves no file.
+        """
+        if dry_run:
+            floor = floor_fn()
+            return floor, self.archive_messages_below(floor, dry_run=True)
+        records: list[dict] = []
+        floor = ""
+        while True:
+            with self._exclusive_lock(self.state_dir / "operation-publication.lock", timeout=10.0,
+                                      what="compaction batch"), self._message_publication_lock():
+                floor = floor_fn()
+                part = self.archive_messages_below(floor, limit=batch_size)
+            records.extend(part)
+            if len(part) < batch_size:
+                return floor, records
+
+    def archive_messages_below(self, keep_floor: str, *, dry_run: bool = False,
+                               limit: int | None = None) -> list[dict]:
         """Move every VALID message with ``id < keep_floor`` into
         archived/compacted/. Returns ``[{"id","from","to"}]`` per file (the
         plan, when ``dry_run``).
@@ -6869,7 +6893,9 @@ class Store:
         invalid_names = {p.name for p, _, _ in self._invalid_file_entries()}
         records: list[dict] = []
         made_dir = False
-        for m, src in valid_p:
+        for m, src in sorted(valid_p, key=lambda pair: pair[0].id):
+            if limit is not None and len(records) >= limit:
+                break
             if src.name in invalid_names:
                 continue
             if m.id >= keep_floor:

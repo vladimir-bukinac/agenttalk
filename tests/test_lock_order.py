@@ -77,10 +77,12 @@ def test_package_acquisition_site_inventory():
                 found[path.relative_to(root).as_posix()] += 1
             if name == "_exclusive_lock_unordered":
                 assert path.name == "store.py", "bypassed lock rank check"
+    # store.py 67 -> 69 (lead loop slice 1, design section 5): archive_messages_batched takes the publication lock
+    # (rank 100) and then the message-publication mutex (rank 160), the order send_operation already uses.
     assert found == {
         "assurance.py": 7, "attention.py": 2, "checkpoint.py": 1, "cli.py": 31,
         "close.py": 3, "gates.py": 1, "knowledge.py": 2, "lanes.py": 1,
-        "lesson_context.py": 1, "onboarding.py": 2, "recovery.py": 1, "store.py": 67,
+        "lesson_context.py": 1, "onboarding.py": 2, "recovery.py": 1, "store.py": 69,
         "supervisor.py": 4, "supervisor_lifecycle.py": 14, "work_board_facts.py": 2,
         "wrapper/obligations.py": 64, "wrapper/turn_watchdog.py": 1,
     }

@@ -207,6 +207,28 @@ def derive_for_seat(messages: list[Message], seat: str, *, retired: Iterable[str
     return sorted(seen.values(), key=lambda o: (_epoch(o.since), o.request_id))
 
 
+def protected_floor(messages: list[Message], *, retired: Iterable[str] = ()) -> str | None:
+    """The oldest message id that an open (owed or unresolved) obligation of any lead depends on, or None.
+
+    Compaction must keep everything from this id on: the declaration, the request group and the result. Archiving
+    them would end the derivation, which is the loss this design exists to prevent.
+    """
+    msgs = sorted(messages, key=lambda m: m.id)
+    groups = _threads.group_messages_by_request_id(msgs)
+    ids: list[str] = []
+    leads = {m.sender for m in msgs if m.kind in OPENER_KINDS}
+    leads |= {m.recipient for m in msgs if _csv(_meta(m).get("waiting_on"))}    # a lead with no live opener at all
+    for lead in leads:
+        for ob in derive(msgs, lead, retired=retired):
+            if not ob.is_open:
+                continue
+            ids.append(ob.declaration_id)
+            if ob.result_id:
+                ids.append(ob.result_id)
+            ids.extend(m.id for m in groups.get(ob.request_id, []))
+    return min(ids) if ids else None
+
+
 def open_obligations(obligations: Iterable[Obligation]) -> list[Obligation]:
     return [o for o in obligations if o.is_open]
 
