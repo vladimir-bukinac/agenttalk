@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   A finished hand-off stays finished when old messages are cleaned up in several steps, and a re-asked
   request no longer offers its old answer. Only the command's own message closes a hand-off, and the
   routine record keeps the sweep's findings and the lead's own word apart for every part.
+  A hand-off is no longer closed by an older one, a cancelled or incomplete request no longer produces
+  one, a mistyped seat name in `relay_to` is refused when the request is sent, and the reminders stay
+  fair when more than twenty hand-offs are open.
   (Technical detail: derived obligations in `lead_relay.py`; `Store.send_operation` gained a
   `precheck` run inside the publication lock; `Store.archive_messages_batched` recomputes the
   protected floor under the rank-100 and rank-160 locks; routine record in

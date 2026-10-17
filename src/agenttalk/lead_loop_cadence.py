@@ -220,10 +220,12 @@ def build_cadence_snapshot(store, agent: str, *, now_epoch: float,
 
     # owed hand-offs of finished results (derived from the bus; lead loop, slice 1)
     try:
+        # every open obligation, not the first few: the per-sweep bound is applied AFTER the reminder dedup
+        # (cadence_actionable), so an old obligation that stays open cannot starve the newer ones
         snap["relay"] = [
             {"seat": o.seat, "request_id": o.request_id, "result_id": o.result_id, "state": o.state, "since": o.since,
-             "age_seconds": _relay.age_seconds(o, now_epoch)}
-            for o in _relay.open_obligations(_relay.obligations_for(store, agent))[:max_items]]
+             "declaration_id": o.declaration_id, "age_seconds": _relay.age_seconds(o, now_epoch)}
+            for o in _relay.open_obligations(_relay.obligations_for(store, agent))[:RELAY_SNAPSHOT_CAP]]
     except Exception:  # noqa: BLE001
         snap["relay"] = []
         failed.append("relay")
@@ -231,6 +233,22 @@ def build_cadence_snapshot(store, agent: str, *, now_epoch: float,
     snap["attempted_sections"] = attempted
     snap["failed_sections"] = failed
     return snap
+
+
+RELAY_SNAPSHOT_CAP = 500        # open hand-offs one snapshot carries
+RELAY_ITEMS_PER_SWEEP = 20      # relay items one sweep turn raises (the rest stay due for the next sweep)
+
+
+def bucket_value(value: object) -> int:
+    """A stored reminder bucket as a non-negative int; anything else (NaN, infinity, text, a negative number or a
+    hand-edited value) reads as 0, so one bad entry can never fail every later sweep."""
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    if number != number or number in (float("inf"), float("-inf")) or number < 0:
+        return 0
+    return int(number)
 
 
 def cadence_actionable(snapshot: dict, cstate: dict, *, now_epoch: float,
@@ -275,16 +293,23 @@ def cadence_actionable(snapshot: dict, cstate: dict, *, now_epoch: float,
     # obligation closes. A successful reminder turn closes nothing: only the bus (a closing message) does.
     relay_last = cstate.get("relay_reminded")
     relay_last = relay_last if isinstance(relay_last, dict) else {}
+    due: list[dict] = []
     for ob in snapshot.get("relay") or []:
         age = _f(ob.get("age_seconds"))
         bucket = _relay.reminder_bucket(age)
-        key = "relay:%s:%s:%s" % (ob.get("request_id"), ob.get("result_id"), ob.get("seat"))
-        if bucket <= 0 or bucket <= int(_f(relay_last.get(key))):
+        # the declaration is part of the identity: a waiter that cancelled and declared again starts over
+        key = "relay:%s:%s:%s:%s" % (ob.get("request_id"), ob.get("result_id"), ob.get("seat"),
+                                     ob.get("declaration_id"))
+        if bucket <= 0 or bucket <= bucket_value(relay_last.get(key)):
             continue
-        items.append({"type": "relay_overdue", "key": key, "bucket": bucket,
-                      "escalate": bucket >= _relay.RELAY_ESCALATE_BUCKET, "seat": ob.get("seat"),
-                      "request_id": ob.get("request_id"), "result_id": ob.get("result_id"),
-                      "state": ob.get("state"), "age_seconds": age})
+        due.append({"type": "relay_overdue", "key": key, "bucket": bucket,
+                    "escalate": bucket >= _relay.RELAY_ESCALATE_BUCKET, "seat": ob.get("seat"),
+                    "request_id": ob.get("request_id"), "result_id": ob.get("result_id"),
+                    "state": ob.get("state"), "age_seconds": age})
+    # bound the turn, not the snapshot: the oldest first, and what does not fit stays due for the next sweep
+    # (a recorded bucket suppresses only the items that were actually raised)
+    due.sort(key=lambda it: (-it["age_seconds"], it["key"]))
+    items.extend(due[:RELAY_ITEMS_PER_SWEEP])
 
     for dl in (snapshot.get("dead_letters") or {}).get("items") or []:
         mid = dl.get("message_id")
@@ -322,7 +347,7 @@ def apply_tick_success(cstate: dict, *, now_epoch: float,
         dedup[key] = True
     relay_last = dict(cstate.get("relay_reminded") or {})
     for key, bucket in (relay_reminded or {}).items():
-        relay_last[key] = max(int(_f(relay_last.get(key))), int(bucket))
+        relay_last[key] = max(bucket_value(relay_last.get(key)), bucket_value(bucket))
     return {
         "last_tick_epoch": now_epoch,
         "last_reminded": last_reminded,

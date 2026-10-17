@@ -28,6 +28,8 @@ Everything here is a pure read of the validated message list (no cursor, no writ
 from __future__ import annotations
 
 import hashlib
+import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Iterable
@@ -107,11 +109,14 @@ def _decisions(messages: list[Message], lead: str) -> tuple[dict, dict, set]:
     foreign: set[str] = set()
     for m in messages:                                   # ``messages`` is sorted by id
         meta = _meta(m)
-        for rid in _csv(meta.get("waiting_on")):
-            if m.sender != lead:
-                declared[(m.sender, rid)] = m
-        for rid in _csv(meta.get("waiting_off")):
-            cancelled[(m.sender, rid)] = m.id
+        # a declaration or a cancel counts only for the lead it is addressed to: another lead of the team neither
+        # owes the decision nor sees a reminder for it
+        if m.recipient == lead:
+            for rid in _csv(meta.get("waiting_on")):
+                if m.sender != lead:
+                    declared[(m.sender, rid)] = m
+            for rid in _csv(meta.get("waiting_off")):
+                cancelled[(m.sender, rid)] = m.id
         if m.sender == lead and m.kind in OPENER_KINDS:
             rid = meta.get("request_id")
             if isinstance(rid, str) and rid:
@@ -167,7 +172,7 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
     msgs = sorted(messages, key=lambda m: m.id)
     retired_set = set(retired)
     declared, cancelled, foreign = _decisions(msgs, lead)
-    results = _threads.terminal_responses(msgs, lead)
+    results = _threads.terminal_responses(msgs, lead, retired=retired_set)
     closings, closings_by_request = _closings(msgs, lead)
     openers = {rid for rid, group in _threads.group_messages_by_request_id(msgs).items()
                if any(m.kind in OPENER_KINDS and m.sender == lead for m in group)}
@@ -178,6 +183,8 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
         if rid in results:
             result = results[rid][1]
             closing = closings.get((result.id, seat))
+            if closing is not None and closing.id <= decl.id:
+                closing = None      # an older hand-off does not answer a declaration made after it
             since = decl.ts if _epoch(decl.ts) > _epoch(result.ts) else result.ts
             if closing is not None:
                 outcome = _meta(closing).get("relay_outcome")
@@ -194,7 +201,8 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
         else:
             closing = closings.get((rid, seat))
             kept = closings_by_request.get((rid, seat))
-            if closing is not None and _meta(closing).get("relay_outcome") == OUTCOME_UNRESOLVED:
+            if (closing is not None and closing.id > decl.id
+                    and _meta(closing).get("relay_outcome") == OUTCOME_UNRESOLVED):
                 found.append(Obligation(lead, seat, rid, None, CLOSED_UNRESOLVED, decl.ts, decl.id, closing.id))
             elif kept is not None and kept.id > decl.id and not is_cancelled:
                 # the request and its result were archived, the declaration and the closing were not
@@ -210,6 +218,15 @@ def derive(messages: list[Message], lead: str, *, retired: Iterable[str] = ()) -
                 found.append(Obligation(lead, seat, rid, None, UNRESOLVED, decl.ts, decl.id))
     found.sort(key=lambda o: (_epoch(o.since), o.seat, o.request_id))
     return found
+
+
+def _retained_closing_for(m: Message, rid: str) -> bool:
+    """True when the (valid) closing ``m`` answers a declaration for request ``rid`` that has left live history:
+    an unresolved note names the request itself, a forwarded or not-needed closing names it as ``relay_request``."""
+    meta = _meta(m)
+    if meta.get("relay_outcome") == OUTCOME_UNRESOLVED:
+        return meta.get("relay_of") == rid
+    return meta.get("relay_request") == rid
 
 
 def derive_for_seat(messages: list[Message], seat: str, *, retired: Iterable[str] = ()) -> list[Obligation]:
@@ -228,10 +245,14 @@ def derive_for_seat(messages: list[Message], seat: str, *, retired: Iterable[str
     for rid in sorted(orphan_rids - known - live_rids):
         decl = next(m for m in reversed(msgs) if m.sender == seat and rid in _csv(_meta(m).get("waiting_on")))
         cancel = [m for m in msgs if m.sender == seat and rid in _csv(_meta(m).get("waiting_off")) and m.id > decl.id]
-        closing = next((m for m in reversed(msgs) if m.recipient == seat and _meta(m).get("relay_of") == rid
-                        and is_closing(m, m.sender) and _meta(m).get("relay_outcome") == OUTCOME_UNRESOLVED), None)
+        closing = next((m for m in reversed(msgs) if m.recipient == seat and m.id > decl.id and is_closing(m, m.sender)
+                        and _retained_closing_for(m, rid)), None)
         if closing is not None:
-            seen[(closing.sender, rid, seat)] = Obligation(closing.sender, seat, rid, None, CLOSED_UNRESOLVED, decl.ts,
+            outcome = _meta(closing).get("relay_outcome")
+            state = (CLOSED_UNRESOLVED if outcome == OUTCOME_UNRESOLVED
+                     else CLOSED_NOT_NEEDED if outcome == OUTCOME_NOT_NEEDED else CLOSED_FORWARDED)
+            seen[(closing.sender, rid, seat)] = Obligation(closing.sender, seat, rid, _meta(closing).get("relay_of")
+                                                           if state != CLOSED_UNRESOLVED else None, state, decl.ts,
                                                            decl.id, closing.id)
         elif cancel:
             seen[("?", rid, seat)] = Obligation("?", seat, rid, None, CANCELLED, decl.ts, decl.id)
@@ -276,6 +297,14 @@ def reminder_bucket(age: float, deadline: float = RELAY_DEADLINE_SECONDS) -> int
     return bucket
 
 
+_SAFE_TOKEN = re.compile(r"[A-Za-z0-9._:@+=-]{1,128}")
+
+
+def _is_safe_token(value: object) -> bool:
+    """A request id comes from another seat; a copyable command may carry it only when it is plainly shell-safe."""
+    return isinstance(value, str) and _SAFE_TOKEN.fullmatch(value) is not None
+
+
 def _human_age(seconds: float) -> str:
     minutes = int(seconds // 60)
     if minutes < 90:
@@ -296,12 +325,19 @@ def notice_lines(obligations: Iterable[Obligation], *, now_epoch: float, deadlin
         flag = " [OVERDUE]" if age >= deadline else ""
         if ob.state == UNRESOLVED:
             lines.append("- UNRESOLVED: seat %s declared that it waits for request %s; %s (declared %s ago)%s" % (
-                ob.seat, ob.request_id, UNRESOLVED_TEXT, _human_age(age), flag))
-            lines.append('  close it: agenttalk relay result --request-id %s --to %s --unresolved'
-                         % (ob.request_id, ob.seat))
+                ob.seat, json.dumps(ob.request_id) if not _is_safe_token(ob.request_id) else ob.request_id,
+                UNRESOLVED_TEXT, _human_age(age), flag))
+            if _is_safe_token(ob.request_id) and _is_safe_token(ob.seat):
+                lines.append('  close it: agenttalk relay result --request-id %s --to %s --unresolved'
+                             % (ob.request_id, ob.seat))
+            else:
+                lines.append("  its id has unusual characters, so no ready command is shown; close it with "
+                             "`agenttalk relay result --unresolved` and the exact id, quoted: %s"
+                             % json.dumps(ob.request_id))
         else:
             lines.append("- seat %s waits for the decision on request %s (result %s, owed for %s)%s" % (
-                ob.seat, ob.request_id, ob.result_id, _human_age(age), flag))
+                ob.seat, ob.request_id if _is_safe_token(ob.request_id) else json.dumps(ob.request_id),
+                ob.result_id, _human_age(age), flag))
             lines.append('  forward it: agenttalk relay result --result-id %s --to %s -m "<decision>"'
                          '   or   --none-needed --reason "<why>"' % (ob.result_id, ob.seat))
     if len(opened) > limit:

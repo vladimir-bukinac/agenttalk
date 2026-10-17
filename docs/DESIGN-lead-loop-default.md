@@ -360,3 +360,19 @@ Six P2 and three P3 findings were fixed; the design text above was corrected whe
 
 - **The relay check is a snapshot, not a promise of currency (decision of the lead, finding P3-9).** `relay result` re-derives the result **inside** the publication lock (rank 100), so two relay operations exclude each other and a rerun returns the first message. An **ordinary reply does not take that lock**, so a reply that re-opens the request (for example an `accepted` task response) can overtake the check between the precheck and the send: the lead may then forward a decision for a result that was withdrawn a moment earlier. The lock order is not changed for this slice. The lead skill says so in plain words: forward the decision, and if the seat answers that the work was re-opened, the next derivation shows it.
 - **Restart.** `tests/test_lead_relay_restart.py` runs a second wrapper instance on the same store after an interruption before the commit (the result is delivered again, one publication, the thread is seen afterwards) and after the commit (no replay, the hand-off is still owed because it is derived from the bus, one publication when closed).
+
+### Fix round 2 (connector review of e3ede070): eleven findings, none bounded
+
+All eleven were closed in the PR, each with a regression test (`tests/test_lead_relay_review2.py`); no item is carried as a named residual, so the PR follow-up list gains nothing from this round. What each rule is now:
+
+1. **A closing answers only the current declaration.** A closing counts only when its id is later than the declaration's (the latest `waiting_on`, or the lead's own `relay_to` opener); a seat that declares after a hand-off, or cancels and declares again, is owed again.
+2. **A rescinded request has no result.** `threads.terminal_responses` applies `_find_superseding_rescind`, the rule `derive_threads` uses (a rescind newer than the opener, from the requester).
+3. **An exact rerun finds its publication first.** `Store.send_operation` scans for the matching nonce and digest before it runs the precheck; the precheck validates only state a NEW send depends on (the result may have been compacted away). A different payload under the same nonce is still refused. The relay intent identity does not include `relay_request` (derived, not payload).
+4. **The seat view reads retained closings.** `relay waiting` finds a forwarded or not-needed closing through `relay_request` and an unresolved note through `relay_of`, as the lead view does, and requires the closing to postdate the declaration.
+5. **A broadcast has a result only when complete.** `_broadcast_responses` is the one scan `_derive_broadcast` and `terminal_responses` share; the result is the reply that completes it; a retired member does not hold it back (the lead derivation passes the retired set).
+6. **Reminder dedup is per declaration.** The cadence key contains the declaration id, so a waiter that cancels and declares again starts again at the ten-minute reminder.
+7. **`relay_to` is refused at send**, not ignored at derivation: `Store.send` rejects a name that is not on the roster, or is the sender, with the reason, so a typo cannot become an obligation nobody can close.
+8. **Non-finite buckets read as zero.** `Store.read_lead_loop_cadence` drops NaN, infinity, text and negative entries at the read boundary and the cadence code coerces again (`bucket_value`).
+9. **Relay items rotate.** The snapshot carries every open hand-off (bounded at 500); the per-sweep bound (20) is applied after the reminder dedup, oldest first, so the rest stay due and are raised on the next sweeps.
+10. **Waiter declarations belong to the addressed lead.** `waiting_on` and `waiting_off` count only for the lead they are addressed to; another lead neither owes nor is reminded.
+11. **A request id is not command text.** A request id that is not plainly shell-safe is shown only as quoted data and gets no ready-to-copy command.

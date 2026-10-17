@@ -430,6 +430,39 @@ def _parse_ts(ts: str) -> datetime | None:
     return dt
 
 
+def _broadcast_responses(group: list[Message], openers: list[Message]) -> tuple[set[str], dict[str, bool],
+                                                                                list[Message]]:
+    """``(responded members, member -> was their LATEST reply NA, the reply messages)`` of one broadcast group.
+
+    The one scan ``_derive_broadcast`` and ``terminal_responses`` share, so a lead's derived result follows the
+    same completion rule as the thread view."""
+    sender = openers[0].sender
+    audience = {m.recipient for m in openers}
+    first_opener_id = min(m.id for m in openers)
+    responded: set[str] = set()
+    last_na: dict[str, bool] = {}  # member -> was their LATEST reply NA?
+    responses: list[Message] = []
+    for m in group:  # id-sorted (chronological): a later reply overwrites earlier
+        if m.id <= first_opener_id:
+            continue
+        # A broadcast question is open-ended: any non-control reply from a
+        # member counts as that member responding (e.g. a review-result).
+        # A rescind is an event ABOUT the thread, not a response on it —
+        # without this exclusion a (forged/odd) member rescind would count
+        # as that member answering.
+        if (m.kind not in CONTROL_KINDS and m.kind != "rescind"
+                and m.sender in audience and m.recipient == sender):
+            responded.add(m.sender)
+            # NA closes like any answer; the label (#15) lets the broadcaster
+            # distinguish "answered" from "not my role". Last-write-wins per
+            # member, so a later substantive reply CLEARS a prior accidental NA
+            # (and vice versa) — the rollup reflects the member's latest answer
+            # instead of stickily flagging NA forever (review nit).
+            last_na[m.sender] = _is_na(m)
+            responses.append(m)
+    return responded, last_na, responses
+
+
 def _derive_broadcast(
     rid: str,
     group: list[Message],
@@ -457,27 +490,7 @@ def _derive_broadcast(
     audience_label = (openers[0].meta or {}).get("audience") or "all"
     first_opener_id = min(m.id for m in openers)
 
-    responded: set[str] = set()
-    last_na: dict[str, bool] = {}  # member -> was their LATEST reply NA?
-    responses: list[Message] = []
-    for m in group:  # id-sorted (chronological): a later reply overwrites earlier
-        if m.id <= first_opener_id:
-            continue
-        # A broadcast question is open-ended: any non-control reply from a
-        # member counts as that member responding (e.g. a review-result).
-        # A rescind is an event ABOUT the thread, not a response on it —
-        # without this exclusion a (forged/odd) member rescind would count
-        # as that member answering.
-        if (m.kind not in CONTROL_KINDS and m.kind != "rescind"
-                and m.sender in audience and m.recipient == sender):
-            responded.add(m.sender)
-            # NA closes like any answer; the label (#15) lets the broadcaster
-            # distinguish "answered" from "not my role". Last-write-wins per
-            # member, so a later substantive reply CLEARS a prior accidental NA
-            # (and vice versa) — the rollup reflects the member's latest answer
-            # instead of stickily flagging NA forever (review nit).
-            last_na[m.sender] = _is_na(m)
-            responses.append(m)
+    responded, last_na, responses = _broadcast_responses(group, openers)
     responded_na = {who for who, na in last_na.items() if na}
     retired = retired or set()
     # 0.18.0: a retired audience member can never reply, so it is not an owed
@@ -616,7 +629,8 @@ def _replay_step(opener: Message, m: Message, requester: str, responder: str, ba
 
 
 def terminal_responses(messages: list[Message], requester: str, *,
-                       grouped: dict[str, list[Message]] | None = None) -> dict[str, tuple[Message, Message]]:
+                       grouped: dict[str, list[Message]] | None = None,
+                       retired: set[str] | None = None) -> dict[str, tuple[Message, Message]]:
     """``{request_id: (opener, terminal_message)}`` for every thread ``requester`` OPENED
     that a terminal response has closed.
 
@@ -624,14 +638,30 @@ def terminal_responses(messages: list[Message], requester: str, *,
     ball tracking), but it returns the terminal MESSAGE, which ``Thread`` does not expose, and
     it does not depend on any reader's cursor (a ``Thread`` stays ``reply-waiting`` until its
     result is read). A thread re-opened by a re-ask after the close has no terminal response
-    (the re-ask rule is ``_replay_step``, shared with ``derive_threads``).
+    (the re-ask rule is ``_replay_step``, shared with ``derive_threads``). A request the requester rescinded
+    has no result (``_find_superseding_rescind``, the same supersession rule), and a broadcast has one only when
+    every non-retired audience member has replied (``_broadcast_responses``, the same completion rule); its
+    result is the reply that completed it.
     ``messages`` MUST be the roster+signature-validated set (``Store.valid_messages()``).
     """
     groups = grouped if grouped is not None else group_messages_by_request_id(messages)
+    retired = retired or set()
     found: dict[str, tuple[Message, Message]] = {}
     for rid, group in groups.items():
+        bcast = [m for m in group if m.kind == "question" and (m.meta or {}).get("broadcast_id")]
+        if bcast:
+            if bcast[0].sender != requester or _find_superseding_rescind(
+                    group, requester, min(m.id for m in bcast)) is not None:
+                continue
+            responded, _, replies = _broadcast_responses(group, bcast)
+            pending = [m.recipient for m in bcast if m.recipient not in responded and m.recipient not in retired]
+            if replies and not pending:
+                found[rid] = (min(bcast, key=lambda m: m.id), replies[-1])
+            continue
         opener = next((m for m in group if m.kind in OPENER_KINDS), None)
         if opener is None or opener.sender != requester:
+            continue
+        if _find_superseding_rescind(group, requester, opener.id) is not None:
             continue
         resp = opener.recipient
         ball: str | None = resp

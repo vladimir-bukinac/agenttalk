@@ -1311,6 +1311,24 @@ class OperatorAnswerSendResult:
     failed: bool = False
 
 
+
+def _clean_relay_buckets(value: object) -> dict:
+    """The stored reminder buckets as ``{key: non-negative int}``: a hand-edited or corrupted entry (NaN, infinity,
+    text, a negative number) is dropped at the read boundary, so it cannot fail every later sweep."""
+    out: dict = {}
+    if not isinstance(value, dict):
+        return out
+    for key, raw in value.items():
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if number != number or number in (float("inf"), float("-inf")) or number < 0:
+            continue
+        out[str(key)] = int(number)
+    return out
+
+
 class Store:
     def __init__(self, root: Path):
         self.root = Path(root).resolve()
@@ -3771,6 +3789,15 @@ class Store:
                 vendors = work_tags.validate_vendor_map(_dispatch_vendors, recipients)
             meta["assignee_model_vendors"] = vendors
         _gates.validate_response_status(kind, meta)
+        if kind in OPENER_KINDS and meta.get("relay_to"):
+            # refused at send, not ignored at derivation: a mistyped seat would otherwise be an obligation that no
+            # one can ever close (it cannot declare waiting_off, and the hand-off to it is refused)
+            unknown = [seat for seat in str(meta["relay_to"]).split(",")
+                       if seat.strip() and (seat.strip() not in (cfg.get("agents") or []) or seat.strip() == sender)]
+            if unknown:
+                raise ValueError("relay_to names %s, which %s not on the roster (or is the sender itself)"
+                                 % (", ".join(repr(u.strip()) for u in unknown),
+                                    "is" if len(unknown) == 1 else "are"))
         if kind in OPENER_KINDS and "epoch_at_send" not in meta:
             meta["epoch_at_send"] = self.current_epoch()
         msg = Message(
@@ -3906,7 +3933,6 @@ class Store:
             # recipient with another outcome is another payload
             identity["relay_of"] = meta.get("relay_of")
             identity["relay_outcome"] = meta.get("relay_outcome")
-            identity["relay_request"] = meta.get("relay_request")
         return identity
 
     @staticmethod
@@ -4089,15 +4115,9 @@ class Store:
             timeout=10.0,
             what="wrapper operation publication",
         ):
-            if precheck is not None:
-                precheck()
-            intent_path, intent = self._record_operation_intent_locked(
-                sender=sender,
-                operation_nonce=operation_nonce,
-                operation_digest=operation_digest,
-                body=body,
-                intent_digest=intent_digest,
-            )
+            # an exact rerun resolves to the existing publication BEFORE the prechecks: they validate state that only
+            # a NEW send depends on (for a relay, the result may have been compacted away since)
+            match = None
             for existing in self.valid_messages():
                 existing_meta = existing.meta or {}
                 if (
@@ -4106,18 +4126,28 @@ class Store:
                 ):
                     continue
                 if existing_meta.get("operation_digest") == operation_digest:
-                    if intent.get("state") != "published" or intent.get(
-                        "message_id"
-                    ) != existing.id:
-                        intent["state"] = "published"
-                        intent["message_id"] = existing.id
-                        intent["published_at"] = _now_iso()
-                        _atomic_write_text(
-                            intent_path,
-                            json.dumps(intent, indent=2, ensure_ascii=False),
-                        )
-                    return existing, False
+                    match = existing
+                    break
                 raise ValueError("operation nonce was already used with a different payload")
+            if match is None and precheck is not None:
+                precheck()
+            intent_path, intent = self._record_operation_intent_locked(
+                sender=sender,
+                operation_nonce=operation_nonce,
+                operation_digest=operation_digest,
+                body=body,
+                intent_digest=intent_digest,
+            )
+            if match is not None:
+                if intent.get("state") != "published" or intent.get("message_id") != match.id:
+                    intent["state"] = "published"
+                    intent["message_id"] = match.id
+                    intent["published_at"] = _now_iso()
+                    _atomic_write_text(
+                        intent_path,
+                        json.dumps(intent, indent=2, ensure_ascii=False),
+                    )
+                return match, False
             message = self.send(
                 sender=sender,
                 recipient=recipient,
@@ -6383,7 +6413,7 @@ class Store:
             "last_tick_epoch": _f("last_tick_epoch"),
             "last_reminded": lr if isinstance(lr, dict) else {},
             "escalation_dedup": ed if isinstance(ed, dict) else {},
-            "relay_reminded": rr if isinstance(rr, dict) else {},
+            "relay_reminded": _clean_relay_buckets(rr),
             "cadence_fails": _i("cadence_fails"),
             "backoff_until_epoch": _f("backoff_until_epoch"),
             "health_escalated": bool(data.get("health_escalated")),
