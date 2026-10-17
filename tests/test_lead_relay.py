@@ -1,4 +1,5 @@
-"""Owed hand-offs of finished results (lead_relay): derivation from the bus, the atomic publication, crash and race behaviour.
+"""Owed hand-offs of finished results (lead_relay): derivation from the bus, the atomic publication,
+crash and race behaviour.
 
 Design: docs/DESIGN-lead-loop-default.md, sections 5, 6, 11 and 15 (the tests of slice 1).
 """
@@ -32,7 +33,8 @@ def _request(s: Store, rid: str, kind: str = "review-request", **meta) -> str:
 
 
 def _result(s: Store, rid: str, kind: str = "review-result", status: str = "approved") -> str:
-    return s.send(sender="reviewer", recipient="lead", kind=kind, body="done", meta={"request_id": rid, "status": status}).id
+    meta = {"request_id": rid, "status": status}
+    return s.send(sender="reviewer", recipient="lead", kind=kind, body="done", meta=meta).id
 
 
 def _declare(s: Store, seat: str, rid: str, key: str = "waiting_on") -> str:
@@ -165,13 +167,13 @@ def test_signing_on_rejects_an_unsigned_closing_message_and_signing_off_counts_t
     assert s.signing_enforced()
     _request(s, "R1", relay_to="builder")                     # request, result: signed
     result = _result(s, "R1")
-    monkeypatch.setenv("AGENTTALK_HMAC_KEY_FILE", str(no_key))        # the same store with signing OFF: one unsigned closing message
+    monkeypatch.setenv("AGENTTALK_HMAC_KEY_FILE", str(no_key))        # signing OFF: one unsigned closing message
     assert not s.signing_enforced()
     relay.publish_handoff(s, "lead", "builder", result_id=result, body="decision")
-    assert _states(s) == {("builder", "R1"): relay.CLOSED_FORWARDED}          # signing off: the configured policy counts it
+    assert _states(s) == {("builder", "R1"): relay.CLOSED_FORWARDED}          # signing off: policy counts it
     monkeypatch.setenv("AGENTTALK_HMAC_KEY_FILE", str(key))
     assert s.signing_enforced()
-    assert _states(s) == {("builder", "R1"): relay.OWED}                       # signing on: the unsigned message fails the gate
+    assert _states(s) == {("builder", "R1"): relay.OWED}                       # signing on: the gate rejects it
 
 
 # ----------------------------------------------------------------------------------------------- publication
@@ -302,12 +304,13 @@ def test_crash_before_the_send_leaves_no_message_and_the_rerun_sends_once(
 # --------------------------------------------------------------------------------------------- reminders, notice
 def test_reminder_buckets_grow_at_1_2_4_8_times_the_deadline_then_daily() -> None:
     d = relay.RELAY_DEADLINE_SECONDS
-    assert [relay.reminder_bucket(a, d) for a in (0, d - 1, d, 2 * d, 4 * d, 8 * d, 8 * d + 86400, 8 * d + 3 * 86400)] == \
-        [0, 0, 1, 2, 3, 4, 5, 7]
+    ages = (0, d - 1, d, 2 * d, 4 * d, 8 * d, 8 * d + 86400, 8 * d + 3 * 86400)
+    assert [relay.reminder_bucket(a, d) for a in ages] == [0, 0, 1, 2, 3, 4, 5, 7]
 
 
 def test_notice_is_empty_when_nothing_is_open_and_bounded_when_much_is(tmp_path: Path) -> None:
-    obs = [relay.Obligation("lead", "s%d" % i, "R%d" % i, "M%d" % i, relay.OWED, "2026-10-17T10:00:00Z", "D%d" % i) for i in range(14)]
+    obs = [relay.Obligation("lead", "s%d" % i, "R%d" % i, "M%d" % i, relay.OWED, "2026-10-17T10:00:00Z", "D%d" % i)
+           for i in range(14)]
     assert relay.notice_lines([], now_epoch=0) == []
     lines = relay.notice_lines(obs, now_epoch=time.time())
     assert lines[0].startswith("== OWED RELAY") and any("and 4 more" in x for x in lines)
