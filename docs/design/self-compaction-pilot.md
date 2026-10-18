@@ -464,7 +464,7 @@ The accepted reshape asks for the size of the requests themselves, measured sepa
 - **If neither is available or approved, the pilot says so plainly:** request size is not measured, and the pilot makes no claim about oversized requests.
 - **Where the reported failure happened:** the "Request too large (max 32MB)" of 2026-10-18 was on a Qwen agent behind agenttalk's own gateway. That gateway's front already reads each request's `Content-Length` and refuses one above its limit (`ovh_gateway_front.py`). Recording that size there is the natural observer for that backend, but that backend is outside this pilot; it is a separate item.
 
-### Phase A: paired bench (about one day; the budget is approved)
+### Phase A: paired bench (one to two days, under the starting conditions of the W0 report; the budget is approved)
 
 Equivalent work, run both ways:
 
@@ -485,7 +485,7 @@ Equivalent work, run both ways:
 |---|---|---|
 | Context tokens per model call | `context_hist` | the mechanism: does the conversation stay small |
 | Tokens per dispatch, by kind (input, cache write, cache read, output) | the journal's totals | cost, through the proxy below |
-| **Input-equivalent tokens:** input + 1.25 × cache write + 0.1 × cache read + 5 × output | computed from the row above | a proxy for what the turn takes from the allowance, using the provider's price ratios between the kinds; it is not a bill |
+| **Input-equivalent tokens:** input + 1.25 × five-minute cache write + 2 × one-hour cache write + 0.1 × cache read + 5 × output (the one-hour weight corrected by W0) | computed from the row above, over complete calls only | the primary figure for every comparison (the lead's decision): a proxy for what the turn takes from the allowance, using the provider's price ratios between the kinds; it is not a bill. Claude Code's `total_cost_usd` is kept as a list-price cross-check (W0 report) |
 | Model calls per work order | `model_calls`, summed over attempts | whether fresh conversations need more steps |
 | The note's own cost | `note_cost`, priced as above | counted against the saving |
 | The subscription's weekly percentage | the capacity snapshot | shown as a sanity check, never a gate: it is coarse and shared |
@@ -527,7 +527,7 @@ Each work order is built, read by another agent, and merged on its own. W5 to W8
 |---|---|---|---|---|
 | W0 | **Step 0 spike** (throwaway): check six assumptions, each with a written pass rule. (a) Claude Code's stream gives `usage` with the three input fields on every `assistant` event; (b) `--resume <id> --fork-session` leaves the original session unchanged; (c) applying the fresh-start request before assembling the prompt breaks no existing test; (d) `AGENTTALK_TURN_ID` reaches the child on both backend paths of `_child_env`; (e) whether the stream reports the model's context window; (f) an approved observer records request sizes without content (section 13) | half a day | none | each assumption passes, or the design is changed before W1; for (f), either an approved observer works or request size is marked not measured |
 | W1 | **The measurement belongs to one conversation:** the new session-record fields, read from the stream, reset by every transition; the size warning in `status` and the dashboard uses them first and says "in this conversation" | half a day | W0 | tests for each reset path; closes #475's open warning part |
-| W2 | **Telemetry, journal schema 2:** the fields of section 13, the note-call detection, coverage and the treatment of missing and dropped data | 1 day | W1 | schema and bucket tests; a fixture journal with drops, missing usage and an unknown note cost gives the expected coverage and inconclusive results |
+| W2 | **Telemetry, journal schema 2:** the fields of section 13, the note-call detection, coverage and the treatment of missing and dropped data; the call completion rule and the cost lineage of the W0 report | 1 day | W1 | schema and bucket tests; a fixture journal with drops, missing usage and an unknown note cost gives the expected coverage and inconclusive results; the W0 report's stream and lineage fixtures pass, all before W3 |
 | W3 | **Baseline week** for the pilot and control agents, the pilot switched off | 5 working days, little effort | W2 deployed | coverage at least 95% |
 | W4 | **Notes:** the CONVERSATION SIZE block and draft path on pilot agents, sealing after a finished turn, the sealed files and their retention, the size limit, `handover=` in `status` | 1 day | W1 | tests for sealed, refused and unsealed notes |
 | W5 | **The facts read:** the complete read, the five completeness conditions, waiting and holding with back-off, `turn_answered` | 1 day | W1 | F-1 to F-5 and D1 pass |
@@ -536,8 +536,8 @@ Each work order is built, read by another agent, and merged on its own. W5 to W8
 | W8 | **Every path:** the self-heal, the model change, a failed first turn and an unreadable record go through the transition or hold the agent | 1 day | W7 | T1 to T6 |
 | W9 | **The rule text:** the standing rule (pilot agents only), `docs/AGENT-MANUAL.md`, the README row for `session fresh`, the changelog | half a day | W8 | docs tests pass |
 | W10 | **The rest of the matrix** of section 10 (K1 to K5, D2 to D5), with its mutation check | 1 day | W8 | all cases pass; the mutants fail |
-| W11 | **The pilot report:** a read-only script, kept out of the package, that reads the journal, the session records, the decisions files and the bus, and prints the table of section 13 with coverage and inconclusive marks | half a day | W2 | run on the baseline week |
-| W12 | **Phase A** bench | 1 day | W10, W11 | A1 to A3 measured |
+| W11 | **The pilot report:** a read-only script, kept out of the package, that reads the journal, the session records, the decisions files and the bus, and prints the table of section 13 with coverage and inconclusive marks, and the token formula against the list figure over the same calls (W0 report) | half a day | W2 | run on the baseline week |
+| W12 | **Phase A** bench, under the starting conditions fixed in the W0 report (cold parent, both arms back to back, alternating order) | 1 to 2 days | W10, W11 | A1 to A3 measured |
 | W13 | **Phase B** live, with the three crash drills | 5 working days, little effort | W12 passes, W3 done | B1 to B8 measured |
 | W14 | **The decision:** a short go or no-go record for the lead | half a day | W13 | the lead decides |
 
