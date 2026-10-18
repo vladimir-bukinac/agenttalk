@@ -4,9 +4,9 @@ description: >-
   State what "done" means for a task, check it with executed evidence, and record it
   in one short done record, before you hand work over or call it finished. One small
   base for every task (scope, exact artifact, executed checks, limits, next owner),
-  plus stricter profiles by kind of work and risk (review, documentation,
-  investigation, bug fix, feature or greenfield slice, greenfield project or release,
-  migration slice, whole migration). Use at assignment (to pin the profile) and at
+  plus stricter profiles by kind of work and risk (review, QA and test, documentation,
+  investigation, bug fix, refactor, CI fix, feature or greenfield slice, greenfield
+  project or release, migration slice, whole migration). Use at assignment (to pin the profile) and at
   handoff (to write the record). Do NOT use it to accept a product (use the close
   flow), to decide a release (use review-release-readiness), or as an extra review
   round.
@@ -15,6 +15,7 @@ category: assurance
 evidence-profile:
   - production-handoff
   - review-result
+  - qa-result
   - planning-artifact
 ---
 
@@ -33,7 +34,7 @@ not allow a release; other rules do that.
 2. Work. Keep a list of the checks the profile asks for.
 3. At handoff, write the done record (next section): five lines, plus one line for each
    exception. Put it in the evidence profile that fits the kind of task (WHERE THE RECORD GOES).
-4. Hand it to the next owner named in the record. The record says what is finished; it
+4. Hand it to the next owner named in the record (a seat, not only a kind of review). The record says what is finished; it
    never says "accepted" or "ready to release".
 5. A check that could not run is not "not applicable". It stays open (EXCEPTIONS).
 
@@ -72,14 +73,26 @@ to a task whose profile is another one.
 
 | Task kind (profile) | Evidence profile | Scope and outcome | Artifact | Checks | Limits | Next owner |
 |---|---|---|---|---|---|---|
-| `documentation`, `bug-fix`, `feature`, `project-or-release`, `migration-slice`, `migration` (the doer's handoff) | `production-handoff` | `summary` | `changed_files`, `base_ref`, `head_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` | `required_review_lenses` |
-| `review-only` (and the reader of any other task) | `review-result` | `scope`, `status` | `reviewed_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` (and `risk_class`, `release_blocker`) | the reply's next step |
-| `investigation` | `planning-artifact` | `scope`, `decision` or `proposal` | `artifact_type`, and in `evidence` the exact revision or documents examined | `evidence` | `assumptions`, `risks`, `open_questions` | `required_reviews` |
+| `documentation`, `bug-fix`, `refactor`, `ci-fix`, `feature`, `project-or-release`, `migration-slice`, `migration` (the doer's handoff) | `production-handoff` | `summary` | `changed_files`, `base_ref`, `head_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` | `required_review_lenses` (the lenses) and the `next-owner` entry in `evidence` (the seat) |
+| `review-only` (and the reader of any other task) | `review-result` | `scope`, `status` | `reviewed_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` (and `risk_class`, `release_blocker`) | the `next-owner` entry in `evidence` |
+| `qa-test` (QA or test evidence for a change; the tester-qa skill) | `qa-result` | `scope`, `status` | `reviewed_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` (and `risk_class`, `release_blocker`) | the `next-owner` entry in `evidence` |
+| `investigation` | `planning-artifact` | `scope`, `decision` or `proposal` | `artifact_type`, and in `evidence` the exact revision or documents examined | `evidence` | `assumptions`, `risks`, `open_questions` | `required_reviews` (the reviews) and the `next-owner` entry in `evidence` (the seat) |
+
+**The next owner is a seat and an action, never only a lens.** `required_review_lenses` and
+`required_reviews` say which kinds of review are needed; they cannot say who acts. In every
+profile, put one entry in `evidence` of the form `next-owner: <seat> - <action>` (for
+example `next-owner: codex-reviewer - security read of the head`), and when the profile has
+a lens list, write each lens as `<lens>: <seat>`. No new field names are needed.
+
+**A task kind this table does not list** (a new kind, or a mixed one) is not skipped: use
+the base five lines in the profile of the kind it is closest to, and say under limits which
+kind you chose and why. Never leave the handoff without a done record.
 
 The in-skill stub below is the `production-handoff` profile, the one most tasks use. A
 review-only task emits `review-result` (required fields: `risk_class`, `release_blocker`,
 `tests_referenced`, `tests_executed`, `residual_risk`, `evidence`, `status`, `reviewed_ref`,
-`scope`). An investigation emits `planning-artifact` (required fields: `artifact_type`,
+`scope`). A QA or test task emits `qa-result` (the same required fields as `review-result`).
+An investigation emits `planning-artifact` (required fields: `artifact_type`,
 `scope`, `decision` or `proposal`, `assumptions`, `alternatives`, `risks`,
 `required_reviews`, `open_questions`, `evidence`). A repository test keeps this table,
 the frontmatter and `evidence.md` in step.
@@ -94,15 +107,28 @@ manual page meets the documentation rows for that page.
 | `review-only` | A review or audit that reads, and maybe runs, someone else's work | The reviewed revision is named in full. What was read and what was run are listed apart. A negative verdict is a finished task. No release or acceptance rows. |
 | `documentation` | A README, guide, manual, design or policy text | Every factual claim is checked against the code or marked unverified. Every command and example was run, or is marked not run with the reason. **A procedure (steps to follow in order, such as an install or upgrade guide) was followed in order, from its stated starting state, by a fresh run or by someone who did not write it; separate commands that each pass do not count.** Version pins and counts agree with the release. The audience is named. |
 | `investigation` | A question to answer, with no change to deliver | The question, the method, what was ruled out, how sure the answer is and what would change it, with pointers to the evidence. A next step is recommended, not done. |
+| `qa-test` | QA or test evidence for a change (tests designed, run and triaged) | What was executed and what was only read are listed apart. The tested revision is named in full. A failing check names the command and output, or the exact gap, and says whether it is a real defect, a test bug, a flaky test or the environment. A green claim needs a run id or command. |
 | `bug-fix` | A defect to remove | The defect is shown on the original revision. A test fails without the fix and passes with it. The test uses the real behaviour, not a stand-in. Nearby cases are named. The affected suites ran. |
-| `feature` | A feature or a slice of a new project | The acceptance criteria are listed. Each behaviour has a test, including the failure paths and anything that must survive an interruption or a restart. User-visible change is in the changelog. No new warnings from the project's checks. A different seat reviewed it. |
+| `refactor` | Restructuring that keeps behaviour | The behaviour that must not change is named. The same tests ran before and after, with the same results, test by test. No test was weakened. Anything that does change is listed. |
+| `ci-fix` | A red check to turn green | The failing command and its log are quoted. The root cause is classified (a defect, a test bug, a flaky test, the environment). The same command now passes, run on the pushed revision. Nothing was skipped or weakened to get the green. |
+| `feature` | A feature or a slice of a new project | The acceptance criteria are listed. Each behaviour has a test, including the failure paths and anything that must survive an interruption or a restart. User-visible change is in the changelog. No new warnings from the project's checks. The independent reader is named as the next owner (see "Rows that need someone else's read"). |
 | `project-or-release` | A whole new project, or a release candidate | Exit criteria agreed at the start. A clean checkout builds, and the built artifact installs and runs. Every place that names the version agrees. The summary states each guarantee exactly, with its exceptions. Known limits are listed. CI ran on this revision (run id). Rollback is stated. |
 | `migration-slice` | One piece of a platform or data migration | See `references/migration.md`, part 1. |
 | `migration` | A whole migration | See `references/migration.md`, part 2. |
 
+**Rows that need someone else's read.** The builder's done record is the builder's handoff:
+it is written when the build is finished and pushed, and it lists the independent read
+(a different seat for a feature, a different vendor for `risk: high`, the independent review
+row of a migration) as an open item with the reader as next owner. It is not a precondition of
+the builder's `done`. The read belongs to the acceptance stage, after the build task closes
+(`docs/ROLES-SKILLS-PROCEDURES.md`, the review cycle: build, then the lead creates the cold
+read). The feature or slice is accepted only when that read is in, which is the lead's
+decision in the close flow, not this skill's.
+
 **Risk.** Add a risk word to the profile: `normal` or `high`. High means money, security,
 data that cannot be recovered, many users, or an action that cannot be undone. High adds,
-**for the work product**: a reader from a different vendor than the doer; the undo or
+**for the work product**: a reader from a different vendor than the doer (arranged as the
+next owner, read at the acceptance stage); the undo or
 rollback path stated and tried where it can be; no exception without the exception
 authority's written decision.
 
@@ -138,18 +164,25 @@ which bytes a seat reads. Installing the skills copies into one directory per se
 later install can replace the text, so the label alone would let two seats, or one seat on
 two days, work to different rules. The pin is therefore a **source identity**, recorded in
 the task when it is assigned:
-- **The skill:** `policy: definition-of-done@<label> tree <id> (agenttalk <release>)`, where
-  `<id>` is the git tree id of the directory `src/agenttalk/skills/devkit/definition-of-done`
+- **The skill:** `policy: definition-of-done@<label> tree <id> evidence <blob> (agenttalk <release>)`,
+  where `<id>` is the git tree id of the directory `src/agenttalk/skills/devkit/definition-of-done`
   at that release tag (`git rev-parse <tag>:src/agenttalk/skills/devkit/definition-of-done`).
   It covers `SKILL.md` and `references/`. It is retrievable from the public repository for
   as long as the tag exists: `git ls-tree -r <id>` lists each file's blob id and
   `git show <blob id>` prints it, so a task assigned under an older text can still be read
   against that text.
+- **The shared evidence rules:** this skill makes `../_shared/references/evidence.md`
+  normative for field names, so the pin includes it: `<blob>` is the blob id of
+  `src/agenttalk/skills/devkit/_shared/references/evidence.md` at the same tag
+  (`git rev-parse <tag>:src/agenttalk/skills/devkit/_shared/references/evidence.md`). If it
+  changes while this directory does not, the pin changes and the label is reviewed.
+  (`plain-language.md` is style only and is not pinned.)
 - **The overlay:** `overlay: <repository> <path> blob <id>` or a commit id. The overlay file
   never states its own identity; the task does. A change to the overlay is a new identity.
 - **Checking it:** the doer and the checker compare the identity in the task with the files
   they actually read. On a seat, `git hash-object --no-filters <installed file>` for each
-  file must equal the blob ids in `git ls-tree -r <id>`. The installer does not do this
+  file must equal the blob ids in `git ls-tree -r <id>`, and for the shared evidence file the
+  `evidence` blob in the pin. The installer does not do this
   for you.
 - **If it cannot be resolved** (no such tree, a blob that does not match, an overlay not
   committed): say so under limits ("policy text not verified"). The task is not finished
@@ -181,8 +214,10 @@ the task when it is assigned:
   (SKILL-POLICY). The `close` flow is the enforced part.
 - A check's "result" is the exit code and the counts, not "passed".
 - The base record is written once; where two rows overlap, the stricter row wins.
-- Replay evidence for this version, with one entry per counted finding:
-  `docs/research/DOD-REPLAY-2026-10.md` and `docs/research/DOD-REPLAY-2026-10-ledger.csv`.
+- Replay evidence for this version, with one entry per counted finding, is in the public
+  repository (it is not installed with the skill, so these are links, not local paths):
+  <https://github.com/zoolok17/agenttalk/blob/master/docs/research/DOD-REPLAY-2026-10.md> and
+  <https://github.com/zoolok17/agenttalk/blob/master/docs/research/DOD-REPLAY-2026-10-ledger.csv>.
 
 ## Evidence
 

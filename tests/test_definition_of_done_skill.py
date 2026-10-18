@@ -3,6 +3,9 @@
 - the frontmatter, the dispatch table and the canonical evidence profiles agree (the record goes in the
   existing profile of the task's kind, never in a second production record);
 - the pinning text promises only what a repository convention can give (a git tree id, nothing installed);
+- the next owner keeps both the lens and the seat, and the independent read is not a precondition of the
+  builder's done;
+- the shared evidence rules are part of the pin, and the replay evidence is linked, not a local path;
 - the risk rule exempts review and investigation completion from creating another review;
 - the replay's ledger recomputes the totals the report states.
 """
@@ -22,11 +25,13 @@ EVIDENCE = iskl.SKILLS_ROOT / "devkit" / "_shared" / "references" / "evidence.md
 LEDGER = ROOT / "docs" / "research" / "DOD-REPLAY-2026-10-ledger.csv"
 REPORT = ROOT / "docs" / "research" / "DOD-REPLAY-2026-10.md"
 
-EXPECTED_PROFILES = {"production-handoff", "review-result", "planning-artifact"}
+EXPECTED_PROFILES = {"production-handoff", "review-result", "qa-result", "planning-artifact"}
 KIND_TO_PROFILE = {
-    "documentation": "production-handoff", "bug-fix": "production-handoff", "feature": "production-handoff",
+    "documentation": "production-handoff", "bug-fix": "production-handoff", "refactor": "production-handoff",
+    "ci-fix": "production-handoff", "feature": "production-handoff",
     "project-or-release": "production-handoff", "migration-slice": "production-handoff",
-    "migration": "production-handoff", "review-only": "review-result", "investigation": "planning-artifact",
+    "migration": "production-handoff", "review-only": "review-result", "qa-test": "qa-result",
+    "investigation": "planning-artifact",
 }
 
 
@@ -40,7 +45,7 @@ def _section(text: str, heading: str) -> str:
     return m.group(1)
 
 
-def test_frontmatter_lists_the_three_profiles_the_task_kinds_dispatch_to() -> None:
+def test_frontmatter_lists_the_four_profiles_the_task_kinds_dispatch_to() -> None:
     text = _text()
     block = re.search(r"evidence-profile:\n((?:  - .*\n)+)", text).group(1)
     listed = set(re.findall(r"  - (\S+)", block))
@@ -71,7 +76,7 @@ def test_every_task_kind_is_dispatched_to_one_existing_profile() -> None:
 def test_the_non_primary_profiles_list_their_canonical_required_fields() -> None:
     canonical = sc.parse_evidence_profiles(EVIDENCE.read_text(encoding="utf-8"))
     section = _section(_text(), "WHERE THE RECORD GOES")
-    for profile in ("review-result", "planning-artifact"):
+    for profile in ("review-result", "qa-result", "planning-artifact"):
         for name in canonical[profile]:
             assert "`%s`" % name in section, "%s: field %s missing from the dispatch text" % (profile, name)
     # the mapping table uses only fields that exist in the profile of its row
@@ -94,13 +99,53 @@ def test_no_second_production_record_is_appended() -> None:
 
 def test_pinning_promises_only_a_repository_convention() -> None:
     text = _section(_text(), "PINNING")
-    for needle in ("tree <id>", "git rev-parse <tag>:src/agenttalk/skills/devkit/definition-of-done",
+    for needle in ("tree <id> evidence <blob>", "_shared/references/evidence.md",
+                   "git rev-parse <tag>:src/agenttalk/skills/devkit/_shared/references/evidence.md",
+                   "git rev-parse <tag>:src/agenttalk/skills/devkit/definition-of-done",
                    "git ls-tree -r <id>", "git hash-object --no-filters", "does not do",
                    "policy text not verified", "Never fall back silently", "overlay: <repository> <path> blob <id>"):
         assert needle in text, needle
     # the claim the read objected to must be gone
     assert "gives every vendor's seat the same text" not in _text()
     assert "Every vendor's seat gets it" not in _text()
+
+
+def test_a_kind_the_table_does_not_list_still_gets_a_base_record() -> None:
+    text = " ".join(_section(_text(), "WHERE THE RECORD GOES").split())
+    assert "A task kind this table does not list" in text
+    assert "Never leave the handoff without a done record" in text
+
+
+def test_the_next_owner_keeps_the_seat_and_the_lens() -> None:
+    text = " ".join(_section(_text(), "WHERE THE RECORD GOES").split())
+    assert "next-owner: <seat> - <action>" in text
+    assert "write each lens as `<lens>: <seat>`" in text
+    rows = [ln for ln in _section(_text(), "WHERE THE RECORD GOES").splitlines() if ln.startswith("| `")]
+    assert rows and all("`next-owner` entry in `evidence`" in ln for ln in rows), "every dispatch row names the seat"
+
+
+def test_the_independent_read_is_not_a_precondition_of_the_builders_done() -> None:
+    text = " ".join(_text().split())
+    migration = " ".join((SKILL_DIR / "references" / "migration.md").read_text(encoding="utf-8").split())
+    assert "A different seat reviewed it" not in text
+    assert "It is not a precondition of the builder's `done`" in text
+    assert "build closes first, then the lead creates the" in migration
+    assert "docs/ROLES-SKILLS-PROCEDURES.md" in text
+
+
+def test_the_migration_profile_carries_the_newest_source_rules() -> None:
+    migration = " ".join((SKILL_DIR / "references" / "migration.md").read_text(encoding="utf-8").split())
+    assert "must exercise the changed component" in migration and "stubs the component" in migration
+    assert "probed for everything it can now answer" in migration and "write the expected answer" in migration
+    assert "against the vendor's own advisory page" in migration and "never released" in migration
+
+
+def test_the_replay_evidence_is_linked_not_a_local_path() -> None:
+    technical = _section(_text(), "Technical detail")
+    assert "https://github.com/zoolok17/agenttalk/blob/master/docs/research/DOD-REPLAY-2026-10.md" in technical
+    assert "https://github.com/zoolok17/agenttalk/blob/master/docs/research/DOD-REPLAY-2026-10-ledger.csv" in technical
+    stripped = re.sub(r"https://\S+", "", _text())
+    assert "docs/research/" not in stripped, "a local path would not exist in an installed skill"
 
 
 def test_the_overlay_has_an_identity_and_the_round_limits_live_there() -> None:

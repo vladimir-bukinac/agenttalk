@@ -60,12 +60,21 @@ pinning (A1), safety (A8), the independent review (A10) and the honest record (A
    even if another that used to fail now passes. Count discovery and start-up errors and
    skipped tests. Tests that already failed on the original are listed by name and accepted
    by the checker. No test is deleted, switched off or weakened without a written reason
-   the checker accepted.
+   the checker accepted. **A suite named as the proof of a change must exercise the changed
+   component.** Name which tests call it. A suite that stubs the component, or never calls
+   it, cannot prove its upgrade: unchanged results of such a suite do not meet this row.
+   Compare the component's real output, old against new (for example the rendered
+   documents or exported files, or the actual response of the library), against criteria
+   recorded before the run.
 4. **Behaves the same from the outside, when the slice changes anything that runs.**
    Before the run, name the requests to send, the stored data and side effects to compare,
    the clean-ups allowed before comparing (timestamps, generated ids) and the expected
    differences, accepted by the checker. Keep the raw differences. Claim sameness only for
-   what was compared.
+   what was compared. **A new component that answers requests** (for example a new root
+   application, a gateway or a fallback page) is probed for everything it can now answer,
+   not only the route it was added for: list the request surface it newly owns, write the
+   expected answer for each class of request before the run (including the paths nobody
+   claimed before, other methods, and requests that must be refused), and probe every class.
 5. **The tests still catch planted bugs, where the stack supports mutation testing.** Run
    the same targets and settings on the original and the new code. Report killed,
    survived, no coverage and timed out, and what was excluded. Every planted bug the
@@ -80,7 +89,12 @@ pinning (A1), safety (A8), the independent review (A10) and the honest record (A
    ships; an image scan when an image ships; code analysis suited to the stack. Name each
    tool, its version and its configuration. Each run must complete: a skipped or failed
    scan is not met, never "no new warnings". Findings that already existed on the original
-   go on the owner's findings list.
+   go on the owner's findings list. **Check each new finding against the vendor's own
+   advisory page**: the scanner's "fixed in" version can be one that was never released,
+   its severity label can differ from the vendor's, and the vendor lists the conditions
+   under which the problem applies. Then test those conditions in the shipped artifact
+   and the owned source, and record the disposition (applies and is fixed, does not apply
+   and why, or covered by an authorised decision).
 8. **Safe (never waivable).** Secrets are referred to by location only, never copied or
    printed. No credential ends up inside an artifact. A credential that was already in
    the original stays an unmet safety row until an authorised decision resolves it; it is
@@ -100,7 +114,9 @@ pinning (A1), safety (A8), the independent review (A10) and the honest record (A
     recording them does not finish a finding that still breaks the agreed scope or a
     safety row. No P1 is open. How many review rounds are allowed, and whether a P1 found
     late is logged and cut rather than chased, are fixed by the project's own plan and
-    belong in its overlay; this row does not decide them.
+    belong in its overlay; this row does not decide them. The builder's handoff lists this
+    review as open with the reader as next owner; the slice is accepted when it is in (the
+    build closes first, then the lead creates the read).
 11. **Recorded honestly.** The acceptance record has the verdict, the numbers and the
     evidence paths. Nothing unfinished is described as done.
 

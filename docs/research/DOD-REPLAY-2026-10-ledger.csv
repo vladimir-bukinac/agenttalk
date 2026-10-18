@@ -5,8 +5,8 @@ F03,2-feature,bus tk-62a2fee04a0e item 2,cleanup in batches reopened a closed ha
 F04,2-feature,bus tk-62a2fee04a0e item 3,machine sweep and the lead's own record overwrote each other,none,not-caught,review value
 F05,2-feature,bus tk-62a2fee04a0e item 4,a stale controller wrote with its replacement's identity,none,not-caught,review value
 F06,2-feature,bus tk-62a2fee04a0e item 5,a message with a partial closing marker closed a wait,none,not-caught,review value
-F07,2-feature,bus tk-62a2fee04a0e item 6,the restart test did not restart anything,feature: anything that must survive an interruption or a restart has a test,judgement,"no existing rule (test-coverage names failure paths, not restarts)"
-F08,2-feature,bus tk-62a2fee04a0e item 7,"two-process tests used a clock deadline, not a readiness barrier","feature: each behaviour has a test, including the failure paths",judgement,no existing rule
+F07,2-feature,bus tk-62a2fee04a0e item 6,the restart test did not restart anything,feature: anything that must survive an interruption or a restart has a test,judgement,existing rule: test-integration (exercise the real process boundary)
+F08,2-feature,bus tk-62a2fee04a0e item 7,"two-process tests used a clock deadline, not a readiness barrier","feature: each behaviour has a test, including the failure paths",judgement,existing rule: test-integration and test-coverage (bounded polling or an injected clock; deterministic tests)
 F09,2-feature,bus tk-62a2fee04a0e item 8,sections not attempted were counted as completed,none,not-caught,review value
 F10,2-feature,bus tk-62a2fee04a0e item 9,the relay check could be overtaken by an ordinary reply (limit not stated),none,not-caught,review value
 F11,2-feature,PR #528 review comment 4303455665,a closing older than the declaration closed it,none,not-caught,review value

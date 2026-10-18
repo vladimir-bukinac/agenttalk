@@ -59,10 +59,13 @@ No investigation job with recorded late findings was found in the history, so th
 | 6 | Documentation: the README front page (PR #364) | `documentation` | 3 | 3 | 0 | 0 |
 | | **Total** | | **61** | **10** | **17** | **34** |
 
-Origin of the 27 that are not "not caught": 19 point at an existing rule (7 unambiguous, 12
-with judgement), 3 unambiguous ones are the rows added by this fix round, and 5 with judgement
-have no existing rule (the restart test, the readiness barrier, the reading of "rollback path"
-in a migration slice, and two procedure details that depend on the scenario).
+Origin of the 27 that are not "not caught": 21 point at an existing rule (7 unambiguous, 14
+with judgement), 3 unambiguous ones are the rows added by this fix round, and 3 with judgement
+have no existing rule (the reading of "rollback path" in a migration slice, and two procedure
+details that depend on the scenario). The restart test and the clock deadline look like gaps of
+this skill but are covered by rules the test skills already hold (test-integration: exercise the
+real process boundary; bounded polling or an injected clock; test-coverage: deterministic tests);
+the final read of the first fix round corrected their origin.
 
 ## Job by job
 
