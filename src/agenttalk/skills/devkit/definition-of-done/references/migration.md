@@ -91,10 +91,16 @@ pinning (A1), safety (A8), the independent review (A10) and the honest record (A
    actually loaded. Paths that belong to someone else and cannot be run are listed as
    gaps; never visit someone else's system to tick this row.
 10. **Independently reviewed.** A reviewer from a different vendor than the builder read it,
-    with no expected outcome stated. After one fix round and one final read, no P1 is
-    open. Each P2 and P3 has an owner and a destination: the next slice or, for the last
-    slice, the final follow-up list. A project whose plan says a P1 found late is logged
-    and cut rather than chased says so in its overlay, and that rule then applies.
+    with no expected outcome stated. Every finding that remains after the read has one of
+    three dispositions, and only these: **fixed** (with the evidence); **shown not to block
+    the agreed scope** (with the reason, checked by someone who is not the builder); or
+    **covered by an authorised scope or risk decision** (the exception authority writes
+    what is accepted, why, by whom and until when). An owner and a destination (the next
+    slice, or the final follow-up list) are recorded for the second and third kind, but
+    recording them does not finish a finding that still breaks the agreed scope or a
+    safety row. No P1 is open. How many review rounds are allowed, and whether a P1 found
+    late is logged and cut rather than chased, are fixed by the project's own plan and
+    belong in its overlay; this row does not decide them.
 11. **Recorded honestly.** The acceptance record has the verdict, the numbers and the
     evidence paths. Nothing unfinished is described as done.
 
@@ -126,8 +132,10 @@ pinning (A1), safety (A8), the independent review (A10) and the honest record (A
 8. **A security read of the final artifact passed.** By a different vendor than the
    builders. It passes when no P1 is open and every finding has a disposition: fixed,
    accepted by a named owner, or listed for the owner of production.
-9. **The people who run it can run it.** The run and upgrade instructions are written, and
-   labelled rehearsals where they are not proven in production.
+9. **The people who run it can run it.** The run and upgrade instructions are written and
+   were followed in order, from their stated starting state, by a fresh run or by someone who
+   did not write them (separate commands that each pass do not count); they are labelled
+   rehearsals where they are not proven in production.
 10. **The evidence is complete,** and the production owner's decisions are listed as
     blockers for level C.
 11. **A final cold read passed.** A vendor that did not write the acceptance record read

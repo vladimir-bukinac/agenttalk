@@ -14,6 +14,8 @@ reviewed-against: "0.102"
 category: assurance
 evidence-profile:
   - production-handoff
+  - review-result
+  - planning-artifact
 ---
 
 # definition-of-done
@@ -25,12 +27,12 @@ little more when the work is bigger or riskier. It does not accept the product a
 not allow a release; other rules do that.
 
 ## QUICK START
-1. At assignment, the lead names the profile (table below) and the policy version in the
-   task text, for example `done-profile: bug-fix, risk: normal, definition-of-done@1`. The
-   profile does not change while the task runs.
+1. At assignment, the lead names the profile (table below) and pins the policy text in the
+   task (PINNING), for example `done-profile: bug-fix, risk: normal, policy:
+   definition-of-done@1 tree <id>`. The profile does not change while the task runs.
 2. Work. Keep a list of the checks the profile asks for.
 3. At handoff, write the done record (next section): five lines, plus one line for each
-   exception.
+   exception. Put it in the evidence profile that fits the kind of task (WHERE THE RECORD GOES).
 4. Hand it to the next owner named in the record. The record says what is finished; it
    never says "accepted" or "ready to release".
 5. A check that could not run is not "not applicable". It stays open (EXCEPTIONS).
@@ -62,17 +64,35 @@ Write these five lines at handoff. Say each in plain words first.
    and an owner. An empty list is a claim: write "none" only if it is true.
 5. **Next owner.** Who acts next and on what (review, acceptance, fix, release decision).
 
-Evidence fields: use the evidence profile of the task's kind (`production-handoff`,
-`review-result`, `qa-result`, `planning-artifact`); the record is the same facts under
-those names, see "Reuse" below.
+## WHERE THE RECORD GOES: one record, in the profile that fits
+The done record is not a second report. Its five lines are carried by the existing evidence
+profile for the kind of task, using that profile's field names (rules and which fields the
+bus checks: `../_shared/references/evidence.md`). Never append a separate production record
+to a task whose profile is another one.
+
+| Task kind (profile) | Evidence profile | Scope and outcome | Artifact | Checks | Limits | Next owner |
+|---|---|---|---|---|---|---|
+| `documentation`, `bug-fix`, `feature`, `project-or-release`, `migration-slice`, `migration` (the doer's handoff) | `production-handoff` | `summary` | `changed_files`, `base_ref`, `head_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` | `required_review_lenses` |
+| `review-only` (and the reader of any other task) | `review-result` | `scope`, `status` | `reviewed_ref` | `tests_referenced`, `tests_executed`, `evidence` | `residual_risk` (and `risk_class`, `release_blocker`) | the reply's next step |
+| `investigation` | `planning-artifact` | `scope`, `decision` or `proposal` | `artifact_type`, and in `evidence` the exact revision or documents examined | `evidence` | `assumptions`, `risks`, `open_questions` | `required_reviews` |
+
+The in-skill stub below is the `production-handoff` profile, the one most tasks use. A
+review-only task emits `review-result` (required fields: `risk_class`, `release_blocker`,
+`tests_referenced`, `tests_executed`, `residual_risk`, `evidence`, `status`, `reviewed_ref`,
+`scope`). An investigation emits `planning-artifact` (required fields: `artifact_type`,
+`scope`, `decision` or `proposal`, `assumptions`, `alternatives`, `risks`,
+`required_reviews`, `open_questions`, `evidence`). A repository test keeps this table,
+the frontmatter and `evidence.md` in step.
 
 ## Profiles: pick by kind of work, raise by risk
-Each profile is the base plus the extra rows shown. A profile never removes a base row.
+Each profile is the base plus the extra rows shown. A profile never removes a base row. A
+task made of several kinds of work meets the rows of each part: a feature that also ships a
+manual page meets the documentation rows for that page.
 
 | Profile | Use it for | Extra rows |
 |---|---|---|
 | `review-only` | A review or audit that reads, and maybe runs, someone else's work | The reviewed revision is named in full. What was read and what was run are listed apart. A negative verdict is a finished task. No release or acceptance rows. |
-| `documentation` | A README, guide, manual, design or policy text | Every factual claim is checked against the code or marked unverified. Every command and example was run, or is marked not run with the reason. Version pins and counts agree with the release. The audience is named. |
+| `documentation` | A README, guide, manual, design or policy text | Every factual claim is checked against the code or marked unverified. Every command and example was run, or is marked not run with the reason. **A procedure (steps to follow in order, such as an install or upgrade guide) was followed in order, from its stated starting state, by a fresh run or by someone who did not write it; separate commands that each pass do not count.** Version pins and counts agree with the release. The audience is named. |
 | `investigation` | A question to answer, with no change to deliver | The question, the method, what was ruled out, how sure the answer is and what would change it, with pointers to the evidence. A next step is recommended, not done. |
 | `bug-fix` | A defect to remove | The defect is shown on the original revision. A test fails without the fix and passes with it. The test uses the real behaviour, not a stand-in. Nearby cases are named. The affected suites ran. |
 | `feature` | A feature or a slice of a new project | The acceptance criteria are listed. Each behaviour has a test, including the failure paths and anything that must survive an interruption or a restart. User-visible change is in the changelog. No new warnings from the project's checks. A different seat reviewed it. |
@@ -81,9 +101,22 @@ Each profile is the base plus the extra rows shown. A profile never removes a ba
 | `migration` | A whole migration | See `references/migration.md`, part 2. |
 
 **Risk.** Add a risk word to the profile: `normal` or `high`. High means money, security,
-data that cannot be recovered, many users, or an action that cannot be undone. High adds:
-a reader from a different vendor than the doer; the undo or rollback path stated and
-tried where it can be; no exception without the exception authority's written decision.
+data that cannot be recovered, many users, or an action that cannot be undone. High adds,
+**for the work product**: a reader from a different vendor than the doer; the undo or
+rollback path stated and tried where it can be; no exception without the exception
+authority's written decision.
+
+**The risk rule never creates a review of a review.** It applies to the task whose output
+is the product (the change, the document, the migration). The completion of a `review-only`
+or `investigation` task creates no further review obligation: its record is finished when
+the read is finished, whatever its verdict, and the lead alone decides what follows.
+Example, a security review that finishes with FIX: the reviewer's task is `review-only`
+(`risk: high`, because the product is security-relevant). It is finished when the verdict
+and findings are written with the reviewed revision and what was run. The reviewer needs no
+second reader. The `review-result` says status rejected, lists the findings in
+`residual_risk`, and names the author as next owner. The author's fix is a new `bug-fix`
+task with `risk: high`, which does get a different-vendor reader; that reader's own read
+is again `review-only` and ends the chain.
 
 ## EXCEPTIONS
 - **Not applicable** is decided at assignment, in the task text, with the reason, and
@@ -99,27 +132,45 @@ tried where it can be; no exception without the exception authority's written de
   in its overlay. Until it does, the lead is both, and the operator decides when the lead
   is the doer.
 
-## Pinning, change and overlays
-- **Pinned.** The policy version and the profile are written in the task when it is
-  assigned. A later version changes new tasks, not running ones. An urgent safety change
+## PINNING: which text, exactly
+The label `definition-of-done@1` names a line of policy text; it does not by itself say
+which bytes a seat reads. Installing the skills copies into one directory per seat and a
+later install can replace the text, so the label alone would let two seats, or one seat on
+two days, work to different rules. The pin is therefore a **source identity**, recorded in
+the task when it is assigned:
+- **The skill:** `policy: definition-of-done@<label> tree <id> (agenttalk <release>)`, where
+  `<id>` is the git tree id of the directory `src/agenttalk/skills/devkit/definition-of-done`
+  at that release tag (`git rev-parse <tag>:src/agenttalk/skills/devkit/definition-of-done`).
+  It covers `SKILL.md` and `references/`. It is retrievable from the public repository for
+  as long as the tag exists: `git ls-tree -r <id>` lists each file's blob id and
+  `git show <blob id>` prints it, so a task assigned under an older text can still be read
+  against that text.
+- **The overlay:** `overlay: <repository> <path> blob <id>` or a commit id. The overlay file
+  never states its own identity; the task does. A change to the overlay is a new identity.
+- **Checking it:** the doer and the checker compare the identity in the task with the files
+  they actually read. On a seat, `git hash-object --no-filters <installed file>` for each
+  file must equal the blob ids in `git ls-tree -r <id>`. The installer does not do this
+  for you.
+- **If it cannot be resolved** (no such tree, a blob that does not match, an overlay not
+  committed): say so under limits ("policy text not verified"). The task is not finished
+  until the identity is resolved or the exception authority records a scope reduction.
+  Never fall back silently to whatever text is installed.
+- **Change.** Any edit of the skill directory changes its tree id. The maintainer bumps the
+  label when the edit changes what is asked of a task (not for a typo). A new label
+  applies to tasks assigned after it; a running task keeps its pin. An urgent safety change
   may be applied to a running task only by the maintainer, in writing, with the reason.
-- **Version and delivery.** This text is `definition-of-done@1`. Every vendor's seat gets it
-  through the installed devkit skills, so a task that names `@1` can be checked against the
-  same text by anyone.
 - **Lessons change it only after review.** A lesson never edits the policy by itself. The
-  maintainer reads the proposed change, decides, and bumps the version. A proposal that
-  adds a row to every task needs a reason that is not "it happened once".
+  maintainer reads the proposed change, decides, and bumps the label. A proposal that adds
+  a row to every task needs a reason that is not "it happened once".
 - **Project overlays.** A project adds what is specific to it in a short overlay file it
-  owns (`references/project-overlay.md` shows the shape): offline or isolated builds,
-  branch rules, a named mutation tool, hosts that must never be touched, vendor rules. An
-  overlay can add rows and name people. It cannot remove a base row or a profile row.
+  owns (`references/project-overlay.md` shows the shape): isolated builds, branch rules, a
+  named mutation tool, hosts that must never be touched, vendor rules, a fixed number of
+  review rounds. An overlay can add rows and name people. It cannot remove a base row or a
+  profile row.
 
 ## Reuse
 - Evidence fields and rules: `../_shared/references/evidence.md`. Do not invent new field
-  names; map the record onto them: scope and outcome to `summary` or `scope`; artifact to
-  `base_ref`, `head_ref` or `reviewed_ref`; checks to `tests_referenced` and
-  `tests_executed`; limits to `residual_risk`; next owner to `required_review_lenses` or
-  the reply's next step.
+  names.
 - Acceptance and close: the `close` command and its definition-of-done dimensions. This
   skill does not repeat them.
 - Release: `review-release-readiness`.
@@ -129,10 +180,9 @@ tried where it can be; no exception without the exception authority's written de
 - The done record is text in the handoff or reply. Nothing in the bus enforces it today
   (SKILL-POLICY). The `close` flow is the enforced part.
 - A check's "result" is the exit code and the counts, not "passed".
-- A task made of several kinds of work meets the rows of each part: a feature that also
-  ships a manual page meets the documentation rows for that page. The base record is written
-  once, and the stricter row wins where two rows overlap.
-- Replay evidence for this version: `docs/research/DOD-REPLAY-2026-10.md`.
+- The base record is written once; where two rows overlap, the stricter row wins.
+- Replay evidence for this version, with one entry per counted finding:
+  `docs/research/DOD-REPLAY-2026-10.md` and `docs/research/DOD-REPLAY-2026-10-ledger.csv`.
 
 ## Evidence
 

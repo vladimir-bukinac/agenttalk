@@ -80,6 +80,8 @@ include = [
     "/docs/MIGRATION-PLAYBOOK.md",
     "/docs/OPERATIONS.md",
     "/docs/OVERVIEW.md",
+    "/docs/research/DOD-REPLAY-2026-10-ledger.csv",
+    "/docs/research/DOD-REPLAY-2026-10.md",
     "/docs/ROADMAP-ARCHIVE-2026-06.md",
     "/docs/ROADMAP.md",
     "/docs/ROLES-SKILLS-PROCEDURES.md",
