@@ -4,12 +4,12 @@
 
 ### M1. Green CI is necessary, not sufficient
 - **The rule.** Before merging, read the automated reviewer's priority comments on the exact head and confirm each is fixed, consciously accepted, or based on a wrong premise.
-- **Why.** A pull request was merged on green CI alone while six priority comments sat unread. Luck made that harmless. Later, 18 unresolved comments at a release head were assumed "probably stale"; classified one by one, nine were still open and seven reproduced release-blocking failures.
+- **Why.** A pull request was merged on green CI alone while several priority comments sat unread. Luck made that harmless. Later, a long list of unresolved comments at a release head was assumed "probably stale"; classified one by one, many were still open and several reproduced release-blocking failures.
 - **How to apply.** Do not estimate. Hand the full list of unresolved, not-outdated threads to a reviewer and ask for a verdict per item: FIXED (with the evidence), STILL OPEN (reproduce and grade it), or NEVER VALID (the premise is wrong). "Cannot verify" is an acceptable answer.
 
 ### M2. An empty summary is not a pass
 - **The rule.** Never judge the automated reviewer from its summary text. List the inline threads on the head.
-- **Why.** A review whose body was empty boilerplate had attached two new findings to specific lines, and the empty body read as clean.
+- **Why.** A review whose body was empty boilerplate had attached new findings to specific lines, and the empty body read as clean.
 - **How to apply.** Query the unresolved threads (not outdated, not resolved). A thread being "outdated" proves only that its line moved, not that the defect was fixed. Check new versus carried-forward comments: a comment's commit moves forward with the head, so only comments whose original commit is the head are new.
 
 ### M3. Read the reviewer's comments and merge in separate steps
@@ -29,12 +29,12 @@
 
 ### M6. Long documentation pull requests converge with one triage round
 - **The rule.** The automated reviewer re-reads the whole change at every push, so finding-by-finding fixes do not end. Do one triage round: the author answers every open comment ("fixed in <commit>", "not changed: <reason>", "moved to a follow-up"), true blockers are always fixed, then one final read of that round's changes. Afterwards a new comment on unchanged text goes to a follow-up unless it is a true blocker.
-- **Why.** Docs-only pull requests went five to eight rounds.
+- **Why.** Docs-only pull requests went on for many rounds.
 - **How to apply.** Quality first, but rounds must end. Every blocker and priority comment is triaged, not necessarily fixed.
 
 ### M7. Budget the automated reviewer
 - **The rule.** Trigger it two or three times per pull request, at the pre-merge gate, on a head that is genuinely ready. Never on a head that is about to move.
-- **Why.** It keeps no memory between runs, so each run re-reads the whole diff, and it shares a credit pool with the team's own reviewers. One pull request used 20 triggers and 11 reviews on a 14,000-line diff.
+- **Why.** It keeps no memory between runs, so each run re-reads the whole diff, and it shares a credit pool with the team's own reviewers. One very large pull request used many triggers and reviews, each re-reading the whole diff.
 - **How to apply.** The real lever is diff size: one theme per release, split before the change grows. Replace extra triggers with one unbriefed read by your own reviewer, which can also run the code.
 
 ### M8. Read CI at the source
@@ -54,7 +54,7 @@
 
 ### M10. Tests belong to the agent, the build belongs to CI
 - **The rule.** A wrapped agent writes and runs targeted tests for its diff and never runs the full gate, the build, the wheel legs or the security stack in its turn. It pushes, waits for CI, and reads each lane. A blocked or skipped lane is not a passing lane.
-- **Why.** The full gate satisfies the per-turn watchdog's kill conditions by construction: one agent froze four times near the 30-minute boundary, always on a gate-running turn. Raising the watchdog's thresholds was rejected as a fix.
+- **Why.** The full gate satisfies the per-turn watchdog's kill conditions by construction: one agent froze repeatedly near the per-turn watchdog's time limit, always on a gate-running turn. Raising the watchdog's thresholds was rejected as a fix.
 - **How to apply.** Say which lanes ran and which did not. If a job would outlive the turn, stop and say so; the answer is CI.
 
 ### M11. Changelog entries go in the right place

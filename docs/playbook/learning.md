@@ -4,7 +4,7 @@
 
 ### L1. Use all the features, and above all capture learning
 - **The rule.** Every team uses every feature of the tool, most of all captured learning: onboard before each work order, publish before replying, and reply with `lessons=<ids or none>` and `lessons_used=<ids or none>`.
-- **Why.** Learning that is not in the store is lost at every session reset, and teams forget it because nothing forces it. A new team's store held no notes at all 35 minutes into its first phase, and another team had published almost nothing in months because its seats had no instruction files and the briefs skipped the step.
+- **Why.** Learning that is not in the store is lost at every session reset, and teams forget it because nothing forces it. A new team's store held no notes at all early in its first phase, and another team had published almost nothing in months because its seats had no instruction files and the briefs skipped the step.
 - **How to apply.** Put the rule where it survives a reset: a mandatory "capture learning" section in each seat's own instruction file, and a line in every brief naming the step. Name the features that fit the task: skills, gates, the onboarding run, close and challenge.
 
 ### L2. Curate on every tick, and measure growth

@@ -25,7 +25,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R4. A fresh final sweep finds what many narrow rounds miss
 - **The rule.** Before a release or a merge of something large, run one fresh sweep over the whole change, with no history of the earlier rounds.
-- **Why.** One final sweep found a blocker that six narrow delta rounds had stepped around, because each of those rounds only looked at what the last fix touched.
+- **Why.** A final sweep found a blocker that several narrow delta rounds had stepped around, because each of those rounds only looked at what the last fix touched.
 - **How to apply.** Send it as a `sweep` task. Say what the change is for, not what you expect to hear.
 
 ### R5. Close a residual in the same round
@@ -40,7 +40,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R7. Get two blind reads before the first fix round when fixes are expensive
 - **The rule.** When fix rounds cost as much as the build itself, get two independent reads (a mid-tier and a top-tier reader, blind to each other) before the first fix round, and send one combined round.
-- **Why.** In a side-by-side trial the stronger reader found four real major problems the cheaper one did not, and the cheaper one found one the stronger missed, which it later withdrew. The union was better than either.
+- **Why.** In a side-by-side trial the stronger reader found real major problems the cheaper one missed, and the cheaper one's single unique finding was later withdrawn. The union was still better than either alone.
 - **How to apply.** Collect both reads, merge and de-duplicate, then send the builder one list.
 
 ### R8. Use the cheaper reader for deltas and the strongest for the final read
@@ -77,7 +77,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R14. At the merge gate, run one read with no expectation
 - **The rule.** Run at least one read where you state no expected result and no list of places to look: only the question, and the two ways it can fail ("does anything promise more than the code enforces, or deny something it does?").
-- **Why.** Unbriefed reads found real defects in code that two thorough briefed reads had just approved. A brief focuses attention, and attention leaves a blind spot everywhere else. The briefed reader checks what changed; the cold reader checks the whole contract.
+- **Why.** Unbriefed reads found real defects in code that thorough briefed reads had just approved. A brief focuses attention, and attention leaves a blind spot everywhere else. The briefed reader checks what changed; the cold reader checks the whole contract.
 - **How to apply.** Ask for a sweep, not a checklist. Say a clean verdict will be taken as a real signal. If two reads agree but used the same method (for example both re-derived the same hash inputs), count them as one; ask the second to use a different method.
 
 ### R15. Do not send a verification read until the author says they are finished
@@ -87,7 +87,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R16. Write review briefs in plain engineering terms
 - **The rule.** Describe findings by behaviour and impact ("a check that can be bypassed", "a folder that changes into a link while it is being removed"), not as attacker steps or payloads.
-- **Why.** The model providers' safety filters rejected ordinary defensive review briefs written with attack vocabulary. One brief was retried twenty times and dead-lettered without the seat ever seeing it.
+- **Why.** The model providers' safety filters rejected ordinary defensive review briefs written with attack vocabulary. One brief was retried many times and dead-lettered without the seat ever seeing it.
 - **How to apply.** Keep literal exploit strings in tests and private notes, not in messages. If a seat's provider will not take the work, route it to another seat and record that the review was by the same vendor.
 
 ## What a reader checks
@@ -97,6 +97,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 - **Why.** A fix was built for a case that could not occur. It added surface and false confidence and was deleted later.
 - **How to apply.** Trace the case to whatever would produce it. If every round closes one dimension and uncovers another, the obligation cannot be closed by listing cases: recast it as a structure that is correct by construction, and test one representative.
 - **When the input is free-form text.** If a parser review finds a second new input of the same kind, stop patching the parser and change the input to a strict format.
+- **After a parser fix.** A fix round that changes a parser must re-run the original real-input check, not only a new synthetic fixture, which can hide a regression on the real input.
 
 ### R18. A validator that takes its expectation from the thing it checks proves nothing
 - **The rule.** Take the expected value from a source independent of the artifact being validated.
@@ -110,7 +111,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R20. Audit a claim at its own scope
 - **The rule.** When a document makes a global claim ("complete", "everywhere", "every X"), search everything the claim covers, not only the section that announced it.
-- **Why.** A check limited to a section's own scope can only confirm what the author already believed, and four counterexamples sat outside it.
+- **Why.** A check limited to a section's own scope can only confirm what the author already believed, and counterexamples sat outside it.
 - **How to apply.** Ask "what is the scope of the property?" separately from "where does the text say it applies?"
 
 ### R21. Two questions: applied correctly, and the right rule
@@ -145,22 +146,22 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R27. A quoted command is not evidence it ran as claimed
 - **The rule.** Record an observed property of the run: the order that executed, the resolved path, the effective value.
-- **Why.** A build file hard-coded a setting, so every "reverse order" flag on the command line was silently ignored; eleven "both orders" sign-offs were the same run twice.
+- **Why.** A build file hard-coded a setting, so every "reverse order" flag on the command line was silently ignored; every "both orders" sign-off was the same run twice.
 - **How to apply.** When you adopt a flag, prove once that it changes what you can observe, then keep quoting the observation.
 
 ### R28. "Pre-existing" needs the baseline's number
 - **The rule.** A red result may be labelled pre-existing only with the baseline gate's result for the same case beside it.
-- **Why.** Ten errors carried that label for two days while the baseline run had none; a test-library upgrade had changed the meaning of a matcher.
+- **Why.** A set of errors carried that label for days while the baseline run had none; a test-library upgrade had changed the meaning of a matcher.
 - **How to apply.** If the baseline was green, treat the red as a defect of the change until a mechanism proves otherwise.
 
 ### R29. Compare content, not digests, for builds
 - **The rule.** A packaged artifact's hash identifies one build event, not a source tree. To ask whether two builds are the same, compare their entry lists, recursing into nested archives.
-- **Why.** The same tree built four times gave four digests, because of timestamps, and the archives were content-identical.
+- **Why.** The same tree built several times gave different digests, because of timestamps, and the archives were content-identical.
 - **How to apply.** Make the bar the property the change protects, or a sorted manifest of entries.
 
 ### R30. Defend the known classes, and bound what is left
 - **The rule.** Where a check faces an effectively unbounded input space, defend the classes you know and say out loud what residual remains. Do not claim to be exhaustive.
-- **Why.** A check for invisible text went five rounds, each finding one more blank character, until the overclaim was replaced by an honest bounded residual.
+- **Why.** A check for invisible text went many rounds, each finding one more blank character, until the overclaim was replaced by an honest bounded residual.
 - **How to apply.** Tie the residual to the threat model: gaming your own quality gate is out of scope. The overclaim is the defect, not the residual.
 
 ### R31. When you tighten something, ask what it now refuses
@@ -170,7 +171,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R32. Look at bytes and at the package
 - **The rule.** Diff output hides control characters, so check served assets at the byte level. A diff that touches packaging configuration needs a real wheel build.
-- **Why.** A control byte inside a string delimiter rendered as a blank in a diff and broke a feature. Three releases passed CI and could not be installed because editable installs skip wheel building.
+- **Why.** A control byte inside a string delimiter rendered as a blank in a diff and broke a feature. Several releases passed CI and could not be installed because editable installs skip wheel building.
 - **How to apply.** One cheap byte check or one wheel build at the reviewed commit catches the class.
 
 ### R33. A removed enforcement takes its claims with it

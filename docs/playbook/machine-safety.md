@@ -13,12 +13,12 @@ Contents: [work and data](#work-and-data) · [processes and recovery](#processes
 
 ### S2. Check free space in the lead's loop, and clean up carefully
 - **The rule.** Read free disk space on every tick. Clean up when it drops under a set level, and at least daily, in report mode first, then apply, after reading the report. Every lead does this inside its own folder and double-checks before deleting.
-- **Why.** Scratch and test leftovers grow without an owner. One machine reached over two million files in a scratch folder, and a full disk breaks tests, git and agents.
+- **Why.** Scratch and test leftovers grow without an owner. One machine accumulated an enormous number of files in a scratch folder, and a full disk breaks tests, git and agents.
 - **How to apply.** Never delete session histories, seat homes, message stores, runtimes in use, other projects, or anything that is not plainly your own scratch. If space stays low after your cleanup, tell the operator; most of the disk may not be yours. When unsure, keep it and ask.
 
 ### S3. Cleanup after a batch, and worktrees after a merge
 - **The rule.** After every batch of work the lead runs a scratch cleanup, and seats never leave worktrees or temporary folders behind. Remove a worktree once everything in it is merged and its work is done.
-- **Why.** Four months of seats using shared scratch and the repository root as test folders left over a hundred worktrees and hundreds of stray folders, some holding uncommitted work, and some with permissions that needed an elevated shell to remove. Another team kept forgetting, leaving tens of gigabytes every few days.
+- **Why.** Months of seats using shared scratch and the repository root as test folders left a large pile of worktrees and stray folders, some holding uncommitted work, and some with permissions that needed an elevated shell to remove. Another team kept forgetting, leaving a large amount of disk every few days.
 - **How to apply.** Every dispatch names the seat's own scratch folder; the close-out says "scratch removed". A closing step checks for a clean worktree, work already in the main line and no links, and uses a plain, non-forced removal. Keep a folder whose delete fails rather than forcing it.
 
 ### S4. A deleter never follows a link
@@ -28,12 +28,12 @@ Contents: [work and data](#work-and-data) · [processes and recovery](#processes
 
 ### S5. Destructive actions on shared resources need the operator
 - **The rule.** Mass branch deletes, removing worktrees you did not create, and force-pushes in a shared repository need the operator's own authorisation. A peer or lead message is not enough.
-- **Why.** The safety classifier allowed a worktree sweep a lead had greenlit, then denied the 29-branch mass delete: peer authorisation is not the user's intent.
+- **Why.** The safety classifier allowed a worktree sweep a lead had greenlit, then denied the mass branch delete: peer authorisation is not the user's intent.
 - **How to apply.** Surface the request to the operator and let them decide. Never work around a denial. A standing approval names exactly what it covers and what it never covers (the operator's other projects, named volumes that offline builds need, running containers, images in use, blanket "prune everything" commands), is carried out by an explicit list, and keeps that list on record. Compacting a runtime's data disk is separate, because it needs the runtime stopped.
 
 ### S6. Back up the conversation that records the decisions
-- **The rule.** Back up the lead-and-operator conversation regularly. It is the only verbatim record of the operator's decisions; memory is a summary.
-- **Why.** The tool's default retention deletes session files not modified for 30 days, so a retired session can vanish a month later.
+- **The rule.** Back up the lead-and-operator conversation regularly. It is the only verbatim record of the operator's decisions; memory is a summary. Check your session provider's current retention for these files and where to verify it.
+- **Why.** Some tools delete old session files after a retention period, so a retired session can vanish once that period passes. Which tools do this, and after how long, differs by tool and version.
 - **How to apply.** Keep encrypted copies in two places, never in a public or cloud service when the sessions hold client details. Give the password in the terminal only. Test a restore.
 
 ### S7. On a real client migration, no code leaves the boundary
@@ -60,7 +60,7 @@ Contents: [work and data](#work-and-data) · [processes and recovery](#processes
   - **Delivered already?** Before clearing retry state and relaunching, check whether the work was already delivered (a commit on its branch, a reply on the bus). If it was, do not relaunch: the cursor still precedes the message and the whole task would run again. If completion is unclear, ask the owner of the work.
   - **Retry loop?** A message that keeps being retried is gated by its dead-letter attempt record, not by the cursor. Read that record first, and verify that the attempt count stops rising before you claim a fix. A reboot does not clear it.
   - **Scope.** Use the supported, narrowly scoped operations: a fresh session between turns, or acknowledging one message. The bus-wide reset command is not a per-agent repair.
-  - **Changing a model or effort.** Set an explicit model id rather than an alias, and verify the change in the wrapper's session record (new values, turn count reset); configuration alone is not proof.
+  - **Changing a model or effort.** Set an explicit model id rather than an alias, and verify the change in the wrapper's session record: the effective runtime fingerprint, a new or cleared conversation identity and the continuity reason. The turn count is kept, so do not wait for it to reset; configuration alone is not proof.
   - **Verify absence.** A restart request does not relaunch a wrapper while the old process is alive; check that the old wrapper is gone before you ask again.
 
 ### S11. A frozen counter on an active agent is a fault
@@ -70,12 +70,12 @@ Contents: [work and data](#work-and-data) · [processes and recovery](#processes
 
 ### S12. Diagnose fleet health with independent evidence
 - **The rule.** Do not infer a shared outage from one agent's auto-classified health. Read all of what you consumed. Health-check before you launch or rely on a seat. Keep observed facts apart from inferred causes.
-- **Why.** One misclassified spawn failure was reported as "the provider is throttled" while the operator's own working session was the disproof. A reader that drained the whole inbox then blamed a reviewer who had already answered. A 12-day zombie reviewer was relaunched into a panel without a check.
+- **Why.** One misclassified spawn failure was reported as "the provider is throttled" while the operator's own working session was the disproof. A reader that drained the whole inbox then blamed a reviewer who had already answered. A long-dead reviewer was relaunched into a panel without a check.
 - **How to apply.** Before escalating a cause, run the cheapest disproof: is a peer on the same dependency working? Did I read the whole output? Is the heartbeat fresh? "A reply is waiting for you to read" does not mean "no reply yet". For supervisor incidents read the durable event log first; per-attempt snapshots are overwritten.
 
 ### S13. Run long-lived processes outside the terminal app
 - **The rule.** Turn off automatic updates of the terminal app that hosts the lead and the gateway consoles, or run long-lived processes outside it.
-- **Why.** An automatic update of the terminal app closed every console it hosted: the lead's session and the gateway died, and the hidden seat wrappers sat idle for about 18 hours because nobody dispatched.
+- **Why.** An automatic update of the terminal app closed every console it hosted: the lead's session and the gateway died, and the hidden seat wrappers sat idle for many hours because nobody dispatched.
 - **How to apply.** Set the default console host to the plain one, pause or disable store updates, run the gateway without a window, and add an alert for "lead silent", "gateway not ready" or "no wrapper running". A runtime switch must list every caller pinned to the old runtime, including the alert path, and a scheduled watcher follows the runtime it watches.
 
 ### S14. A lead must be able to restart its own team
@@ -107,12 +107,12 @@ Contents: [work and data](#work-and-data) · [processes and recovery](#processes
 
 ### S18. Long conversations cost more at every step
 - **The rule.** Every turn re-sends the whole conversation, so cost and failure risk grow with the age of a long-running agent. Preserve work: refresh an agent only between turns, through the supported path, with a backup and an audit record, within the authority given, and never route around a denial.
-- **Why.** One task averaged about 1.6 million input tokens, a long cold read tens of millions, and a seat at 830 turns cost steadily on every idle check. The very large rollout of one seat crashed it.
+- **Why.** The cost of a long task grows much faster than its length, because the whole conversation is sent again at every step, and a very large session file can crash the seat.
 - **How to apply.** Use a fresh thread per dispatch or per work arc, keep reads narrow, and put a ceiling on retries. A restart threshold such as "restart an idle agent past a few hundred turns" is a local, interim number each team sets; it is not a universal rule. A seat's very long session can also hit a provider's request-size cap, so give long-running seats a fresh session between large tasks.
 
 ### S19. A usage-limit error is terminal until the limit resets
 - **The rule.** Do not retry a usage-limit error. Pause the seat and re-route the work.
-- **Why.** A wrapper that re-sent the same large message up to twenty times burned a share of the allowance on messages that could not succeed.
+- **Why.** A wrapper that re-sent the same large message many times burned a share of the allowance on messages that could not succeed.
 - **How to apply.** Cap retries low, with no compaction on retry. Run tool-heavy work on seats that are not short of allowance. Several seats going quiet in the same window with the wrappers alive points to an account limit, not a fault.
 
 ## Environment

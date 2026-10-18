@@ -32,4 +32,4 @@ Where a rule names a command, it is a command of the installed tool (`agenttalk 
 
 - A rule here that a shipped skill or procedure contradicts is a bug in one of them: fix it in the same change.
 - A rule is added only with its reason. If you cannot say what went wrong without it, it is a preference, not a rule.
-- Keep the text free of names of clients, people, machines, addresses and private paths. The client-reference check blocks a merge that adds one.
+- Keep the text free of names of clients, people, machines, addresses and private paths. The client-reference check catches only the references on its known denylist, so it does not replace a privacy read: review every new page for private details yourself.

@@ -8,12 +8,12 @@ Contents: [sending](#sending) · [the seat's turn](#the-seats-turn) · [boundari
 
 ### D1. One bus publication per tool call
 - **The rule.** Send one task, acknowledgement, withdrawal or reply per tool call, spaced out. Never loop sends inside one command.
-- **Why.** Each send holds a guard on the message store while it scans it. A seat whose turn ended inside that window died without a trace. Two seats died within minutes of a batch of five sends fired from one shell, and a week of earlier deaths had been blamed on session limits because the exit line was never captured.
+- **Why.** Each send holds a guard on the message store while it scans it. A seat whose turn ended inside that window died without a trace. Seats died within minutes of a batch of sends fired from one shell, and a week of earlier deaths had been blamed on session limits because the exit line was never captured.
 - **How to apply.** Space sends across turns, especially right after acknowledging a seat. Launch wrappers with their output redirected to a log, and check liveness by looking for the wrapper process, not for a health file.
 
 ### D2. Check that a send was published, not that it printed an id
 - **The rule.** After every task or message, read the output for "refused", "must", "error" or "invalid", and confirm publication: the newest message file is newer than before, or the recipient's unread count rose.
-- **Why.** A refused send (a bad work-item name with a dot in it, a stage word that does not exist) still printed an automatic request id, and a pipe to another command hid the exit code. A review was never delivered and cost almost an hour.
+- **Why.** A refused send (a bad work-item name with a dot in it, a stage word that does not exist) still printed an automatic request id, and a pipe to another command hid the exit code. A review was never delivered and cost a long delay.
 - **How to apply.** Use `set -o pipefail` or no pipe on send commands. Keep work-item names to lowercase letters, digits and dashes, and use only the stage words the tool lists (design, build, read, fix, delta, sweep).
 
 ### D3. Do not put a short timeout on a send, and drain to a file
@@ -22,9 +22,9 @@ Contents: [sending](#sending) · [the seat's turn](#the-seats-turn) · [boundari
 - **How to apply.** Drain to a file and search the file. When several answers are expected, reconcile each request: a request that is neither still open nor seen as answered means you missed the reply. Never judge a stuck agent from a status label's wording or a hand-made search; read the real inbox.
 
 ### D4. Every task's reply line carries `status=done`
-- **The rule.** A task closes only on a typed task response whose status is done or declined. Put `--meta status=done` in every brief's reply line, even when the verdict is FIX: the task is done.
-- **Why.** A brief template asked for a verdict but no status, so seats copied it literally and answered tasks stayed open forever; the lead's waiting count showed 89 open tasks, most of them already answered, and a real unanswered task hid among them.
-- **How to apply.** Write the reply line out in full in the brief, including the work item, stage and commit.
+- **The rule.** Close a task with a typed task response whose status is done or declined, and put `--meta status=done` in every brief's reply line, even when the verdict is FIX: the task is done.
+- **Why.** A brief template asked for a verdict but no status, so seats copied it literally and many answered tasks stayed open; the lead's waiting count filled with tasks that had already been answered, and a real unanswered task hid among them.
+- **How to apply.** Write the reply line out in full in the brief, including the work item, stage and commit. Know the real behaviour too: the tool also treats a response with no status but a non-blank verdict as finished (a compatibility path), while a response with status accepted, or an empty response, leaves the task open. So check the thread's actual state before you decide a task is still owed.
 
 ### D5. One task, one reply
 - **The rule.** Never ask one task for two replies. Split it into two tasks.
@@ -65,8 +65,8 @@ Contents: [sending](#sending) · [the seat's turn](#the-seats-turn) · [boundari
 
 ### D12. A turn is started by a message, so acknowledge promptly
 - **The rule.** A wrapped agent that closes a turn saying it will "continue next turn" idles until something arrives. Acknowledge each close-out at once, and never batch acknowledgements behind a slower cadence.
-- **Why.** Fifty-five minutes were lost to a pipeline that waited for acknowledgements the lead was holding for its next status round.
-- **How to apply.** The lead's acknowledgement is the turn trigger. When a gate or review result arrives, send it the same moment to every seat whose task depends on it; one builder waited about four hours for a result the lead never relayed.
+- **Why.** An hour was lost to a pipeline that waited for acknowledgements the lead was holding for its next status round.
+- **How to apply.** The lead's acknowledgement is the turn trigger. When a gate or review result arrives, send it the same moment to every seat whose task depends on it; one builder waited for hours for a result the lead never relayed.
 
 ### D13. Check a quiet seat, do not wait
 - **The rule.** A seat that has been idle for more than about an hour after a build order, with no reply, gets its branch checked and a question.
@@ -74,8 +74,8 @@ Contents: [sending](#sending) · [the seat's turn](#the-seats-turn) · [boundari
 - **How to apply.** Look at the branch and the process. An idle seat with commits and no reply may have been blocked, not slow.
 
 ### D14. Stagger fleet-wide asks
-- **The rule.** For an ask to every seat, send in waves of two or three and wait for replies before the next wave. Do not start a wave when free memory is under about 3 GB.
-- **Why.** Seven seats sent the same brief within five minutes all worked at once and host memory fell from 3.9 GB to 1.0 GB, at which the harness kills commands and wrappers.
+- **The rule.** For an ask to every seat, send in waves of two or three and wait for replies before the next wave. Do not start a wave when free memory is below the floor you have set for the host.
+- **Why.** Several seats sent the same brief within minutes all worked at once, and host memory fell low enough that the harness kills commands and wrappers.
 - **How to apply.** Check free memory in a separate call first. A check printed in the same command as the send gates nothing. Ask only the seats whose vantage point matters unless the operator asked for the whole team.
 
 ### D15. Listen honestly

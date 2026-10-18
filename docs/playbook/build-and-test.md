@@ -8,18 +8,18 @@
 - **How to apply.** Keep a general definition with profiles (any task, bug fix, greenfield feature, greenfield project or release, migration slice, whole migration). A shipped checklist skill stays project-agnostic and gets its challenge first (see [challenges](challenges.md)).
 
 ### B2. A test's stated mechanism must be the one that fires
-- **The rule.** For every test case that names a mechanism, apply one change that disables only that mechanism and require that case, and only it, to fail.
+- **The rule.** For every test case that names a mechanism, apply one change that disables only that mechanism and require that case to fail for the intended reason. Other cases that exercise the same mechanism may fail too; that is overlapping coverage, not a defect.
 - **Why.** Three cases in one night were green for the wrong reason: the input was rejected by an earlier check before the named one ran, so removing the named check left every case green.
 - **How to apply.** The discriminating input is one that every other clause accepts. Write the explanation from the mutation's result, not from intent. Apply mutations by searching for text, never by line number.
 
 ### B3. Pin the whole surface, not some points
 - **The rule.** When the input space can be listed (media types, methods, status codes, matcher kinds), write one table of input and expected result, asserted in a loop, and derive it from the original version's behaviour.
-- **Why.** Four point tests passed an expert review while the eighth value diverged from the baseline.
+- **Why.** A few point tests passed an expert review while another value diverged from the baseline.
 - **How to apply.** In a review, if you write "only k of n pins are load-bearing", the next sentence must list the values not pinned.
 
 ### B4. Test the limit where it bites
 - **The rule.** A test for a timeout or bound must force the bound to trigger, and check that what hung was killed or released and that the caller ended in the intended state.
-- **Why.** A test that only shows normal operation finishing inside the bound shows that the bound is not in the way, not that it works. A hard timeout on a probe was tested with a fake that sleeps for 30 seconds against a half-second bound.
+- **Why.** A test that only shows normal operation finishing inside the bound shows that the bound is not in the way, not that it works. A hard timeout on a probe was tested with a fake that sleeps far longer than a short bound.
 - **How to apply.** Make the underlying operation exceed the bound (a sleep, a blocking read, a process that never exits). Assert both that the time was bounded and that no child, thread, handle or lock was left behind.
 
 ### B5. Test against the real record shape
@@ -34,8 +34,8 @@
 
 ### B7. A watcher waits for the good state
 - **The rule.** Every monitor or waiter asserts that the good state is present, never that a bad signal is absent.
-- **Why.** "Nothing is failing" is true of a system that never started, has died or was deleted. Three different watchers produced false greens: one deduplicated on a key that silenced it after the first success, one read "no pending checks" as complete when only 1 of 15 had registered, and one read "none of the old processes exist" as "all restarted".
-- **How to apply.** Count the thing you want ("at least six up, none stale"). Pair every negative clause with a positive one. Name the good state in the success message. When two waiters report one event, reconcile their timings before believing either.
+- **Why.** "Nothing is failing" is true of a system that never started, has died or was deleted. Three different watchers produced false greens: one deduplicated on a key that silenced it after the first success, one read "no pending checks" as complete when only one of many checks had registered, and one read "none of the old processes exist" as "all restarted".
+- **How to apply.** Count the thing you want ("at least N up, none stale"). Pair every negative clause with a positive one. Name the good state in the success message. When two waiters report one event, reconcile their timings before believing either.
 
 ### B8. A diagnostic can break the stream it prints to
 - **The rule.** Before adding a human-readable line to an output stream, find every consumer of that stream. If any parses it strictly, use the structured form, or gate the new output to the path that needs it.
@@ -44,7 +44,7 @@
 
 ### B9. Tool traps that cost a round each
 - **The rule.** Know these quirks.
-  - **Scanner suppression comments.** A comma list in one `# nosec` honours only one id, and prose after it is read as test ids: use a bare suppression, and put the reason in a separate comment. The same goes for the other scanner's suppression comment: text after it is treated as rule ids.
+  - **Scanner suppression comments.** With the Bandit security scanner (checked on 1.9.4), a comma list without a space, `# nosec B603,B607`, selects only the last id, while `# nosec B603, B607` and `# nosec B603 B607` select both; prose after the ids is read as test ids. A bare `# nosec` suppresses every check on the line, including unrelated future findings, so use the selective form with a separate comment for the reason. Other scanners have their own suppression syntax (one treats the text after its marker as rule ids): check each one's rules before copying a form.
   - **Shell scripts and quoting.** A backslash, a backtick or a dollar sign inside a heredoc or a double-quoted string is changed by the shell: a path lost its backslashes, a command in backticks ran as a command and opened an interactive session. Write such files with a file-writing tool, quote heredocs, and scan the result for control characters, including tabs.
   - **PowerShell.** An if/else used as an expression collapses a one-element array to a scalar; a parameter named `$args` shadows the automatic variable; variables are case-insensitive, so a local can overwrite a parameter; a file launched with `-File` receives a comma list as one string; `Start-Process` strips inner double quotes from an argument. Generated scripts are ASCII only, and PowerShell scripts are written with a byte-order mark.
   - **Line endings.** A CRLF written by one tool into a loop that reads lines leaves a stray character on the last field, so a whole batch fails identically; a failing batch that includes an item known to be fine points at the input bytes.

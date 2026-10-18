@@ -3,9 +3,9 @@
 **In plain words:** much of what a team of agents writes is read by people who do not program: the operator, a director, a client. Text that squeezes the most facts into the fewest words is useless to them. This page holds the rules for writing so that someone who does not program understands what changed, why it matters and what they must do, with the technical detail kept for the end. The shipped skills do the detailed work: [write-for-humans](../../src/agenttalk/skills/devkit/write-for-humans/SKILL.md) for notes, pull requests, comments and status reports, [write-docs](../../src/agenttalk/skills/devkit/write-docs/SKILL.md) for documentation and [review-docs](../../src/agenttalk/skills/devkit/review-docs/SKILL.md) for reviewing it. This page adds the standing rules and the reasons.
 
 ### W1. Write for someone who does not program
-- **The rule.** Everything a person reads (release notes, changelog, pull request texts, comments, reports) leads with what changed for the user, then why it matters, then what they will notice ("before" and "now"), then anything they must do. Use simple words and short sentences; length is allowed. Explain each technical term the first time, or avoid it. Put file paths, commit ids and function and test names only in a "technical details" section at the end.
+- **The rule.** Write what people read for a reader who does not program: plain words first, each technical term explained or avoided, and the technical detail kept for the end or for the reader who wants it. How to lay a text out depends on its kind (release notes, a pull request, a review comment, a status report, documentation), and some of them answer a question first and keep their own templates; the skills below own those details and their exceptions, including what must stay out for confidentiality.
 - **Why.** The team's notes and pull requests had become dense and jargon-heavy, which hid what the tool did from the people who needed to understand it. Readers judged the plain samples "much better".
-- **How to apply.** Same facts, explained; never drop a fact. Write a summary by reading each detailed entry's limits, not from memory. Messages between agents and briefs stay compact, because input tokens cost money.
+- **How to apply.** Link to the skill that fits the kind of text, and follow its layout rather than a layout copied from this page. Explain facts; do not drop one that the reader needs, except where a confidentiality rule says otherwise. Write a summary by reading each detailed entry's limits, not from memory. Messages between agents and briefs stay compact, because input tokens cost money.
 
 ### W2. Report to the operator in behaviour, risk and decisions
 - **The rule.** Lead with what the software does, what the risk is and what decision is open. Name risk in consequences ("if it wrongly concludes nothing is running, it starts a duplicate"), not in identifiers. End with what needs the operator and what does not.
@@ -20,12 +20,12 @@
 ### W4. Committed text never names a client
 - **The rule.** Nothing committed or pushed names a client or a client's internals: genericise it or keep it local. A slip is repaired with a forward fix and by editing the host's text, not by rewriting history, unless the operator decides otherwise.
 - **Why.** A sweep found a client codename already committed in several public files, and a later slip put a name in a test. A client-reference check blocked the merge, and the fix was a forward fix.
-- **How to apply.** Every delta and read brief asks the reviewer to run `gh pr checks <pr>` on the head and report any red check, the client-reference check first; reviewers who reread five rounds had not noticed that one was red. A never-committed denylist drives the tripwire. Evidence from another client stays unnamed and is labelled as another system.
+- **How to apply.** Every delta and read brief asks the reviewer to run `gh pr checks <pr>` on the head and report any red check, the client-reference check first; reviewers who reread several rounds had not noticed that one was red. A never-committed denylist drives the tripwire. Evidence from another client stays unnamed and is labelled as another system.
 
-### W5. Material for a client is tactful, and all dark
+### W5. Material for a client is tactful
 - **The rule.** Never state a client's code problems bluntly. Describe the general pattern (most long-lived software grows that way and nobody failed) and invite the room to say what feels familiar. Facts about the client come only from public sources or the operator, never from code you have not seen.
 - **Why.** The operator thought it "not very nice" to put a client's issues so bluntly in front of its own technical staff.
-- **How to apply.** Write the text with the plain-words skill. Whatever the operator prefers for visual style (for instance every slide dark) is an operator preference; ask once and keep it.
+- **How to apply.** Write the text with the plain-words skill. Visual style is the operator's preference: ask once and keep it.
 
 ### W6. Do not hand the reader the code to read
 - **The rule.** When the reader is not a programmer, never make them follow a code snippet, hash or table of identifiers to understand an outcome.
