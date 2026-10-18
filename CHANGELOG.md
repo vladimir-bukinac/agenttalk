@@ -12,6 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A shared meaning of "done" for every task: the new `definition-of-done` skill.** Teams
+  lost time when "the work is finished", "the product is accepted" and "it may be released"
+  were taken for one thing. The skill keeps them apart and gives every task the same five
+  things to show when it is handed over: what was asked and what came out, the exact thing
+  delivered, the checks that really ran, what is left open, and who acts next. Bigger or
+  riskier work adds rows by kind (review, documentation, investigation, bug fix, feature,
+  whole project or release, one migration slice, a whole migration). A check that could not
+  run stays open until the person with authority records a reduction of scope; the rules
+  are pinned when a task is assigned, and a lesson changes them only after review. It
+  reuses the existing evidence fields, the `close` flow and the release-readiness review
+  instead of adding new ones, and a project keeps its own rules in a short overlay file.
+  Its replay on six finished jobs from this repository is in
+  `docs/research/DOD-REPLAY-2026-10.md`.
+  Technical detail: `src/agenttalk/skills/devkit/definition-of-done/` (`SKILL.md`,
+  `references/migration.md`, `references/project-overlay.md`), policy `definition-of-done@1`,
+  evidence profile `production-handoff`; routing and the skills tables list it.
+
 - **A lead is now reminded of the decisions it still owes to seats that wait for them.**
   When a seat says it is waiting for a lead's decision and the result it waits for has
   finished, the lead used to hear about the result and then nothing more; the seat could
