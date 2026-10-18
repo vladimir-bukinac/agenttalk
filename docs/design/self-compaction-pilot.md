@@ -1,6 +1,6 @@
 # Self-compaction pilot: an agent keeps its own conversation small
 
-Status: proposed. Written on 2026-10-18 for work order tk-5be1f80d7c73, after the challenge ch-fc39f8c7-7c05-496c-a616-933674d6a2a8 returned RESHAPE and the lead accepted it in full. Fix round 1 (tk-f935a8bfd62e) answers the seven findings of the Codex read tk-f11f4003d894. Nothing in this document is built. Where it describes how agenttalk works today, it matches master `7a613aeb` (release 0.102.0). Owner: lead. The final read (tk-e78baa38e6a0) passed it with binding requirements for the build; step 0 (W0) is reported in `docs/design/self-compaction-pilot-w0.md`, which lists what it changes in the later work orders.
+Status: proposed. Written on 2026-10-18 for work order tk-5be1f80d7c73, after the challenge ch-fc39f8c7-7c05-496c-a616-933674d6a2a8 returned RESHAPE and the lead accepted it in full. Fix round 1 (tk-f935a8bfd62e) answers the seven findings of the Codex read tk-f11f4003d894. Nothing in this document is built. Where it describes how agenttalk works today, it matches master `7a613aeb` (release 0.102.0). Owner: lead. The final read (tk-e78baa38e6a0) passed it with binding requirements for the build; step 0 (W0) is reported in `docs/design/self-compaction-pilot-w0.md`. Section 18 lists every binding requirement from the reads (the two final reads and the automatic reviewer's nine findings on pull request #531), and the text below follows them.
 
 **In plain words:** an agent that agenttalk runs in the background sends its whole conversation to its AI again on every step, so a long conversation makes every turn dearer. Since release 0.102.0 an agent can already ask to start its next turn on a new conversation, but it then starts with nothing from before. This design proposes a small, measured pilot on one kind of agent: Claude Code on its normal subscription. The agent writes a short handover note at the end of a finished turn and, once its conversation has grown large, asks for its own fresh start. agenttalk applies that start only when a set of checks passes and a complete list of the agent's unfinished work can be read from the message bus; every other way a conversation can change on a pilot agent follows the same rules or stops for a person. The design decides the note's format, the checks, how a fresh start is recorded and undone, the crash tests, the measurements and the numbers that decide whether the pilot is extended. The lead's answers to its five questions are in section 16.
 
@@ -27,6 +27,7 @@ Why a new file and not an update to `docs/design/context-policy.md`: master stil
 15. [How this fits #475, the roadmap, #490 and #178](#15-how-this-fits-475-the-roadmap-490-and-178)
 16. [The lead's answers](#16-the-leads-answers)
 17. [What it does not do](#17-what-it-does-not-do)
+18. [Binding requirements from the reads](#18-binding-requirements-from-the-reads)
 
 ## 1. The problem, measured
 
@@ -49,8 +50,8 @@ A wrapped agent keeps one conversation with its AI for as long as its wrapper ru
 | **Fresh start on request** (#475 step 1, release 0.102.0) | `agenttalk session fresh --for <agent> --reason "..."` writes a request marker. The agent itself, a lead or the operator-facing agent may ask. The agent's own wrapper applies it between turns: it copies the session record aside first (no copy, no reset), gives Claude a new session id or clears Codex's thread, saves the record, then clears the marker. When the save fails, it reads the record on disk again: a save that landed is adopted, one that did not is undone in memory and retried. It records the last outcome in the session record (`fresh_request_*` fields). Only the wrapper that claimed the agent last may apply it. | `cmd_session_fresh` in `cli.py`; `write_fresh_request`, `read_fresh_request`, `clear_fresh_request` in `store.py`; `apply_fresh_request` and `_backup_session_record` in `wrapper/session.py`; `_apply_fresh_request`, `claim_wrapper_ownership` and `is_active_wrapper` in `wrapper/run.py`; `_apply_fresh_when_idle` inside `_wrap_loop_mode` in `cli.py` |
 | **Where the request is applied** | At the start of every message turn (`make_drive`), at the start of every lead-loop cadence turn (`make_cadence_drive`), and on every idle poll. | `wrapper/run.py`, `cli.py` |
 | **The size warning** | `status` and the dashboard show the context size of the agent's last turn, or else its total turn count, and warn above 150,000 tokens (Claude), 190,000 (Codex) or 300 turns. The limits are set with `conversation_warn_tokens` and `conversation_warn_turns` in `supervisor.json`. | `conversation_size.py`; `_gather_status` in `cli.py`; `web.py`; `conversationSizeText` in `web_static/console.js` |
-| **The complete read of the bus** | `store.valid_messages()` reads every message file in the live log through the trust gate (schema, roster, and the message signature when signing is enforced), with no size or time cap. `agenttalk threads` feeds it to `threads.derive_threads` with the agent's cursor to work out what the agent owes and waits for. The store's `_validated_message_snapshot(collect_problems=True)` also reports the files it rejected. | `store.py`; `cmd_threads` in `cli.py`; `threads.py` |
-| **Compaction of old messages** | Optional (`agenttalk compact`; automatic compaction is off by default). It moves messages below a keep floor into `archived/compacted/`, which no live view reads again, and records the floor in `state/compact.json`. | `archive_messages_batched`, `read_compact_stamp` in `store.py`; the compaction command in `cli.py` |
+| **The complete read of the bus** | `store.valid_messages()` reads every message file in the live log through the trust gate (schema, roster, and the message signature when signing is enforced), with no size or time cap. `agenttalk threads` feeds it to `threads.derive_threads` with the agent's cursor to work out what the agent owes and waits for. `store.validated_messages_with_problems(since_id=None)` also reports the files it rejected, and, under the publication locks, every id in the durable publication order whose file is absent. Two limits matter here: it counts a compacted message as absent, and it skips the absent-file check when it cannot read the order (section 5). | `store.py`; `cmd_threads` in `cli.py`; `threads.py` |
+| **Compaction of old messages** | Optional (`agenttalk compact`; automatic compaction is off by default). It moves messages below a keep floor into `archived/compacted/`, which no live view reads again; the files' entries stay in the publication order. It records its last floor in `state/compact.json`, a best-effort stamp: a failed write is ignored and a later run replaces it. | `archive_messages_batched`, `read_compact_stamp` in `store.py`; the compaction command in `cli.py` |
 | **The compaction checkpoint** | `agenttalk checkpoint save / resume / show`, run by Claude Code's own `PreCompact` and `SessionStart` hooks, which the supervisor installs. It saves the context reading, the git state and the agent's open threads to `.agenttalk/checkpoints/<agent>.json`, with the last ten kept as history. Its bus read is deliberately best effort: it stops after 512 files, 8 MiB or 15 seconds, and on a time-out or error it returns empty lists marked `truncated`. | `checkpoint.py` (`build_checkpoint`, `collect_bus_state`, `collect_git_state`, `save_checkpoint`); `_CHECKPOINT_HOOK_SPECS` in `supervisor.py` |
 | **Message delivery** | The wrapper loop records an attempt before every turn and moves the agent's cursor past a message only after a clean turn, or when it dead-letters the message. A crash during a turn delivers the message again. Section 10 says exactly what this does and does not promise. | `_run_continuous` in `wrapper/loop.py`; `recv_api.commit` |
 | **The delivery commit gate** | Optional (`AGENTTALK_COMMIT_GATE_POLICY`). It admits only `question` messages that are not consults; for every other kind it answers "kind is detection log-only". For an admitted question it proves that the answer landed before the cursor moves. | `wrapper/obligations.py` |
@@ -102,7 +103,7 @@ A draft becomes a note only when its turn finishes cleanly: the same "completed"
 
 1. reads the draft, refuses it if it is larger than 3,200 bytes or not UTF-8;
 2. writes the sealed note to `.agenttalk/state/handover/<agent>/<handover-id>.json` (proposed) with the format below, once, never overwritten;
-3. records its id, fingerprint and turn id in the session record, in the same save that records the finished turn;
+3. records its id, its `record_sha256` and its turn id in the session record, in the same save that records the finished turn;
 4. deletes the draft.
 
 A draft from a turn that failed or was interrupted is never sealed. `status` shows `handover=unsealed`, and the retry of that message writes a new one if it is asked for.
@@ -123,6 +124,7 @@ A draft from a turn that failed or was interrupted is never sealed. `status` sho
 | `context_tokens` | the conversation's size at that turn (section 8) |
 | `checkpoint` | the branch, commit and number of changed files of the agent's working folder at sealing (`checkpoint.collect_git_state` on that folder) |
 | `note_bytes`, `note_sha256` | the size and fingerprint of the text |
+| `record_sha256` | the fingerprint of the whole sealed record: SHA-256 over its canonical JSON (keys sorted, no spaces, UTF-8), computed with this one field left out. It covers the conversation, the turn, the checkpoint and every other field, not only the text, and every check of a note uses it (section 7) |
 | `note` | the text |
 
 The `checkpoint` lets the loader say what changed since the note was written (for example "the branch has moved on"). It holds no list of obligations: those come only from the facts read (section 5).
@@ -147,29 +149,31 @@ The checkpoint's bus read is best effort, so the pilot never uses it for a decis
 
 ### What it reads
 
-- every message file in the live log, through `store.valid_messages()`'s trust gate, with no file or byte cap;
+- every message file in the live log and in the compaction archive (`archived/compacted/`), through the store's trust gate (schema, roster, and the signature when signing is enforced), with no file or byte cap;
+- the store's durable publication order, read under the same locks that `validated_messages_with_problems(since_id=None)` takes, so a message that is being published cannot look missing;
 - the agent's cursor and thread-state files;
 - `threads.derive_threads` over those, as `agenttalk threads` does, giving the replies the agent owes, the replies waiting for it and the requests it sent and still waits on;
-- for the current message's request: whether this agent's final reply has already landed;
-- the compaction stamp (`state/compact.json`).
+- for the current message's request: whether this agent's final reply has already landed.
 
 It runs before any model process starts: when a request is applied (between turns), and when the first message of a new conversation is prepared.
 
 ### When it counts as complete
 
-All five must hold; otherwise the read is incomplete, with the first failing reason word:
+All seven must hold; otherwise the read is incomplete, with the first failing reason word:
 
 | Reason word | Complete only when |
 |---|---|
 | `timeout` | the whole read finished within 60 seconds (a setting; measured during the pilot) |
-| `rejected_files` | no message file was rejected: unreadable, not JSON, wrong schema, off the roster, or a bad or missing signature. A rejected file might be an obligation, so the read fails closed and reports how many |
+| `rejected_files` | no message file, live or archived, was rejected: unreadable, not JSON, wrong schema, off the roster, or a bad or missing signature. A rejected file might be an obligation, so the read fails closed and reports how many |
 | `signing_unavailable` | when signing is enforced (`store.signing_enforced()`), the key can be read. Without it every signed message would be rejected |
-| `history_compacted` | no compaction moved messages this conversation handled: the stamp's `keep_floor` is not above `conversation_first_message_id`, the first message the conversation handled (a new session field). Compaction's floor is designed to keep open obligations in the live log, but the pilot does not rely on that |
+| `order_unavailable` | the publication order exists, can be read, and is durable. Today's `validated_messages_with_problems` quietly skips its check for missing files when it cannot read the order; the facts read refuses instead |
+| `missing_messages` | every id in the publication order has a valid file in the live log or in the compaction archive. That reader alone would report every compacted message as absent (`publication_ordered_message_absent`), because compaction moves the files but keeps their order entries. So an id found valid in the archive counts as compacted (matched by the message id inside the file, because compaction adds a time suffix to a name that is already taken there), and only an id found in neither place counts as missing, which fails the read: a deleted message, even with all its neighbours present |
+| `history_compacted` | no message this conversation handled was compacted: the highest id in the compaction archive is below `conversation_first_message_id`, the first message the conversation handled (a new session field). The archive itself is the record; the best-effort stamp `state/compact.json` is not used, because a crash or a later run can lose or lower it. Compaction's floor is designed to keep open obligations live, but the pilot does not rely on that |
 | `state_unreadable` | the cursor and thread-state files read cleanly |
 
 ### What happens when it is incomplete
 
-- **When a request would be applied:** the request waits. It is not refused, because a time-out or a lock usually clears. The handler tries again on each idle poll, backing off from one minute to fifteen, and `status` shows `fresh=pending(facts:<reason>)`. After two hours it is refused (`refused_facts_<reason>`) and the liaison is told once: a rejected file or a missing key needs a person.
+- **When a request would be applied:** the request waits. It is not refused, because a time-out or a lock usually clears. The handler tries again on each idle poll, backing off from one minute to fifteen, and `status` shows `fresh=pending(facts:<reason>)`. After two hours it is refused (`refused_facts_<reason>`) and the liaison is told once: a rejected file or a missing key needs a person. **While the agent's own request waits, its old conversation takes no further turn:** new messages for the agent are held the same way as in the next point, with no attempt recorded, so the note the request was written with stays the conversation's newest. When the request is applied or refused, the held messages go ahead.
 - **When the first message of a new conversation is prepared:** the message waits. It is not driven, and no attempt is recorded, the way a gateway hold works today (`CLASS_GATEWAY_HELD`, `_hold_park` in `wrapper/loop.py`); the read is tried again on the next poll. After two hours the transition becomes `blocked(facts_<reason>)`, the agent stays held, and the liaison is told once.
 - **A lead's explicit choice:** `session fresh --for <agent> --no-handover` starts a new conversation without the note and without the completeness requirement, as step 1 does today. The new conversation's prompt says that its facts were not checked. A blocked agent is released the same way.
 
@@ -186,33 +190,37 @@ A transition is one change from an old conversation to a new one. The session re
 | `request_id`, `requested_by` | the fresh-start request and who asked, or `auto` for the automatic reasons |
 | `from_conversation`, `to_conversation` | the session ids before and after |
 | `backup_file`, `backup_sha256` | the exact copy of the session record taken before the change (today's `<agent>.wrapper-session.before-fresh-<id>.json`) and its fingerprint |
-| `handover_id`, `handover_sha256` | the note to load, or none after `--no-handover` |
+| `handover_id`, `handover_record_sha256` | the note to load and its record fingerprint (section 4), or none after `--no-handover` |
+| `evidence` | what each decision rested on, kept for the report (below) |
 | `state` | `pending_load`, `rollback_started`, `rolled_back`, `blocked` or `loaded` |
 | `blocked_reason`, `started_at`, `updated_at` | why it is blocked, and when |
 
-`pending_load` ends as `loaded` when the first turn of the new conversation finishes; the transition then moves to the decisions file below and the field is cleared.
+**Ending a transition.** `pending_load` ends as `loaded` when the first turn of the new conversation finishes; a rollback ends as `rolled_back`. Both are terminal, and both end the same way: first the transition, with its evidence, is appended to the decisions file under the next sequence number; then one save clears `fresh_transition` and records that number as `decisions_seq`. A crash between the two leaves a terminal transition in the record: the next start appends it again only if the file's last number is below it, then clears it. So the clean-up is safe to repeat at every step, and it never touches the accounting below.
 
 ### Accounting, kept apart from the diagnostic list
 
 - `fresh_applied_times`: the times of applied transitions in the last seven days (when there are more than 64, the oldest go first, but none from the last 24 hours), and `fresh_last_applied_at`. The cooldown and the daily limit (section 8) read only these.
 - **What counts:** every applied transition, whoever asked and for whatever reason, including automatic ones. A transition that was rolled back still counts: it was applied, and counting it stops a loop of apply, roll back, apply. Refused and waiting requests do not count.
 - `rotation_log`: the last 20 decisions, for `status` only. It never decides anything, so refusals pushing applications out of it change nothing.
-- **The pilot's full record:** `.agenttalk/state/<agent>.fresh-decisions.jsonl` (proposed), one line per decision (applied, refused, waiting, rolled back, blocked, loaded), appended after the session record is saved, capped at 1 MiB with one older file kept. If an append is lost, the session record still holds the accounting, and the report shows the gap.
+- **The pilot's full record:** `.agenttalk/state/<agent>.fresh-decisions.jsonl` (proposed), one line per decision (applied, refused, waiting, rolled back, blocked, loaded), capped at 1 MiB with one older file kept. Each line carries a sequence number that only grows, and the session record keeps the last one as `decisions_seq`, saved together with the decision. A file whose last number is below `decisions_seq` has lost an append, even after the transition field was cleared, and the report shows it.
+- **The evidence kept per transition,** never with note text: the facts read at apply and at load (complete, or its reason word; the counts; a fingerprint of the inventory); the ids of the replies owed, the replies awaited and the open requests at both moments, with the cursor; and the note's id, its `record_sha256` and the outcome of each check. B1 and B2 are judged only from this evidence (section 13).
 
 ### Rolling back, as a recoverable change
 
-When the loader cannot use the note after the change (section 7), the wrapper goes back to the old conversation:
+**Only a requested transition is rolled back, and only when its old conversation can still be resumed** (its `reason_code` is `fresh_requested` and the backup says `resume_available`). An automatic transition (`resume_unavailable`, `runtime_config_changed`) is never rolled back: its old conversation already failed, or the operator changed the model, and a rollback would resume the old conversation under the new settings. It becomes `blocked`, and the agent is held (section 9). For a requested transition, when the loader cannot use the note after the change (section 7), the wrapper goes back to the old conversation:
 
 1. **Mark the start:** save `state=rollback_started`. The session record on disk is the authority after every write. A save that fails is handled as today's fresh start does: read the record on disk; adopt it if the write landed; otherwise undo in memory and try again on the next poll.
-2. **Check the backup:** the file named in `backup_file` exists, its fingerprint is `backup_sha256`, and its session id is `from_conversation`. If not, the transition becomes `blocked(backup_missing)` or `blocked(backup_corrupt)`, the agent is not dispatched, the liaison is told once, and a lead releases it with `session fresh --no-handover`.
+2. **Check the backup:** the file named in `backup_file` exists, its fingerprint is `backup_sha256`, and its session id is `from_conversation`. If not, the transition becomes `blocked(backup_missing)` or `blocked(backup_corrupt)`, the agent is not dispatched, the liaison is told once, and a lead releases it (below).
 3. **Restore only the conversation fields** from the backup, in one write, together with `state=rolled_back`:
    - restored: `claude_session_id`, `codex_thread_id`, `resume_available`, `resume_unavailable_reason`, and the conversation's own fields (`conversation_id`, `conversation_turns`, the size readings, `conversation_first_message_id`, the last finished turn and the newest note);
    - never restored: the all-time `turns`, the `fresh_request_*` outcome, `fresh_applied_times`, `fresh_last_applied_at`, `rotation_log`, the runtime fingerprint and the rate-limit reading. So a rollback cannot bring back the accounting from before the change.
 4. **Append** the outcome to the decisions file.
 
-**After a restart,** before it dispatches anything, the wrapper reads `fresh_transition`: `rollback_started` is finished first (steps 2 to 4 again; they are safe to repeat); `blocked` holds the agent; `pending_load` goes on to the loader.
+**After a restart,** before it dispatches anything, the wrapper reads `fresh_transition`: `rollback_started` is finished first (steps 2 to 4 again; they are safe to repeat); a terminal `loaded` or `rolled_back` gets its clean-up; `blocked` holds the agent; `pending_load` goes on to the loader.
 
-**One transition at a time.** A fresh-start request that arrives while a transition is open is left pending, not refused, and is handled when the transition ends. The one exception is a lead's `--no-handover` while the agent is blocked: that is the release.
+**One transition at a time.** A fresh-start request that arrives while a transition is open is left pending, not refused, and is handled when the transition ends, including after a rollback.
+
+**Releasing a blocked agent** cannot use the request slot, because today's `write_fresh_request` refuses a second marker while one is pending. The release is a separate marker, `state/<agent>.fresh-release` (proposed), which only a lead or the operator-facing agent can write, with `session fresh --for <agent> --release <transition-id> --no-handover`. It names the blocked transition, so it releases nothing else. The wrapper takes it before any pending request, starts the new conversation without a note (its prompt says the facts were not checked, unless a complete facts read passes), and leaves a pending request for afterwards.
 
 ## 7. The loader check
 
@@ -225,7 +233,7 @@ The handler reads the newest sealed note of the conversation that is about to en
 1. the file exists, reads as JSON and has `format` 1;
 2. `agent` is this agent;
 3. `conversation` is the conversation that is about to end;
-4. `note_sha256` matches the text, and both match what the session record names;
+4. `record_sha256` matches the record's canonical form and what the session record names, and `note_sha256` matches the text;
 5. `note_bytes` is at most 3,200;
 6. **freshness:** for the agent's own request, the note was sealed at the conversation's newest finished turn, and that is the turn that wrote the request (section 8, guard `handover`). For a lead's request and for the automatic reasons (section 9), the newest sealed note of the conversation is used, with its age in turns shown beside it.
 
@@ -238,10 +246,10 @@ It also needs a complete facts read (section 5).
 ### Before the first message of the new conversation is processed
 
 1. **The order changes:** `make_drive` and `make_cadence_drive` apply a pending request before they assemble the prompt, not after. Only then can the prompt know that the conversation is new.
-2. With a transition in `pending_load`, the wrapper reads the named note and checks the agent, the id and the fingerprint again, and runs the facts read again.
+2. With a transition in `pending_load`, the wrapper reads the named note and repeats every check of the first one (format, agent, conversation, turn, size) against the transition's `handover_record_sha256`, so a change to any field is caught, not only a change to the text. It also runs the facts read again.
 3. **Both pass:** the prompt gets two blocks. The facts block holds what the wrapper read at this moment: why the conversation is new; the note's id, its age in turns and what changed since its `checkpoint`; every reply the agent owes, every reply waiting for it and every request it still waits on; whether its final reply to the current message's request has already landed; and the branch, commit and changed files of the agent's working folder (`checkpoint.collect_git_state` on the folder the agent runs in, not the project root). The note block follows it.
 4. **The facts read is incomplete:** the message waits (section 5).
-5. **The note check fails** (the file was deleted or altered after the change): the wrapper does not run a new conversation without its note. It rolls back to the old conversation (section 6) and tells the liaison once.
+5. **The note check fails** (the file was deleted or altered after the change): the wrapper does not run a new conversation without its note. A requested transition whose old conversation can be resumed rolls back (section 6); any other becomes `blocked` and holds the agent. Either way the liaison is told once.
 6. If the first turn of the new conversation fails, the transition stays in `pending_load`, so the retry gets the note again (a failed first Claude turn already gets a new session id today; it replaces `to_conversation`).
 
 ## 8. The trigger and its guards
@@ -307,7 +315,7 @@ No path may start a new conversation on a pilot agent without the newest valid n
 | An unreadable session record when the wrapper starts | `load_session` in `wrapper/session.py` starts fresh | the agent is held and the liaison is told once; it never starts fresh silently |
 | A Codex reset | `mark_resume_unavailable` | not in the pilot |
 
-Guards 1 to 5 never stop an automatic transition, because the old conversation cannot go on or the operator changed the model. Automatic transitions are counted like all others.
+Guards 1 to 5 never stop an automatic transition, because the old conversation cannot go on or the operator changed the model. Automatic transitions are counted like all others. If the note check fails after an automatic transition was applied, it becomes `blocked`; it is never rolled back (section 6).
 
 ## 10. Delivery, obligations and the crash tests
 
@@ -342,7 +350,7 @@ Guards 1 to 5 never stop an automatic transition, because the old conversation c
 | K5 | after the change was saved, before the marker was cleared | today's rule: the saved request id matches, so only the marker is cleared |
 | K6 | after the change, before the next message was processed | the transition is in `pending_load`; the next message is still in the inbox; its turn gets the note and the facts |
 | K7 | during the first turn of the new conversation | the transition stays in `pending_load`; the retry gets the note again; the message is delivered again |
-| K8 | the note file was altered or deleted between K5 and K6 | the second check fails; the rollback of section 6 runs |
+| K8 | the note file, or any field of its record, was altered or deleted between K5 and K6 | the second check fails; a requested transition rolls back (section 6), an automatic one becomes `blocked` |
 
 **Rollback.**
 
@@ -356,6 +364,9 @@ Guards 1 to 5 never stop an automatic transition, because the old conversation c
 | R6 | interrupted before the decisions file was appended | the session record is the authority; the report shows the gap |
 | R7 | a new fresh-start request arrives while a transition is open | it stays pending and is handled after the transition ends |
 | R8 | a rollback inside the 24-hour window | the rolled-back change still counts; the accounting is the same after the restore and after a restart |
+| R9 | an agent blocked with a fresh-start request pending; a lead writes the release | the release is taken first; the pending request is handled afterwards; a release that names another transition is refused |
+| R10 | a crash on either side of the terminal clean-up | the transition is appended once (by sequence number), then cleared; the accounting is unchanged |
+| R11 | the second check fails after an automatic transition | `blocked`; no rollback; the runtime fingerprint stays the new one |
 
 **Accounting.**
 
@@ -374,6 +385,10 @@ Guards 1 to 5 never stop an automatic transition, because the old conversation c
 | F-3 | one rejected message file | `rejected_files`, as F-2 |
 | F-4 | signing enforced, key unreadable | `signing_unavailable`, as F-2 |
 | F-5 | compaction moved messages this conversation handled | `history_compacted`, as F-2 |
+| F-6 | a published task opener deleted, with unrelated messages still present | `missing_messages`, as F-2 |
+| F-7 | messages compacted before this conversation began | complete: their ids are found valid in the archive |
+| F-8 | the publication order unreadable or not durable | `order_unavailable`, as F-2 |
+| F-9 | the agent's own request waits on an incomplete read while a second message is queued | the second message is held; the request's note stays the newest; the request is applied once the read completes |
 
 **Every path** (section 9).
 
@@ -437,11 +452,11 @@ Today's journal keeps four token totals per dispatch; it keeps no per-call conte
 
 | Field | Meaning |
 |---|---|
-| `model_calls` | the number of model calls in the dispatch (the stream's `num_turns`, or the count of `assistant` events with usage when that is missing) |
+| `model_calls` | the number of complete model calls in the dispatch, by the W0 report's completion rule (a call is identified by its `message_start`; start, delta and stop in order). Interrupted or conflicting calls are counted apart and never added. A dispatch whose complete calls disagree with `num_turns` or `result.usage` is marked conflicting. It is never a count of `assistant` events: one call can produce several |
 | `calls_with_usage`, `calls_without_usage` | how many calls reported usage, and how many did not |
 | `context_hist` | the input side of every call (input + cache read + cache write), counted into 15 fixed buckets with edges at 10, 20, 40, 60, 80, 100, 125, 150, 200, 300, 400, 600 and 800 thousand and 1 million tokens; bounded, so one event stays under the journal's 4,096-byte line limit |
 | `context_max`, `context_sum`, `context_last` | the largest, the total and the last of those per-call values |
-| `note_cost` | for a dispatch that wrote a note: the output tokens of the call that issued the write of the draft file, and the input side, cache write and cache read of the call right after it (the call that receives the write's result). `unknown` when the write cannot be found in the stream, for example when a shell command wrote the file |
+| `note_cost` | for a dispatch that wrote a note: for each complete call that issued a write of the draft file, that call's output tokens (reasoning tokens included once, as part of output), plus the input side, both kinds of cache write and the cache read of the complete call right after it. Several writes add up; a last write with no following call counts its output only. `unknown` when a write cannot be tied to a complete call (a shell command wrote the file, or a call has no usage). Each kind of token is priced once, by the formula below; the result is an estimate of the note's extra cost and is labelled so |
 | `transition` | `none`, or the reason code of a transition this dispatch started or loaded |
 | `conversation_seq` | the number of this agent's conversation (1, 2, 3...), never the session id, so the journal keeps its rule of holding no identifiers that are not on the bus |
 
@@ -450,8 +465,9 @@ Today's journal keeps four token totals per dispatch; it keeps no per-call conte
 - The journal can drop events; each event has a sequence number, and the stream records how many were dropped.
 - The report compares the dispatches in the journal with the attempts the wrapper recorded for the same messages. The share it finds is the coverage.
 - **A measure counts only with at least 95% coverage** in its window, at most 5% of calls without usage, and, for B7, at most 20% of note dispatches with `note_cost` unknown. Otherwise the measure is **inconclusive**, and an inconclusive measure is never a go.
+- **The safety measures need every transition.** The coverage rule qualifies only the cost and size estimates. B1, B2 and B3 are judged from the transition evidence (section 6): a transition without its evidence, or a gap in the decisions file's sequence numbers, makes them inconclusive.
 
-**Cost across attempts:** a work order's cost is the sum over all of its dispatches, failed ones included. The denominator for cost per work order is the messages disposed as completed. Messages that were dead-lettered or failed delivery are reported apart, with their cost, and count in B6.
+**Cost per work order:** a work order's cost is the sum over every dispatch tagged with its `work_item`, of every kind and every attempt, failed ones included. Dispatches without a `work_item` are reported apart. When less than 90% of a window's dispatch cost can be tied to a `work_item`, B5 is inconclusive. Messages that were dead-lettered or failed delivery are reported apart, with their cost, and count in B6.
 
 ### Request size (W0, item f)
 
@@ -468,11 +484,12 @@ The accepted reshape asks for the size of the requests themselves, measured sepa
 
 Equivalent work, run both ways:
 
-1. Pick 10 work orders the pilot agent finished recently, each with a check that says whether it was done right (the tests or reads the order named).
+1. Pick 10 work orders the pilot agent has **not** seen: orders done by another agent of the same kind, each with a check that says whether it was done right (the tests or reads the order named). An order the pilot agent already did would let arm R recall its own solution.
 2. For each order: a scratch store and a worktree at the order's base commit. Replies go to the scratch store only, never to the live bus.
 3. **Arm R (resume):** continue a fork of the pilot agent's current conversation with the order (Claude Code's `--resume <id> --fork-session` starts a copy and leaves the original untouched; checked in step 0).
 4. **Arm F (fresh with note):** in another fork of the same conversation, ask for the handover note (its cost is counted to arm F), then start a new conversation with the standing rules, the facts block, the note and the order.
 5. Same model, effort and standing rules for both arms, with the new telemetry on.
+6. **The sample:** ten valid pairs, five starting with each arm. A pair that misses the W0 report's starting conditions is kept and reported apart, with its cost, and replaced by a new unseen order within the approved budget. If the budget cannot give ten valid pairs, A1 and A3 are inconclusive.
 
 ### The baseline week, then phase B
 
@@ -485,7 +502,7 @@ Equivalent work, run both ways:
 |---|---|---|
 | Context tokens per model call | `context_hist` | the mechanism: does the conversation stay small |
 | Tokens per dispatch, by kind (input, cache write, cache read, output) | the journal's totals | cost, through the proxy below |
-| **Input-equivalent tokens:** input + 1.25 × five-minute cache write + 2 × one-hour cache write + 0.1 × cache read + 5 × output (the one-hour weight corrected by W0) | computed from the row above, over complete calls only | the primary figure for every comparison (the lead's decision): a proxy for what the turn takes from the allowance, using the provider's price ratios between the kinds; it is not a bill. Claude Code's `total_cost_usd` is kept as a list-price cross-check (W0 report) |
+| **Input-equivalent tokens:** input + 1.25 × five-minute cache write + 2 × one-hour cache write + 0.1 × cache read + 5 × output (the one-hour weight corrected by W0) | computed from the row above, over complete calls only | the primary figure for every comparison (the lead's decision): a proxy for what the turn takes from the allowance, using the provider's price ratios between the kinds; it is not a bill. Claude Code's `total_cost_usd` is kept as a list-price cross-check (W0 report), in the same unit: the formula's tokens times the base input price recorded for that model and price-table version, against the list increment of the same complete calls. The gap is measured against the list figure. With a zero or unknown list figure, or unknown call coverage, there is no cross-check. A gap above 10% is flagged, never a gate |
 | Model calls per work order | `model_calls`, summed over attempts | whether fresh conversations need more steps |
 | The note's own cost | `note_cost`, priced as above | counted against the saving |
 | The subscription's weekly percentage | the capacity snapshot | shown as a sanity check, never a gate: it is coarse and shared |
@@ -503,12 +520,12 @@ Extend to more agents (and then to Codex, the gateway backend and other systems,
 | A1 | Phase A cost: median input-equivalent tokens per order, arm F including its note, against arm R | F ≤ 0.6 × R |
 | A2 | Phase A work | arm F passes the order's check in every order arm R passes |
 | A3 | Phase A steps: median `model_calls` per order | F ≤ 1.3 × R |
-| B1 | Lost obligations | zero |
-| B2 | Wrong notes loaded (another agent, conversation or turn, or a fingerprint mismatch that was not stopped) | zero; every load checked |
+| B1 | Lost obligations | zero, judged from the transition evidence; inconclusive if any transition lacks it |
+| B2 | Wrong notes loaded (another agent, conversation or turn, or a record fingerprint mismatch that was not stopped) | zero; every load checked, judged from the transition evidence |
 | B3 | Loops | zero own fresh starts applied without the growth guard; at most 4 applied per day; zero applied on a missing or old reading |
-| B4 | Context tokens per model call, median, from `context_hist` (read to its bucket: the pilot week's upper bucket edge against the baseline's lower edge, so the rounding can only count against the pilot) | at most 40% of the pilot agent's baseline week |
-| B5 | Input-equivalent tokens per completed work order, median, all attempts included | at most 0.75 × the baseline week, and better than the control agent's change over the same days |
-| B6 | Failed dispatches, and messages dead-lettered or failed | at most 2 percentage points above the baseline week |
+| B4 | Context tokens per model call, median, from `context_hist` (read to its bucket: the pilot week's upper bucket edge against the baseline's lower edge, so the rounding can only count against the pilot; a median in the open top bucket, 1 million tokens and above, makes B4 inconclusive) | at most 40% of the pilot agent's baseline week |
+| B5 | Input-equivalent tokens per completed work order (grouped by `work_item`), median, all attempts included | at most 0.75 × the baseline week, and better than the control agent's change over the same days |
+| B6 | Failed dispatches as a share of all dispatches; and dead-lettered or failed messages as a share of all messages | each at most 2 percentage points above the baseline week, judged apart |
 | B7 | The note's own cost | at most 10% of the input-equivalent tokens of the dispatches that wrote one |
 | B8 | Enough data | at least 10 applied transitions and 100 dispatches; otherwise extend phase B by up to five days, then decide |
 
@@ -541,7 +558,7 @@ Each work order is built, read by another agent, and merged on its own. W5 to W8
 | W13 | **Phase B** live, with the three crash drills | 5 working days, little effort | W12 passes, W3 done | B1 to B8 measured |
 | W14 | **The decision:** a short go or no-go record for the lead | half a day | W13 | the lead decides |
 
-Build effort is about nine days (W0 to W2 and W4 to W11), up from six in the first version and well above the challenge's one to three days. The increase is what the read asked for: the complete facts read, the transition record and its rollback, every automatic path, the telemetry, and the delivery tests through the real loop.
+Each work order also carries the binding requirements of section 18. Build effort is about nine days (W0 to W2 and W4 to W11), up from six in the first version and well above the challenge's one to three days. The increase is what the read asked for: the complete facts read, the transition record and its rollback, every automatic path, the telemetry, and the delivery tests through the real loop.
 
 ## 15. How this fits #475, the roadmap, #490 and #178
 
@@ -578,3 +595,29 @@ The lead answered the five questions of the first version on 2026-10-18:
 - **No change to the message format.** The fresh-start marker gains an optional `turn_id`; the session record and the journal gain fields; nothing on the bus changes.
 - **Nothing about idle wakeups:** the lead loop already spends no model turn on a quiet tick.
 - **No claim about oversized requests** unless step 0 finds an approved way to measure request sizes on this pair (section 13).
+
+## 18. Binding requirements from the reads
+
+These come from three reads: the design's final read (tk-e78baa38e6a0), the W0 report's final read (tk-ac7c677dd860), and the automatic Codex reviewer's nine findings on pull request #531 (head `78a44dcc`). The lead accepted all of them as binding. Each row says what the build must do, which work order it binds, and where this document now says it.
+
+| # | From | Rule | Binds | In this document |
+|---|---|---|---|---|
+| DF1 | design final read, P2 | A deleted message makes the facts read incomplete: compare the validated files with the durable publication order, under the publication locks. Test a published task opener that was deleted while other messages remain. Refined by CN3 and CN7 | W5 | section 5; F-6 |
+| DF2 | design final read, P2 | Finish the rollback: a terminal clean-up for `rolled_back`, recovered after a crash on either side; a request queued during a transition goes ahead after a rollback; releasing a blocked agent has its own way in (`fresh-release`), tested through the loader, and leaves unrelated newer requests alone; no rollback after a model change (CN5) | W6, W7 | section 6; R9 to R11 |
+| DF3 | design final read, P2 | Keep the evidence for the zero-loss claims: per transition, the completeness result, the obligation ids and their state, and the note's identity and check outcomes, without note text. A durable sequence number shows a lost final append. Coverage never certifies zero losses; a transition without its evidence makes B1 to B3 inconclusive; a report fixture that drops one transition's evidence must not give GO | W6, W11 | sections 6 and 13 |
+| DF4 | design final read, P2 | Request size stays "not measured", an explicit exception for the pilot and expansion decision; no credential-bearing proxy without the operator's approval and a security read | W0, W14 | section 13; W0 report (f) |
+| DF5 | design final read, P3 | Fix the arithmetic before the baseline, with fixtures: the note-cost cases (reasoning tokens, several writes, a last write with no following call, shell writes, repeated events, missing usage); each kind of token priced once and labelled an estimate; unknown stays unknown; B6's two shares judged apart; a B4 median in the open top bucket is inconclusive | W2, W11 | section 13 |
+| WF1 | W0 final read, P2 | The old `model_calls` fallback is retired: the completion rule decides; the repeated-`assistant` fixture gives two calls; missing or conflicting data follows the coverage rules | W1, W2 | section 13, `model_calls` |
+| WF2 | W0 final read, P2 | Ten valid bench pairs after exclusions, five starting with each arm; excluded pairs kept with their cost; replacements within the fixed budget; otherwise A1 and A3 are inconclusive. A fixture with nine excluded pairs and one passing pair must not give GO | W11, W12, W14 | section 13, phase A step 6 |
+| WF3 | W0 final read, P3 | The list-price cross-check in one unit: the formula's tokens times the recorded base input price for that model and price version, against the list increment of the same calls; the gap measured against the list figure; no cross-check with a zero or missing price or unknown coverage; the 10% flag is advisory, never a gate | W2, W11 | section 13, the formula row |
+| WF4 | W0 final read, note | The 65-minute idle rule is a declared precondition about the conversation's lineage, not proof that every shared prefix is cold. A pair is not dropped because it read cache; an order whose last-use history is unknown cannot count as meeting it | W12 | W0 report, the bench's starting conditions |
+| WF5 | W0 final read, note | The W0 report's single cache-write weight of 1.25 is labelled as the pre-W0 formula | documents | W0 report (a) |
+| CN1 | automatic reviewer, P2 | Persist the obligation snapshots of each transition, so the report can judge B1 after the cursor moves or messages are compacted (as DF3) | W7, W11 | section 6, the evidence |
+| CN2 | automatic reviewer, P2 | The bench uses orders the pilot agent has not seen, so arm R cannot recall a solution it already wrote | W12 | section 13, phase A step 1 |
+| CN3 | automatic reviewer, P1 | A deleted message is caught before the facts count as complete, and the read fails when the publication order is unavailable or not durable | W5 | section 5, `missing_messages` and `order_unavailable`; F-6, F-8 |
+| CN4 | automatic reviewer, P2 | Compaction is judged from the compaction archive itself, not from the best-effort stamp `state/compact.json` | W5 | section 5, `history_compacted`; F-5, F-7 |
+| CN5 | automatic reviewer, P2 | Only a requested transition whose old conversation can be resumed is rolled back; an automatic transition that fails its check is held | W7, W8 | sections 6, 7 and 9; K8, R11 |
+| CN6 | automatic reviewer, P2 | Cost is grouped by `work_item`, over every dispatch and attempt; below 90% attributable cost, B5 is inconclusive | W11 | section 13; B5 |
+| CN7 | automatic reviewer, P2 | The completeness check recognises messages that are valid in the compaction archive, and still catches messages that are really missing | W5 | section 5, `missing_messages`; F-6, F-7 |
+| CN8 | automatic reviewer, P2 | The fingerprint covers the whole canonical sealed record, and both note checks use it | W6, W7 | sections 4 and 7; K8 |
+| CN9 | automatic reviewer, P2 | While the agent's own request waits on the facts read, the old conversation takes no further turn | W5, W7 | section 5; F-9 |
