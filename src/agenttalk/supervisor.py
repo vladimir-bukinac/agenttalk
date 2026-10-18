@@ -741,7 +741,7 @@ _AGENTTALK_SUBCOMMANDS = frozenset(
     "drain compact wait ack sync whoami transcript end release heartbeat "
     "checkpoint request-restart commit-gate request-launch wrap "
     "_internal-check-wrap-dispatch dead-letter reply-refusal progress "
-    "managed-lead-loop supervise "
+    "managed-lead-loop lead-routine supervise "
     "deadman reply tail start serve dashboard reset doctor gateway hmac-init "
     "capacity install-skills codex-config comprehension scratch janitor backup session overview".split()
 )

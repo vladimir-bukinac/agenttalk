@@ -32,6 +32,7 @@ import threading
 import time
 import uuid
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -1318,6 +1319,24 @@ class OperatorAnswerSendResult:
     denial_code: str | None = None
     detail: str = ""
     failed: bool = False
+
+
+
+def _clean_relay_buckets(value: object) -> dict:
+    """The stored reminder buckets as ``{key: non-negative int}``: a hand-edited or corrupted entry (NaN, infinity,
+    text, a negative number) is dropped at the read boundary, so it cannot fail every later sweep."""
+    out: dict = {}
+    if not isinstance(value, dict):
+        return out
+    for key, raw in value.items():
+        try:
+            number = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if number != number or number in (float("inf"), float("-inf")) or number < 0:
+            continue
+        out[str(key)] = int(number)
+    return out
 
 
 class Store:
@@ -3786,6 +3805,20 @@ class Store:
                 vendors = work_tags.validate_vendor_map(_dispatch_vendors, recipients)
             meta["assignee_model_vendors"] = vendors
         _gates.validate_response_status(kind, meta)
+        if kind in OPENER_KINDS and meta.get("relay_to"):
+            # refused at send, not ignored at derivation: a mistyped seat would otherwise be an obligation that no
+            # one can ever close (it cannot declare waiting_off, and the hand-off to it is refused)
+            unknown = [seat for seat in str(meta["relay_to"]).split(",")
+                       if seat.strip() and (seat.strip() not in (cfg.get("agents") or []) or seat.strip() == sender)]
+            if unknown:
+                raise ValueError("relay_to names %s, which %s not on the roster (or is the sender itself)"
+                                 % (", ".join(repr(u.strip()) for u in unknown),
+                                    "is" if len(unknown) == 1 else "are"))
+        if kind in OPENER_KINDS and "," in str(meta.get("request_id") or ""):
+            # waiting_on and relay_to are comma-separated lists: an id with a comma could never be waited on
+            # unambiguously (it would split into two unrelated ids), so it is refused where a request opens
+            raise ValueError(
+                "request_id %r contains a comma; waiting_on lists are comma-separated" % meta["request_id"])
         if kind in OPENER_KINDS and "epoch_at_send" not in meta:
             meta["epoch_at_send"] = self.current_epoch()
         msg = Message(
@@ -3916,6 +3949,11 @@ class Store:
             identity["origin_obligation_key_digest"] = origin_key
         if roster_revision is not None:
             identity["expected_roster_revision"] = roster_revision
+        if operation == "relay":
+            # a lead's hand-off of a finished result (lead_relay.publish_handoff): the same result and
+            # recipient with another outcome is another payload
+            identity["relay_of"] = meta.get("relay_of")
+            identity["relay_outcome"] = meta.get("relay_outcome")
         return identity
 
     @staticmethod
@@ -4061,8 +4099,17 @@ class Store:
         meta: dict,
         operation_nonce: str,
         operation_digest: str,
+        operation: str | None = None,
+        precheck: Callable[[], None] | None = None,
     ) -> tuple[Message, bool]:
-        """Atomically dedupe one canonical wrapper operation publication."""
+        """Atomically dedupe one canonical wrapper operation publication.
+
+        ``operation`` names the intent identity (default: ``composing`` for a composing marker, else
+        ``terminal``; ``relay`` for a lead's hand-off). ``precheck`` runs INSIDE the publication lock,
+        before the intent is recorded: it re-derives whatever the publication depends on and raises
+        to refuse. It must only validate (a rerun of a published operation passes through it and
+        then returns the existing message).
+        """
         if re.fullmatch(r"[0-9a-f]{32}", operation_nonce) is None:
             raise ValueError("operation nonce must be exactly 32 lowercase hexadecimal characters")
         if re.fullmatch(r"[0-9a-f]{64}", operation_digest) is None:
@@ -4075,7 +4122,7 @@ class Store:
         supplied["operation_nonce"] = operation_nonce
         supplied["operation_digest"] = operation_digest
         operation_intent = self._operation_intent_identity(
-            operation="composing" if kind == "composing" else "terminal",
+            operation=operation or ("composing" if kind == "composing" else "terminal"),
             kind=kind,
             recipient=recipient,
             meta=supplied,
@@ -4089,13 +4136,9 @@ class Store:
             timeout=10.0,
             what="wrapper operation publication",
         ):
-            intent_path, intent = self._record_operation_intent_locked(
-                sender=sender,
-                operation_nonce=operation_nonce,
-                operation_digest=operation_digest,
-                body=body,
-                intent_digest=intent_digest,
-            )
+            # an exact rerun resolves to the existing publication BEFORE the prechecks: they validate state that only
+            # a NEW send depends on (for a relay, the result may have been compacted away since)
+            match = None
             for existing in self.valid_messages():
                 existing_meta = existing.meta or {}
                 if (
@@ -4104,18 +4147,28 @@ class Store:
                 ):
                     continue
                 if existing_meta.get("operation_digest") == operation_digest:
-                    if intent.get("state") != "published" or intent.get(
-                        "message_id"
-                    ) != existing.id:
-                        intent["state"] = "published"
-                        intent["message_id"] = existing.id
-                        intent["published_at"] = _now_iso()
-                        _atomic_write_text(
-                            intent_path,
-                            json.dumps(intent, indent=2, ensure_ascii=False),
-                        )
-                    return existing, False
+                    match = existing
+                    break
                 raise ValueError("operation nonce was already used with a different payload")
+            if match is None and precheck is not None:
+                precheck()
+            intent_path, intent = self._record_operation_intent_locked(
+                sender=sender,
+                operation_nonce=operation_nonce,
+                operation_digest=operation_digest,
+                body=body,
+                intent_digest=intent_digest,
+            )
+            if match is not None:
+                if intent.get("state") != "published" or intent.get("message_id") != match.id:
+                    intent["state"] = "published"
+                    intent["message_id"] = match.id
+                    intent["published_at"] = _now_iso()
+                    _atomic_write_text(
+                        intent_path,
+                        json.dumps(intent, indent=2, ensure_ascii=False),
+                    )
+                return match, False
             message = self.send(
                 sender=sender,
                 recipient=recipient,
@@ -6337,7 +6390,7 @@ class Store:
         return self.state_dir / f"{validate_agent_name(agent)}.lead-loop-cadence.json"
 
     def _default_cadence_state(self) -> dict:
-        return {"last_tick_epoch": 0.0, "last_reminded": {}, "escalation_dedup": {},
+        return {"last_tick_epoch": 0.0, "last_reminded": {}, "escalation_dedup": {}, "relay_reminded": {},
                 "cadence_fails": 0, "backoff_until_epoch": 0.0, "health_escalated": False}
 
     def read_lead_loop_cadence(self, agent: str) -> dict:
@@ -6376,10 +6429,12 @@ class Store:
 
         lr = data.get("last_reminded")
         ed = data.get("escalation_dedup")
+        rr = data.get("relay_reminded")
         return {
             "last_tick_epoch": _f("last_tick_epoch"),
             "last_reminded": lr if isinstance(lr, dict) else {},
             "escalation_dedup": ed if isinstance(ed, dict) else {},
+            "relay_reminded": _clean_relay_buckets(rr),
             "cadence_fails": _i("cadence_fails"),
             "backoff_until_epoch": _f("backoff_until_epoch"),
             "health_escalated": bool(data.get("health_escalated")),
@@ -6839,8 +6894,32 @@ class Store:
         except OSError:
             return 0
 
-    def archive_messages_below(self, keep_floor: str, *,
-                               dry_run: bool = False) -> list[dict]:
+    def archive_messages_batched(self, floor_fn: Callable[[], str], *, dry_run: bool = False,
+                                 batch_size: int = 200) -> tuple[str, list[dict]]:
+        """Archive in batches, each under the publication locks, with the floor recomputed inside them.
+
+        Lock order is the one ``send_operation`` uses: ``state/operation-publication.lock`` (rank 100), then the
+        message-publication mutex (rank 160), released between batches. A declaration (an ordinary ``send``)
+        waits for the mutex, so it is either published before the recheck (and protects its request group) or after
+        the batch (and finds the request archived: the ``unresolved`` outcome of lead_relay). A dry run takes no
+        lock and moves no file.
+        """
+        if dry_run:
+            floor = floor_fn()
+            return floor, self.archive_messages_below(floor, dry_run=True)
+        records: list[dict] = []
+        floor = ""
+        while True:
+            with self._exclusive_lock(self.state_dir / "operation-publication.lock", timeout=10.0,
+                                      what="compaction batch"), self._message_publication_lock():
+                floor = floor_fn()
+                part = self.archive_messages_below(floor, limit=batch_size)
+            records.extend(part)
+            if len(part) < batch_size:
+                return floor, records
+
+    def archive_messages_below(self, keep_floor: str, *, dry_run: bool = False,
+                               limit: int | None = None) -> list[dict]:
         """Move every VALID message with ``id < keep_floor`` into
         archived/compacted/. Returns ``[{"id","from","to"}]`` per file (the
         plan, when ``dry_run``).
@@ -6868,7 +6947,9 @@ class Store:
         invalid_names = {p.name for p, _, _ in self._invalid_file_entries()}
         records: list[dict] = []
         made_dir = False
-        for m, src in valid_p:
+        for m, src in sorted(valid_p, key=lambda pair: pair[0].id):
+            if limit is not None and len(records) >= limit:
+                break
             if src.name in invalid_names:
                 continue
             if m.id >= keep_floor:

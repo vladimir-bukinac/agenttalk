@@ -12,6 +12,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A lead is now reminded of the decisions it still owes to seats that wait for them.**
+  When a seat says it is waiting for a lead's decision and the result it waits for has
+  finished, the lead used to hear about the result and then nothing more; the seat could
+  wait for a long time. Now agenttalk works out, from the messages themselves, which
+  hand-offs are still owed. It shows them after the lead reads messages and on every turn of
+  a wrapped lead, and reminds the lead again if the first reminder is ignored. A new command,
+  `agenttalk relay result`, hands the decision over exactly once (also when it is run twice
+  or two processes race), or closes it as not needed or unresolved. This is best effort and
+  covers only seats that said they wait: a seat that never said so is not seen. Message
+  cleanup (`compact`) no longer removes what an open hand-off depends on. A second new
+  command, `agenttalk lead-routine`, records which parts of the lead's routine were done
+  and by what, and keeps the parts that agenttalk cannot check (handover note, machine
+  resources, scheduled timers) apart so they are never mistaken for covered.
+  A finished hand-off stays finished when old messages are cleaned up in several steps, and a re-asked
+  request no longer offers its old answer. Only the command's own message closes a hand-off, and the
+  routine record keeps the sweep's findings and the lead's own word apart for every part.
+  A hand-off is no longer closed by an older one, a cancelled or incomplete request no longer produces
+  one, a mistyped seat name in `relay_to` is refused when the request is sent, and the reminders stay
+  fair however many hand-offs are open. A seat that waits again can be answered again, the operator is
+  told about an overdue hand-off at the third reminder and then once a day, and a request id with a comma
+  is refused when the request is opened. A hand-off for an older wait never counts as the answer to a newer
+  one, even when the two cross while a command is running. A hand-off is refused unless that seat has an
+  open wait for it (a mistyped seat name, or a wait the seat cancelled), and a cancelled wait stays cancelled.
+  (Technical detail: derived obligations in `lead_relay.py`; `Store.send_operation` gained a
+  `precheck` run inside the publication lock; `Store.archive_messages_batched` recomputes the
+  protected floor under the rank-100 and rank-160 locks; routine record in
+  `lead_routine.py`; design `docs/DESIGN-lead-loop-default.md`.)
+
 - **A new team starts with the migration lessons, and `agenttalk knowledge pack` loads, lists and
   removes lesson packs.** What several practice migrations taught us (124 short lessons: how to
   move a codebase to a newer framework, language or platform and prove that it still behaves the
