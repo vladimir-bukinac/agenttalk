@@ -32,6 +32,7 @@ unique evidence).
 | Documentation accuracy / audience / prose review | review-docs |
 | Failure-path / contract-drift / release-readiness assurance | review-failure-injection / review-contract-drift / review-release-readiness |
 | Release / milestone multi-lens close | system-review-protocol |
+| What "done" means for this task, and the done record at handoff (any task) | definition-of-done |
 | A second, independent list of ideas at a named moment (design start, two failed attempts on one assumption outside a review-ordered fix round, product-ideas side round) | thinking-games |
 
 ## Core precedence

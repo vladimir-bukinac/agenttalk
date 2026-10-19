@@ -1,0 +1,62 @@
+id,job,source,finding,literal_row,classification,origin
+F01,1-bug-fix,PR #478 review comment 4258708185,"timing measured the whole read call, not the gap between bytes","bug-fix: the test uses the real behaviour, not a stand-in",judgement,existing rule: test-coverage (behaviour-focused tests)
+F02,2-feature,bus tk-62a2fee04a0e item 1,a re-ask after a terminal result kept the old result,none,not-caught,review value
+F03,2-feature,bus tk-62a2fee04a0e item 2,cleanup in batches reopened a closed hand-off,none,not-caught,review value
+F04,2-feature,bus tk-62a2fee04a0e item 3,machine sweep and the lead's own record overwrote each other,none,not-caught,review value
+F05,2-feature,bus tk-62a2fee04a0e item 4,a stale controller wrote with its replacement's identity,none,not-caught,review value
+F06,2-feature,bus tk-62a2fee04a0e item 5,a message with a partial closing marker closed a wait,none,not-caught,review value
+F07,2-feature,bus tk-62a2fee04a0e item 6,the restart test did not restart anything,feature: anything that must survive an interruption or a restart has a test,judgement,existing rule: test-integration (exercise the real process boundary)
+F08,2-feature,bus tk-62a2fee04a0e item 7,"two-process tests used a clock deadline, not a readiness barrier","feature: each behaviour has a test, including the failure paths",judgement,existing rule: test-integration and test-coverage (bounded polling or an injected clock; deterministic tests)
+F09,2-feature,bus tk-62a2fee04a0e item 8,sections not attempted were counted as completed,none,not-caught,review value
+F10,2-feature,bus tk-62a2fee04a0e item 9,the relay check could be overtaken by an ordinary reply (limit not stated),none,not-caught,review value
+F11,2-feature,PR #528 review comment 4303455665,a closing older than the declaration closed it,none,not-caught,review value
+F12,2-feature,PR #528 review comment 4303455673,a rescinded request still gave a result,none,not-caught,review value
+F13,2-feature,PR #528 review comment 4303455677,an exact rerun failed after compaction,none,not-caught,review value
+F14,2-feature,PR #528 review comment 4303455682,the seat view ignored retained closings,none,not-caught,review value
+F15,2-feature,PR #528 review comment 4303455687,a half-answered broadcast gave a result,none,not-caught,review value
+F16,2-feature,PR #528 review comment 4303455691,reminder dedup did not restart when a waiter redeclared,none,not-caught,review value
+F17,2-feature,PR #528 review comment 4303455693,a mistyped seat name in relay_to made an obligation nobody could close,"feature: each behaviour has a test, including the failure paths",judgement,existing rule: review-failure-injection (malformed input)
+F18,2-feature,PR #528 review comment 4303455696,a request id with shell characters appeared in command text,"feature: each behaviour has a test, including the failure paths",judgement,existing rule: review-failure-injection (untrusted input)
+F19,2-feature,PR #528 review comment 4303804553,the reminder snapshot cut the same oldest items every sweep,none,not-caught,review value
+F20,2-feature,PR #528 review comment 4303804560,a non-finite number in a state file failed every sweep,"feature: each behaviour has a test, including the failure paths",judgement,existing rule: review-failure-injection (malformed input)
+F21,2-feature,PR #528 review comment 4303804564,a declaration to one lead was derived by every lead,none,not-caught,review value
+F22,2-feature,PR #528 review comment 4304284735,the publication precheck ignored retired broadcast members,none,not-caught,review value
+F23,2-feature,PR #528 review comment 4304284742,a late follow-up changed a completed broadcast's result,none,not-caught,review value
+F24,2-feature,PR #528 review comment 4304284747,an unresolved note could stand in for a result's closing,none,not-caught,review value
+F25,2-feature,PR #528 review comment 4304284752,lease check and routine write were not one step,none,not-caught,review value
+F26,2-feature,PR #528 review comment 4304284754,the operator was told twice in 40 minutes; the documented schedule says daily after the third,"feature, documentation part: every factual claim is checked against the code",unambiguous,existing rule: review-docs (verify every claim)
+F27,2-feature,PR #528 review comment 4304284758,a request id with a comma was split in a declaration,"feature: each behaviour has a test, including the failure paths",judgement,existing rule: review-failure-injection (malformed input)
+F28,2-feature,bus tk-d7fd2e8aa66c item 1,a seat that waited again could not receive a second closing,none,not-caught,review value
+F29,2-feature,bus tk-d7fd2e8aa66c item 3,reminders still starved beyond a 500-item cap,none,not-caught,review value
+F30,2-feature,bus tk-d7fd2e8aa66c item 4,the waiting-seat view accepted another lead's cancel or closing,none,not-caught,review value
+F31,2-feature,PR #528 review comment 4304403699,a closing for an old declaration could close a newer one (generation race),none,not-caught,review value
+F32,2-feature,PR #528 review comment 4304403701,a later retirement rewrote a completed broadcast's result,none,not-caught,review value
+F33,2-feature,bus tk-d4b91bcc5bbd item 3,the memory-bound sentence claimed compaction bounds it,"feature, documentation part: every factual claim is checked against the code",unambiguous,existing rule: review-docs (verify every claim)
+F34,2-feature,bus tk-0d1a4ba47f64 item 1,a closing without a generation still closed a new declaration,none,not-caught,review value
+F35,2-feature,bus tk-0d1a4ba47f64 item 2,a stale closing hid the current one in the index,none,not-caught,review value
+F36,2-feature,PR #528 review comment 4304618908,a cancellation lost to a closing,none,not-caught,review value
+F37,2-feature,PR #528 review comment 4304618910,obligations of a former lead were no longer shown after the role moved,none,not-caught,review value
+F38,2-feature,PR #528 review comment 4304618913,publication did not require an open obligation for that seat,none,not-caught,review value
+F39,2-feature,CI run 39048691915 test 1,the supervisor's command list lacked the new command (repository parity test),feature: no new warnings from the project's checks,judgement,existing rule: the project's own CI
+F40,2-feature,CI run 39048691915 test 2,the cadence prompt named a bare send-family command (repository contract test),feature: no new warnings from the project's checks,judgement,existing rule: the project's own CI
+F41,3-release,PR #467 review comment 4244823027,the operations guide still named the previous release,project-or-release: every place that names the version agrees,unambiguous,existing rule: review-release-readiness (docs and README pins)
+F42,3-release,PR #467 review comment 4244823030,a summary stated the failed-start guarantee without its exception,"project-or-release: the summary states each guarantee exactly, with its exceptions",judgement,existing rule: review-release-readiness (changelog matches what shipped)
+F43,3-release,PR #467 review comment 4244823034,a summary did not say throwaway-store isolation is opt-in,"project-or-release: the summary states each guarantee exactly, with its exceptions",judgement,existing rule: review-release-readiness (changelog matches what shipped)
+F44,3-release,PR #467 review comment 4244823038,a summary omitted the acceptance-close recovery exception,"project-or-release: the summary states each guarantee exactly, with its exceptions",judgement,existing rule: review-release-readiness (changelog matches what shipped)
+F45,3-release,PR #467 review comment 4244929805,the roadmap status column still named the previous release,project-or-release: every place that names the version agrees,unambiguous,existing rule: review-release-readiness (version pins)
+F46,4-migration-slice,PR #309 review comment 4173714951,an oversized numeric argument escaped as a traceback,none,not-caught,review value
+F47,4-migration-slice,PR #309 review comment 4173714956,a deeply nested record escaped as a traceback,none,not-caught,review value
+F48,4-migration-slice,commit 1a731438 item 1 (bus tk-7a00435804ba),older code could still write an upgraded ledger,"migration-slice A9: every launch path, including the rollback path",judgement,no existing rule
+F49,4-migration-slice,commit 1a731438 item 2 (bus tk-7a00435804ba),a receipt could be replaced by a replacing insert,none,not-caught,review value
+F50,4-migration-slice,commit 1a731438 item 3 (bus tk-7a00435804ba),the migration accepted a clock rollback when a table was empty,none,not-caught,review value
+F51,5-migration-close,"PR #193 description, gap 1",stop must run with the runtime that registered the task,documentation: a procedure was followed in order from its stated starting state; migration B9,unambiguous,added by this fix round (review P2 E); the first draft said only 'every command was run'
+F52,5-migration-close,"PR #193 description, gap 2",an old task must be unregistered before the new install when the interpreter changes,documentation: a procedure was followed in order from its stated starting state; migration B9,unambiguous,added by this fix round (review P2 E)
+F53,5-migration-close,"PR #193 description, gap 3",a slow first start can exit non-zero while the service comes up,documentation: a procedure was followed in order from its stated starting state,judgement,no existing rule (depends on timing in the rehearsal)
+F54,5-migration-close,PR #193 review comment 4097350923,a step needed a canary that the blocked wrapper must create (circular),documentation: a procedure was followed in order from its stated starting state,unambiguous,added by this fix round (review P2 E)
+F55,5-migration-close,PR #193 review comment 4097350929,the canary query could select the wrong one of several attempts,documentation: every factual claim is checked against the code,judgement,existing rule: review-docs (verify every claim)
+F56,5-migration-close,PR #193 review comment 4097350935,the manual kill path waited forever on a stale marker,documentation: a procedure was followed in order from its stated starting state,judgement,no existing rule (needs an unclean-exit scenario)
+F57,5-migration-close,PR #193 review comment 4097350941,a missing listener was equated with a stopped gateway,documentation: every factual claim is checked against the code,judgement,existing rule: review-docs (verify every claim)
+F58,5-migration-close,PR #191 description,the service layer used the default policy hash while the ledger held the real one,none,not-caught,review value
+F59,6-documentation,PR #364 review comment 4186272073,a setting described as needed by every Codex seat when only wrapped ones read it,documentation: every factual claim is checked against the code or marked unverified,unambiguous,existing rule: review-docs (verify every claim)
+F60,6-documentation,PR #364 review comment 4186272077,a statement about lanes ignored the advisory mode,documentation: every factual claim is checked against the code or marked unverified,unambiguous,existing rule: review-docs (verify every claim)
+F61,6-documentation,PR #364 review comment 4186272091,a check-in command lacked its registration prerequisite,documentation: every factual claim is checked against the code or marked unverified,unambiguous,existing rule: review-docs (verify every claim)
