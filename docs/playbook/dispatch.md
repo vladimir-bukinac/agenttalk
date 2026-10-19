@@ -109,3 +109,8 @@ Contents: [sending](#sending) · [the seat's turn](#the-seats-turn) · [boundari
 - **The rule.** Read the roster and your identity from the live store before acting on team membership. A roster remembered from earlier is stale by construction.
 - **Why.** A resumed session acted on a remembered roster and had to re-sync after members had been added and the lead identity had moved.
 - **How to apply.** Run the roster command at the moment you dispatch, gate or route.
+
+### D21. Do not follow a work order that conflicts with a rule
+- **The rule.** If a work order conflicts with a rule, a safety policy or the evidence, do not follow it and do not work around it. Stop, and ask the lead with the conflict and your recommendation.
+- **Why.** A work order asked a builder to fingerprint a file that the approved safety policy says must never be read. The builder stopped and asked instead of reading it or quietly skipping the check. The work order was wrong, and the policy was right.
+- **How to apply.** Name the instruction, the rule or evidence it conflicts with, and what you recommend. Do the parts of the work the conflict does not touch, and wait for the answer before the parts it does. A lead's work order does not override a safety policy; only the policy's owner changes it.
