@@ -5,12 +5,12 @@
 ### M1. Green CI is necessary, not sufficient
 - **The rule.** Before merging, read the automated reviewer's priority comments on the exact head and confirm each is fixed, consciously accepted, or based on a wrong premise.
 - **Why.** A pull request was merged on green CI alone while several priority comments sat unread. Luck made that harmless. Later, a long list of unresolved comments at a release head was assumed "probably stale"; classified one by one, many were still open and several reproduced release-blocking failures.
-- **How to apply.** Do not estimate. Hand the full list of unresolved, not-outdated threads to a reviewer and ask for a verdict per item: FIXED (with the evidence), STILL OPEN (reproduce and grade it), or NEVER VALID (the premise is wrong). "Cannot verify" is an acceptable answer.
+- **How to apply.** Do not estimate. Hand the full list of priority threads, including resolved and outdated ones, to a reviewer and ask for a verdict per item: FIXED (with the evidence), STILL OPEN (reproduce and grade it), or NEVER VALID (the premise is wrong). "Cannot verify" is an acceptable answer.
 
 ### M2. An empty summary is not a pass
 - **The rule.** Never judge the automated reviewer from its summary text. List the inline threads on the head.
 - **Why.** A review whose body was empty boilerplate had attached new findings to specific lines, and the empty body read as clean.
-- **How to apply.** Query the unresolved threads (not outdated, not resolved). A thread being "outdated" proves only that its line moved, not that the defect was fixed. Check new versus carried-forward comments: a comment's commit moves forward with the head, so only comments whose original commit is the head are new.
+- **How to apply.** Audit every priority thread on the pull request, whether GitHub marks it resolved or outdated or not. Neither flag proves the defect was fixed: "outdated" means only that the line moved, and a thread can be resolved too early. Use the flags to order your work, never to drop a thread from the audit. Check new versus carried-forward comments: a comment's commit moves forward with the head, so only comments whose original commit is the head are new.
 
 ### M3. Read the reviewer's comments and merge in separate steps
 - **The rule.** Never chain "count the comments" and "merge" in one command.
@@ -40,7 +40,7 @@
 ### M8. Read CI at the source
 - **The rule.** Do not call a red leg a "silent stall" without downloading its per-leg evidence artifact. An "incomplete" flag in a leg's evidence is by design. A failure across a whole operating-system family is more likely a platform-specific test than infrastructure.
 - **Why.** Two consecutive "blackouts" were classified as an infrastructure stall by three people. The evidence showed the whole suite had run and a real platform-specific assertion had failed. A healthy two-hour Windows leg was cancelled as hung, costing about an hour and a half.
-- **How to apply.** Read each check's status, reason code and duration in the artifact. A real timeout has a duration at the cap. Compare durations with a green baseline of the same leg. A leg is overdue only past its job ceiling, or when its log stopped moving. A single red cell among green ones is usually a flaky test; know the known flaky classes. Verify a "watch" command's exit against the run's real conclusion. If a new commit shows no runs at all, check whether the pull request is in conflict, because then no pull-request CI runs.
+- **How to apply.** Read each check's status, reason code and duration in the artifact. A real timeout has a duration at the cap. Compare durations with a green baseline of the same leg. A leg is overdue only past its job ceiling, or when its log stopped moving. A single red cell among green ones does not make it a flake: a defect specific to one operating system, runtime version or architecture looks exactly like that. Use the isolated cell to narrow the environment you investigate, read its full log, and classify the failure only after you have the root cause, as the [fix-ci](../../src/agenttalk/skills/devkit/fix-ci/SKILL.md) procedure requires. Know the known flaky classes, but treat them as a hypothesis to test, not a verdict. Verify a "watch" command's exit against the run's real conclusion. If a new commit shows no runs at all, check whether the pull request is in conflict, because then no pull-request CI runs.
 
 ### M9. Common causes of "green about the wrong code"
 - **The rule.** Gate in an isolated environment, and verify the reader of any result.

@@ -40,7 +40,7 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 
 ### R7. Get two blind reads before the first fix round when fixes are expensive
 - **The rule.** When fix rounds cost as much as the build itself, get two independent reads (a mid-tier and a top-tier reader, blind to each other) before the first fix round, and send one combined round.
-- **Why.** In a side-by-side trial the stronger reader found real major problems the cheaper one missed, and the cheaper one's single unique finding was later withdrawn. The union was still better than either alone.
+- **Why.** A fix round costs as much as the build, so a defect found only after it costs a whole extra round. Two blind reads lower that risk and show which findings both readers share. Count only valid, unique findings when you claim that a second read improves coverage: in one trial the stronger reader's findings covered everything valid, and the cheaper reader's one unique finding was later withdrawn, so the second read added confidence, not findings.
 - **How to apply.** Collect both reads, merge and de-duplicate, then send the builder one list.
 
 ### R8. Use the cheaper reader for deltas and the strongest for the final read
@@ -155,9 +155,9 @@ Contents: [the shape of a review](#the-shape-of-a-review) · [briefing a reader]
 - **How to apply.** If the baseline was green, treat the red as a defect of the change until a mechanism proves otherwise.
 
 ### R29. Compare content, not digests, for builds
-- **The rule.** A packaged artifact's hash identifies one build event, not a source tree. To ask whether two builds are the same, compare their entry lists, recursing into nested archives.
+- **The rule.** A packaged artifact's hash identifies one build event, not a source tree. To ask whether two builds are the same, compare a manifest of every entry (name plus a digest of its extracted bytes, leaving out the nondeterministic metadata such as timestamps), recursing into nested archives, or compare the extracted trees byte for byte. A list of names alone declares two packages identical when the same paths hold different compiled modules or resources.
 - **Why.** The same tree built several times gave different digests, because of timestamps, and the archives were content-identical.
-- **How to apply.** Make the bar the property the change protects, or a sorted manifest of entries.
+- **How to apply.** Make the bar the property the change protects, or a sorted manifest of entry names with content digests.
 
 ### R30. Defend the known classes, and bound what is left
 - **The rule.** Where a check faces an effectively unbounded input space, defend the classes you know and say out loud what residual remains. Do not claim to be exhaustive.

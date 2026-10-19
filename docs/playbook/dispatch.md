@@ -12,7 +12,7 @@ Contents: [sending](#sending) · [the seat's turn](#the-seats-turn) · [boundari
 - **How to apply.** Space sends across turns, especially right after acknowledging a seat. Launch wrappers with their output redirected to a log, and check liveness by looking for the wrapper process, not for a health file.
 
 ### D2. Check that a send was published, not that it printed an id
-- **The rule.** After every task or message, read the output for "refused", "must", "error" or "invalid", and confirm publication: the newest message file is newer than before, or the recipient's unread count rose.
+- **The rule.** After every task or message, read the output for "refused", "must", "error" or "invalid", check the send's exit status, and confirm publication of this very message: find the message or request id the command reported in the store and check it is there with the content you sent. A store-wide timestamp or an unread count can change because of other traffic, so neither proves that your send succeeded.
 - **Why.** A refused send (a bad work-item name with a dot in it, a stage word that does not exist) still printed an automatic request id, and a pipe to another command hid the exit code. A review was never delivered and cost a long delay.
 - **How to apply.** Use `set -o pipefail` or no pipe on send commands. Keep work-item names to lowercase letters, digits and dashes, and use only the stage words the tool lists (design, build, read, fix, delta, sweep).
 
