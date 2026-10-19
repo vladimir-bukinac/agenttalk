@@ -256,3 +256,6 @@ Go deeper: the `agenttalk.lead` skill (your operational checklist).
 - `agenttalk.lead` skill — the lead's operational checklist.
 - `agenttalk.listen` skill — the passive-listen loop and message classification.
 - `docs/USER-MANUAL.md` — full CLI reference.
+- `docs/playbook/index.md` — the team playbook: the standing rules for review, challenges,
+  dispatch, the merge gate, learning, machine safety, writing, building and leading,
+  each with the reason behind it.
