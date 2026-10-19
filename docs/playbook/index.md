@@ -10,7 +10,7 @@ The playbook sits beside the other pages and does not replace them. [Roles, skil
 |---|---|---|
 | [The review rule](review.md) | How rounds of review are set up, how to brief a reader without steering them, what a reader checks, and review hygiene | 35 |
 | [Challenges](challenges.md) | Keeping a "should we do this at all?" challenge honest | 6 |
-| [Dispatch mechanics](dispatch.md) | Sending work and replies so they publish and survive; how a seat's turn works; routing and boundaries | 20 |
+| [Dispatch mechanics](dispatch.md) | Sending work and replies so they publish and survive; how a seat's turn works; routing and boundaries | 21 |
 | [The merge gate](merge-gate.md) | Reading CI and the automated reviewer honestly, merging approved changes together, releasing | 15 |
 | [Learning and curation](learning.md) | Capturing, curating, looking up and sharing lessons | 6 |
 | [Machine safety](machine-safety.md) | Disks, deletions, processes, recovery, cost and the machine environment | 21 |
