@@ -169,7 +169,7 @@ To do it yourself, follow the steps below.
 Install a released version and the instructions each assistant reads:
 
 ```powershell
-python -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.102.0"
+python -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.103.0"
 agenttalk install-skills
 ```
 
@@ -406,12 +406,12 @@ in the technical reference.
 ### Install (tag-pinned)
 
 ```powershell
-python -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.102.0"
+python -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.103.0"
 agenttalk install-skills          # installs bus skills + the dev-discipline devkit
 ```
 
 The first line installs agenttalk itself. Pin it to a released tag
-(`@v0.102.0` above, or whatever the current release is) rather than a
+(`@v0.103.0` above, or whatever the current release is) rather than a
 branch: the commands and the message format can change between
 releases, and a tag keeps every agent in a project on the same version.
 
@@ -1923,7 +1923,7 @@ automation to depend on):
 
 agenttalk follows [Semantic Versioning](https://semver.org/) and keeps
 a [Keep a Changelog](https://keepachangelog.com/)-formatted
-`CHANGELOG.md`. Install a specific tag (`@v0.102.0`, or whatever the
+`CHANGELOG.md`. Install a specific tag (`@v0.103.0`, or whatever the
 current release is) rather than a branch, since the CLI surface and
 message schema can change between releases. `agenttalk dev-gate
 --profile release` is the release-evidence gate itself: it builds the

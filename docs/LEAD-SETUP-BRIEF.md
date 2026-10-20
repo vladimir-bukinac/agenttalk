@@ -13,7 +13,7 @@ that cannot be undone.
 **Written for:** the AI assistant (Claude Code or Codex) that a person has told to
 "read this brief and set up agenttalk".
 **Covers:** agenttalk **v0.101.1**, a released version, on Windows, Linux and macOS. A newer release,
-v0.102.0, exists; the last section lists what changed after v0.101.1.
+v0.103.0, exists; the last section lists what changed after v0.101.1.
 **Leaves out on purpose:** the supervisor (it needs Windows today) and the managed
 model gateway.
 **How it relates to the lead guide:** this brief is for the first setup of a team, without the
@@ -44,7 +44,7 @@ item is explained in the step named after it.
   which were not, is listed in the last section, "What this brief was checked against". Run
   `agenttalk --version` first. If it does not say `0.101.1`, run
   `agenttalk <command> --help` before you trust a flag.
-- **Newer versions.** The README installs v0.102.0, and the main branch has fixes after that.
+- **Newer versions.** The README installs v0.103.0, which includes the later fixes listed below.
   This brief was checked against v0.101.1. Where something here changed later, a sentence that
   starts "Since 0.101.1" says so. Those sentences come from reading the code and the changelog,
   not from a new run.
@@ -241,7 +241,7 @@ That creates `<team>/.agenttalk/` and the four seat names. Change the names to f
 You should see your four names, `messages: 0`, and `(no heartbeat)` for each: nobody
 has started yet.
 
-Since 0.101.1: on the main branch (not yet in a release), `init` also loads 124 migration lessons into a
+Since 0.101.1: in v0.103.0, `init` also loads 124 migration lessons into a
 new store and says so. They show up in `knowledge search --type lesson`, with keys that start with
 `pack.migration:`. Add `--no-packs` to `init` to start with an empty store. This was read from the
 code, not run.
@@ -1052,9 +1052,9 @@ each session.
   `--scope` is one of `craft`, `docs`, `ops`, `process`, `release`, `review`,
   `security`, `test`. It says what kind of lesson this is; it does **not** choose the
   lesson's *domain*. In 0.101.1 a lesson's domain is `process` whatever the scope, and a
-  hit shows as `process/<key>`. Since 0.101.1, on the main branch, `publish` also prints
+  hit shows as `process/<key>`. Since 0.101.1, in v0.103.0, `publish` also prints
   `stored in domain process` on a second line: use the domain it prints in the next command.
-  If `publish` refuses, 0.101.1 may report one problem at a time; on the main branch it lists a
+  If `publish` refuses, 0.101.1 may report one problem at a time; in v0.103.0 it lists a
   missing `--key` or `-m`, an unknown `--scope` and a refused domain together with the other option
   problems (type, anchor and unknown-option errors still come on their own). Publishing the same `--key` again replaces the old lesson. For a
   note about one place in the code, use `--type gotcha`, `pointer` or `seam`.
@@ -1180,12 +1180,12 @@ works from a fresh shell; and your human knows how to start, stop and restart.
 
 - **A seat quits within seconds of starting, with "executable not found on PATH".** The
   script's PATH has no `claude` or `codex`. Put the full path in the script (step 5a) and run
-  it again; the seat starts, and no `ack` is needed. Since 0.101.1, on the main branch, the notice
+  it again; the seat starts, and no `ack` is needed. Since 0.101.1, in v0.103.0, the notice
   names the seat's own tool: for a Claude seat it asks for the full path of `claude` after `--` and
   says how to print it (`where.exe claude` on Windows, `command -v claude` on Linux and macOS).
   0.101.1 gives the Codex advice to every seat; ignore it for a Claude seat.
 - **A `task` to a seat that has never started is refused.** In 0.101.1 the refusal blames the
-  seat's version ("predates task-kind support ... (unknown)"). Since 0.101.1, on the main branch,
+  seat's version ("predates task-kind support ... (unknown)"). Since 0.101.1, in v0.103.0,
   it says the seat "has not started yet", which is the real cause: it has not run, so agenttalk
   cannot tell whether its version can read a task. Either way, start it (step 5), wait for
   `idle_waiting`, and send the order again. Do not use `--force`; it only queues the order until
@@ -1216,7 +1216,7 @@ works from a fresh shell; and your human knows how to start, stop and restart.
   Since 0.101.1: from 0.102.0, `release` also stands a parked seat down (read from the changelog,
   not run).
 - **`request-restart` does not restart anything** here. It only records a request for a
-  supervisor, which this setup does not run. Since 0.101.1, on the main branch, the notice a seat
+  supervisor, which this setup does not run. Since 0.101.1, in v0.103.0, the notice a seat
   sends when it cannot start its assistant says so when no supervisor is running, and tells you to
   fix the launch command and start the seat again yourself. The notice for a parked message
   ("wrapper config-blocked") still mentions `request-restart`; ignore that part.
@@ -1307,7 +1307,7 @@ In v0.102.0 (released 2026-10-16):
 - `release` stands down a seat that is parked on a message: step 12.
 - `overview` is new; this brief does not use it.
 
-On the main branch, not yet in a release:
+In v0.103.0 (released 2026-10-20):
 
 - `init` loads the migration lessons into a new store; `--no-packs` skips them: step 2c.
 - The notice when a seat cannot start its assistant names that assistant's own tool, and no longer
