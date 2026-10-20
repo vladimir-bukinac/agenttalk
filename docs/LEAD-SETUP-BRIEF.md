@@ -1307,7 +1307,7 @@ In v0.102.0 (released 2026-10-16):
 - `release` stands down a seat that is parked on a message: step 12.
 - `overview` is new; this brief does not use it.
 
-In v0.103.0 (released 2026-10-20):
+In v0.103.0 (released 2026-10-21):
 
 - `init` loads the migration lessons into a new store; `--no-packs` skips them: step 2c.
 - The notice when a seat cannot start its assistant names that assistant's own tool, and no longer
