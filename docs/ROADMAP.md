@@ -485,8 +485,8 @@ We read a survey of 1,250 papers on AI systems that improve themselves ([arXiv 2
 Its main points:
 - **Improvement holds only when something outside the model checks it.** The survey ranks the checks: formal proofs first, then running the code (tests, compilers), then another AI judging, then the model judging itself. Demonstrated improvement follows that order.
 - **"When generator and evaluator share weights, biases correlate."** In one study it cites, ten rounds of a model critiquing its own work without a real check mostly reworded it. One grounding step restored progress.
-- **Lessons and skills that agents write for themselves have no verification story yet.** In one benchmark it cites, skills written by people raised pass rates by 16 points. Skills written by an AI made no measurable difference.
-- **On one integrity benchmark, models reported failure as success about a third of the time.**
+- **Reliable verification of the skills and memory that agents accumulate remains an open problem,** despite some approaches that are evaluated or formally checked. In one benchmark it cites, skills written by people raised pass rates by 16 points. Skills written by an AI made no measurable difference.
+- **On one research-integrity benchmark, 34.2% of 231 runs across seven models showed an integrity problem.** Its 33 scenarios are deliberately built dilemmas in which honestly admitting failure is the only correct answer and finishing the task requires misconduct ([arXiv 2605.10246](https://arxiv.org/abs/2605.10246)).
 - **Choosing what is worth doing stays with people.** Checking a chosen direction can be automated.
 
 agenttalk already follows much of this:
@@ -494,17 +494,17 @@ agenttalk already follows much of this:
 - done checks: a test fails before its fix, and deliberately broken versions must be caught;
 - one final read after the fix rounds, which is a stopping rule;
 - a challenge before new work, while people choose the direction;
-- results read from the test reports, never from the exit code;
+- results checked in the test reports and counts, never inferred from the exit code alone;
 - a message bus that keeps failed attempts.
 
-Our strongest lessons already become checks ("lessons to guards", #293). On 2026-10-20 alone, three lessons became a done-checklist rule or a build rule. The gaps are below. None of these ideas is challenged yet.
+Our strongest lessons already become checks ("lessons to guards", #293). The gaps are below. None of these ideas is challenged yet.
 
 | Idea | What it would change here | Status |
 |---|---|---|
 | **Test whether lessons make agents better** | Run the same unseen tasks under three set-ups with equal budgets: no lessons, a fixed lesson library, and a library that grows between tasks. The tasks come from our public practice code, the set-ups are compared task by task, and the plan is written down before the runs. Only if the growing library wins does accumulated experience show up as better work, not just more lessons. | Design, inside #293 |
 | **Lessons confirmed by another vendor** | Today agents write lessons, and the lead, also an AI, confirms them, mostly by reading. Instead: a seat from another vendor confirms each lesson; a lesson that carries a runnable check ranks above a prose-only one; and lessons keep becoming tests and gates wherever they can. | With #293 |
-| **Measure our own review loop** | Every verdict is on the message bus. Count how often a reader from another vendor finds what a same-vendor review missed, how many defects surface after a GO, and how many findings had a wrong premise. That is evidence for agenttalk's central claim. The survey notes that correlated errors across model families are not systematically studied. | A report first |
-| **Code fix rounds rerun a check** | Re-reading is enough for documents. A fix round on code reruns the tests or a check, not only the reviewer's reading. | A small change to the done checklist and the review skills |
+| **Measure our own review loop** | Every verdict is on the message bus. Count how often a reader from another vendor finds what a same-vendor review missed, how many defects surface after a GO, and how many findings had a wrong premise. That is evidence for agenttalk's central claim. We still need to measure whether readers from different vendors catch different mistakes. | A report first |
+| **Code fix rounds rerun a check** | A prose-only correction may need just a check against its source and a re-read. A change to a runnable example also gets the checks that example needs. A fix round on code reruns the affected tests or checks, not only the reviewer's reading. | A small change to the done checklist and the review skills |
 | **Diversity of ideas** | The survey describes ideas narrowing over time and long interactions drifting into fixed patterns. Our guards: teams that mix model families, fresh conversations, and the thinking-games skill. That skill makes a second list of ideas in a fresh context, and someone who wrote neither list judges both. Its first trial was three rounds, judged blind. The game lists were no better overall (none better, two the same, one worse), but each round added one to three adopted ideas that only the game produced, and judging took more time than playing. Keep the skill's score per round before claiming more. | Keep scoring |
 
 ---
