@@ -340,7 +340,7 @@ The operator asked for "a UI for storage usage overview - which project is using
 **Why.** On 2026-10-20 the project drive of the maintainers' desktop had about 10 GB free. Nothing in agenttalk had shown it filling up. Finding the large folders and checking what could be removed took hand-written scripts and a follow-up pass:
 - the first list held 651 old candidate folders and flagged 81 of them as holding their own git history;
 - many deletions were denied in the first agent's context; a second agent removed some of them, while others were kept by its checks or stayed inaccessible;
-- that second pass found 69 more folders with git history nested inside them. The janitor removes only registered worktrees of its own repository and refuses standalone clones (`docs/ops/scratch-hygiene.md`), so these folders have no supported clean-up path yet.
+- that second pass found 69 more folders with git history nested inside them. Of the first 81, 61 were linked git worktrees, which git's own worktree commands remove safely from the repository they belong to (the janitor does this for the agenttalk repository's own worktrees); 20 were standalone clones, for which neither git nor the janitor has a removal step (`docs/ops/scratch-hygiene.md`).
 
 Afterwards the drive had about 30 GB free.
 
@@ -348,7 +348,7 @@ Afterwards the drive had about 30 GB free.
 - **space per project,** and inside each project per kind: agents' scratch folders, worktrees and clones, build outputs, test and review evidence, session histories, agenttalk stores and runtimes, and container images and volumes;
 - **a clear picture of the split,** for example a treemap or stacked bars, with the largest items named;
 - **growth over time,** so a filling drive shows up well before it is full;
-- **for each item, what the clean-up rule says:** kept because a record points to it, eligible under the janitor's checks, a standalone clone with no supported clean-up path, not the team's, or not checked yet. A separate warning marks items the scan could not read. The page never infers a right to remove something from which tool created it, and the janitor checks again before any removal.
+- **for each item, what the clean-up rule says:** kept because a record points to it, eligible under the janitor's checks, a worktree of another repository (where git's own worktree removal applies), a standalone clone with no supported clean-up path, not the team's, or not checked yet. A separate warning marks items the scan could not read. The page never infers a right to remove something from which tool created it, and the janitor checks again before any removal.
 
 **Limits from the start.**
 - **Read-only.** It never deletes. Removing stays with the janitor and the team's clean-up rule. Anything that is not the team's own leftover stays the operator's decision.
