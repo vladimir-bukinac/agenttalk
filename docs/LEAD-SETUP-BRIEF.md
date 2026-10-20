@@ -1056,7 +1056,7 @@ each session.
   `stored in domain process` on a second line: use the domain it prints in the next command.
   If `publish` refuses, 0.101.1 may report one problem at a time; on the main branch it lists a
   missing `--key` or `-m`, an unknown `--scope` and a refused domain together with the other option
-  problems. Publishing the same `--key` again replaces the old lesson. For a
+  problems (type, anchor and unknown-option errors still come on their own). Publishing the same `--key` again replaces the old lesson. For a
   note about one place in the code, use `--type gotcha`, `pointer` or `seam`.
 - **Curate them. This part is yours.** A new lesson is *uncurated*, and **uncurated
   lessons are hidden from the normal search and from the seats' lookups** (checked).
@@ -1313,8 +1313,10 @@ On the main branch, not yet in a release:
   says to run `request-restart` when no supervisor is running (issue #508, items 1 and 2): step 12.
 - `task` to a seat that has never started says "has not started yet" (issue #508, item 3): step 12.
 - `knowledge search --tags <tag>` works without a search word (issue #508, item 5): step 8.
-- `knowledge publish` lists every problem in one refusal (issue #513) and prints the domain it stored
-  the note in (issue #508, item 6): step 8.
+- `knowledge publish` lists a missing `--key` or `-m`, an unknown `--scope` and a refused domain together
+  with the other option problems (issue #513). A missing or unknown `--type`, an unknown `--anchor-kind`,
+  an unknown option, and a `--verified-against` or key-type conflict still come on their own. It also
+  prints the domain it stored the note in (issue #508, item 6): step 8.
 - New commands this brief does not use: `overview`, `relay result`, `lead-routine` and
   `knowledge pack`.
 
