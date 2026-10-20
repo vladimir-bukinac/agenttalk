@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 New teams get clearer setup and restart advice, more useful lesson searches, and fewer repeated refusals when saving what they learned. Leads are reminded when a teammate is waiting for a decision, and can pass that decision on with one command. New skills, the team playbook and the migration guide help teams agree what done means and carry lessons into their next project.
 
-After upgrading, run `agenttalk install-skills` to refresh the bundled skills, and restart wrapped agents after switching their tool runtime. Existing teams can use `agenttalk knowledge pack load migration` to load the bundled migration lessons; new stores receive them at setup.
+After upgrading, preview the skill update with `agenttalk install-skills --dry-run --force`, back up any local edits you want to keep, then run `agenttalk install-skills --force` to refresh the bundled skills. Restart wrapped agents after switching their tool runtime. Existing teams can use `agenttalk knowledge pack load migration` to load the bundled migration lessons; new stores receive them at setup.
 
 ### Added
 
