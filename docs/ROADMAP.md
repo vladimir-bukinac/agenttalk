@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; ideas from a shared-memory study in §7.4; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; ideas from a shared-memory study in §7.4; ideas from a survey of AI self-improvement in §7.5; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.103.0 (2026-10-21). `CHANGELOG.md` remains the release-history source of truth.
@@ -477,6 +477,35 @@ agenttalk already hands up to five matched lessons to each team member every tur
 | **Every documented search must find something** | Our own version of the "category that returns nothing" was a lesson filed under another domain without saying so, and searches by tag alone (#508, items 5 and 6, fixed in v0.103.0). A check that every search the docs recommend returns a known lesson would catch the next one. | Follow-up to #508 |
 | **Measure what agenttalk adds to every turn** | The study counted the tool definitions and instructions sent with every request (about 8,600 tokens for its full tool set, about 650 for three tools). agenttalk sends skills, injected lessons and the brief with every turn; counting them per seat would show where each turn's cost goes. | A report first |
 | **A memory shared across teams** | The study's tool is built for one memory shared by every team in an organisation. That is one possible engine for the shared general layer of the layered-knowledge idea (2026-10-07). Two differences matter: its votes against our curator, and the risk that a shared memory carries one team's private details to another. | Later, inside the layered-knowledge design; the tool is a week old (1.0.0, 2026-10-12) |
+
+### 7.5 Ideas from a survey of AI self-improvement (read on 2026-10-20)
+
+We read a survey of 1,250 papers on AI systems that improve themselves ([arXiv 2607.07663](https://arxiv.org/abs/2607.07663), version 2 of 2026-09-06). Read it with its limits: it is a survey, not an experiment. Its central pattern is, in its own words, "a qualitative pattern we observe throughout the corpus, not a measured law".
+
+Its main points:
+- **Improvement holds only when something outside the model checks it.** The survey ranks the checks: formal proofs first, then running the code (tests, compilers), then another AI judging, then the model judging itself. Demonstrated improvement follows that order.
+- **"When generator and evaluator share weights, biases correlate."** In one study it cites, ten rounds of a model critiquing its own work without a real check mostly reworded it. One grounding step restored progress.
+- **Lessons and skills that agents write for themselves have no verification story yet.** In one benchmark it cites, skills written by people raised pass rates by 16 points. Skills written by an AI made no measurable difference.
+- **On one integrity benchmark, models reported failure as success about a third of the time.**
+- **Choosing what is worth doing stays with people.** Checking a chosen direction can be automated.
+
+agenttalk already follows much of this:
+- a reader from another AI vendor;
+- done checks: a test fails before its fix, and deliberately broken versions must be caught;
+- one final read after the fix rounds, which is a stopping rule;
+- a challenge before new work, while people choose the direction;
+- results read from the test reports, never from the exit code;
+- a message bus that keeps failed attempts.
+
+Our strongest lessons already become checks ("lessons to guards", #293). On 2026-10-20 alone, three lessons became a done-checklist rule or a build rule. The gaps are below. None of these ideas is challenged yet.
+
+| Idea | What it would change here | Status |
+|---|---|---|
+| **Test whether lessons make agents better** | Run the same unseen tasks under three set-ups with equal budgets: no lessons, a fixed lesson library, and a library that grows between tasks. The tasks come from our public practice code, the set-ups are compared task by task, and the plan is written down before the runs. Only if the growing library wins does accumulated experience show up as better work, not just more lessons. | Design, inside #293 |
+| **Lessons confirmed by another vendor** | Today agents write lessons, and the lead, also an AI, confirms them, mostly by reading. Instead: a seat from another vendor confirms each lesson; a lesson that carries a runnable check ranks above a prose-only one; and lessons keep becoming tests and gates wherever they can. | With #293 |
+| **Measure our own review loop** | Every verdict is on the message bus. Count how often a reader from another vendor finds what a same-vendor review missed, how many defects surface after a GO, and how many findings had a wrong premise. That is evidence for agenttalk's central claim. The survey notes that correlated errors across model families are not systematically studied. | A report first |
+| **Code fix rounds rerun a check** | Re-reading is enough for documents. A fix round on code reruns the tests or a check, not only the reviewer's reading. | A small change to the done checklist and the review skills |
+| **Diversity of ideas** | The survey describes ideas narrowing over time and long interactions drifting into fixed patterns. Our guards: teams that mix model families, fresh conversations, and the thinking-games skill. That skill makes a second list of ideas in a fresh context, and someone who wrote neither list judges both. Its first trial was three rounds, judged blind. The game lists were no better overall (none better, two the same, one worse), but each round added one to three adopted ideas that only the game produced, and judging took more time than playing. Keep the skill's score per round before claiming more. | Keep scoring |
 
 ---
 
