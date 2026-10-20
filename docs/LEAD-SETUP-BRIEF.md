@@ -884,7 +884,7 @@ wait, or stop an idle seat first.
 **Give a seat a fresh conversation when its context has grown long.** A seat that has
 worked for hours answers more slowly and carries stale ideas. In 0.101.1 no command
 gives **one** seat a fresh conversation. Since 0.101.1: 0.102.0 adds
-`agenttalk session fresh --for <seat> --reason "..."`, which starts that seat's next turn on a new
+`agenttalk session fresh --from lead --for <seat> --reason "..."` (`--from` names you as the requester; without it the command may not know who you are, see 2d), which starts that seat's next turn on a new
 conversation, between turns, without stopping it. The seat should write down what comes next first.
 This was read from the changelog and `--help`, not run; the steps below are the ones that were
 checked. (`agenttalk reset` exists, but it clears the
@@ -1305,6 +1305,7 @@ In v0.102.0 (released 2026-10-16):
 - `backup` between two drives completes by copying (issue #505): step 2c.
 - `session fresh` is new, and `status` shows each seat's conversation size and `fresh=`: step 6.
 - `release` stands down a seat that is parked on a message: step 12.
+- `overview` is new; this brief does not use it.
 
 On the main branch, not yet in a release:
 
@@ -1317,8 +1318,7 @@ On the main branch, not yet in a release:
   with the other option problems (issue #513). A missing or unknown `--type`, an unknown `--anchor-kind`,
   an unknown option, and a `--verified-against` or key-type conflict still come on their own. It also
   prints the domain it stored the note in (issue #508, item 6): step 8.
-- New commands this brief does not use: `overview`, `relay result`, `lead-routine` and
-  `knowledge pack`.
+- New commands this brief does not use: `relay result`, `lead-routine` and `knowledge pack`.
 
 **Not run:** `roster rename` and `retire`; `codex-config --enable` and `--disable`;
 `install-skills` without `--dry-run`; `prune`; the challenge skill; a
