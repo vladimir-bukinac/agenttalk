@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; ideas from a shared-memory study in §7.4; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.102.0 (2026-10-16). `CHANGELOG.md` remains the release-history source of truth.
@@ -453,6 +453,29 @@ We read a harness that makes one coding agent safe to run with little supervisio
 | **Secrets kept outside the agent** | The agent asks the host for a key it was granted, and checks refuse any command that would print a secret. A secret that does reach a transcript is replaced with a new one, not just noted. Our agents inherit the operator's environment. | Design, with a security read |
 | **Measure which commands actually work** | Every wrapped command writes a record, with secrets removed, that says whether it succeeded. Those records decide whether each command is kept, fixed or dropped. agenttalk's turn records could give the same report per command and per skill. | A report first, no build |
 | **One instruction file every agent reads** | The rules live in one vendor-neutral file (`AGENTS.md`) that Claude Code also reads through an import, so they survive a change of agent. We keep separate Claude and Codex skill sets; a shared entry file might cut the duplication. | Small probe |
+
+### 7.4 Ideas from a shared-memory study (read on 2026-10-20)
+
+We read a public study of a shared memory for coding agents: Big Agentic Brain, an open-source server that agents use to look up what colleagues learned, record lessons and vote on them ([the article](https://nevolin.be/blog/unlocking-swarm-intelligence-big-agentic-brain-claude-code), with a PDF report). Its 1,104 graded runs used Anthropic's current Sonnet, Haiku and Opus models. Read it with its limits: the author is involved with the tool and says so; the tasks were written for the study; each knowledge-task condition had eight task families with three trials each, per model; the agent was a minimal program of the author's, not Claude Code; and everything ran on one machine.
+
+Its main results, for Sonnet unless a model is named:
+- **Knowledge tasks** (bugs whose fix depends on knowledge outside the code): success rose from 12% without memory to 79% with it. Haiku went from 0% to 75%, and Opus from 12% to 88%.
+- **Lessons handed over before the first step:** in this small sample, the top three lessons in front of the agent succeeded in 24 of 24 runs, against 19 of 24 when the agent had to search, at a lower observed mean cost. With eight task families the study could not establish that advantage.
+- **A separate benchmark of easy bugs,** where every run already succeeded: the agent searched the memory on its own in only about a fifth of the runs, and memory raised the mean cost by half.
+- **Only out-of-date lessons:** success fell back to 12%, and the agent flagged the outdated entry in 4% of runs, even though the entry was marked.
+- **Finding the right entry:** with 14 target entries, the right one was among the top five 93% of the time after adding 20 unrelated entries, and 81% after adding 1,000. Questions worded differently from the entry scored 64% at the larger size.
+- **A search that returned nothing:** the tool's own recommended search found nothing at all, because agents filed their entries under another category. It was found only by measuring.
+
+agenttalk already hands up to five matched lessons to each team member every turn, and a curator confirms lessons instead of votes. So the study suggests probes for our existing design rather than confirming it. It also points at gaps we have measured ourselves. Our 2026-10-05 study found that the logged team-member turns had shown only 61 distinct lessons while 301 were confirmed (the log covers only those turns, so this is a lower bound on reach), and that the lead, which is not a wrapped seat, gets none. None of the ideas below is challenged yet.
+
+| Idea | What it would change here | Status |
+|---|---|---|
+| **Lessons in front of the lead too** | Team members get matched lessons before each turn; the lead gets none and must remember to search. In the study's small Sonnet sample, lessons handed over before the first step succeeded in 24 of 24 runs against 19 of 24 with search, a difference it could not establish. A hook could put the top matches in front of the lead's prompt the same way. | Small probe, inside the memory study (#293) |
+| **Measure whether the right lesson gets chosen** | A fixed set of situations, each paired with the lesson that should come up, scored against our real store (about 1,400 lessons) with no model calls, so it costs nothing to rerun. It would show which lessons never surface and whether the selector's ordering hides them. | A report first, no build (#293) |
+| **Out-of-date lessons as a tested hazard** | The selector already leaves out expired or superseded lessons and marks those due for review or near expiry. We have not measured whether a team member notices outdated advice that still passes those checks. Add that case to the study, and assess whether showing a lesson's age helps. | Add to the study (#293) |
+| **Every documented search must find something** | Our own version of the "category that returns nothing" is already on the list: a lesson filed under another domain without saying so, and searches by tag alone (#508, items 5 and 6). A check that every search the docs recommend returns a known lesson would catch the next one. | With #508 |
+| **Measure what agenttalk adds to every turn** | The study counted the tool definitions and instructions sent with every request (about 8,600 tokens for its full tool set, about 650 for three tools). agenttalk sends skills, injected lessons and the brief with every turn; counting them per seat would show where each turn's cost goes. | A report first |
+| **A memory shared across teams** | The study's tool is built for one memory shared by every team in an organisation. That is one possible engine for the shared general layer of the layered-knowledge idea (2026-10-07). Two differences matter: its votes against our curator, and the risk that a shared memory carries one team's private details to another. | Later, inside the layered-knowledge design; the tool is a week old (1.0.0, 2026-10-12) |
 
 ---
 
