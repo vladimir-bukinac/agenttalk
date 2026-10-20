@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-16 (UTC; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.102.0 (2026-10-16). `CHANGELOG.md` remains the release-history source of truth.
@@ -332,6 +332,31 @@ On 2026-10-14 the operator put all effort on one goal until the first outside te
 3. **The migration method moves up** from the optional weeks 5-6 (§6.7). Its first increment is a short skill, about 150 lines, carrying the rules above with no project or payment specifics (#153). It ships only if a blind test shows that it helps: two fresh agents port the same small old app, which hides four problems of the kinds above, one agent with the skill and one without.
 4. **Designed later, each with its own challenge:** #514, #515 and #516. Detecting a hung tool (#497) has no place in the plan yet; start-on-boot (#356) keeps its place in §6.7.
 5. **Python code understanding (#495)** follows the outside team's first week, with its own challenge.
+
+### 6.14 A storage overview *(the operator's request, 2026-10-20)*
+
+The operator asked for "a UI for storage usage overview - which project is using how much space and for what, with a clear graphical representation on what is going on".
+
+**Why.** On 2026-10-20 the project drive of the maintainers' desktop had about 10 GB free. Nothing in agenttalk had shown it filling up. Finding the large folders and checking what could be removed took hand-written scripts and a follow-up pass:
+- the first list held 651 old candidate folders and flagged 81 of them as holding their own git history;
+- many deletions were denied in the first agent's context; a second agent removed some of them, while others were kept by its checks or stayed inaccessible;
+- that second pass found 69 more folders with git history nested inside them. Of the first 81, 61 were linked git worktrees, which git's own worktree commands remove safely from the repository they belong to (the janitor does this for the agenttalk repository's own worktrees); 20 were standalone clones, for which neither git nor the janitor has a removal step (`docs/ops/scratch-hygiene.md`).
+
+Afterwards the drive had about 30 GB free.
+
+**What it would show.** A read-only page in the team console with:
+- **space per project,** and inside each project per kind: agents' scratch folders, worktrees and clones, build outputs, test and review evidence, session histories, agenttalk stores and runtimes, and container images and volumes;
+- **a clear picture of the split,** for example a treemap or stacked bars, with the largest items named;
+- **growth over time,** so a filling drive shows up well before it is full;
+- **for each item, what the clean-up rule says:** kept because a record points to it, eligible under the janitor's checks, a worktree of another repository (where git's own worktree removal applies), a standalone clone with no supported clean-up path, not the team's, or not checked yet. A separate warning marks items the scan could not read. The page never infers a right to remove something from which tool created it, and the janitor checks again before any removal.
+
+**Limits from the start.**
+- **Read-only.** It never deletes. Removing stays with the janitor and the team's clean-up rule. Anything that is not the team's own leftover stays the operator's decision.
+- **Local only.** The scan reads the local disk and sends nothing anywhere. Folder names can be private, so the page stays on the machine, like the rest of the console.
+- **Windows, macOS and Linux,** like the rest of agenttalk. Container storage that lives in a virtual disk (Docker Desktop on Windows and macOS) is shown as one item when its contents cannot be read cheaply.
+- **One machine first.** Adding the team's other machines (a second laptop, a virtual machine) is a later step.
+
+**Status.** Not started, and no earlier than 2026-10-21. It is major work, so it gets its own challenge before it becomes work orders. The challenge also asks whether an existing disk-usage tool can do the scanning, so that agenttalk adds only the per-project view and the clean-up rule's verdicts, and whether standalone clones need a supported clean-up path of their own.
 
 ---
 
