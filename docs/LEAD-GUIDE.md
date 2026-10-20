@@ -12,6 +12,10 @@ It is a workflow guide, not a reference. For the deep detail it links to the
 full `docs/supervisor-tutorial.md`, the `agenttalk.lead` skill, and the
 `agenttalk.listen` skill — read those when a section says "go deeper".
 
+> **First setup of a new team?** Use [`docs/LEAD-SETUP-BRIEF.md`](LEAD-SETUP-BRIEF.md). It is for the first setup,
+> without the supervisor. This guide is for running a team with the supervisor. The two are kept apart
+> on purpose for now.
+
 > **Commands.** Examples use the installed `agenttalk` CLI. If `.agenttalk/`
 > is not under your current directory, pass `--root <path>` **before** the
 > subcommand: `agenttalk --root C:\proj status` (global options precede the

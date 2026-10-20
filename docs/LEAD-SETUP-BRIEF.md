@@ -12,9 +12,13 @@ that cannot be undone.
 
 **Written for:** the AI assistant (Claude Code or Codex) that a person has told to
 "read this brief and set up agenttalk".
-**Covers:** agenttalk **v0.101.1**, the released version, on Windows, Linux and macOS.
+**Covers:** agenttalk **v0.101.1**, a released version, on Windows, Linux and macOS. A newer release,
+v0.102.0, exists; the last section lists what changed after v0.101.1.
 **Leaves out on purpose:** the supervisor (it needs Windows today) and the managed
 model gateway.
+**How it relates to the lead guide:** this brief is for the first setup of a team, without the
+supervisor. [`docs/LEAD-GUIDE.md`](LEAD-GUIDE.md) is for running a team with the supervisor. They are kept
+apart on purpose for now.
 
 ## The first-hour checklist (for your human)
 
@@ -40,6 +44,10 @@ item is explained in the step named after it.
   which were not, is listed in the last section, "What this brief was checked against". Run
   `agenttalk --version` first. If it does not say `0.101.1`, run
   `agenttalk <command> --help` before you trust a flag.
+- **Newer versions.** The README installs v0.102.0, and the main branch has fixes after that.
+  This brief was checked against v0.101.1. Where something here changed later, a sentence that
+  starts "Since 0.101.1" says so. Those sentences come from reading the code and the changelog,
+  not from a new run.
 - If your window is not inside the team folder, put `--root "<team>"` right after
   `agenttalk` (before the subcommand), as the examples do.
 - Wherever a person must act or decide, you will see **Tell your human:**. Say it in
@@ -182,8 +190,11 @@ Expected last line: `agenttalk 0.101.1`. Write `<env>` as an absolute path (for 
 **Why `--copies` on Linux and macOS.** In 0.101.1, a wrapped seat on Linux or macOS
 looks up its Python by following the environment's link to the system Python, which
 does not have agenttalk, so it refuses to start with "No module named agenttalk".
-That is fixed in the source (issue #493) but not in 0.101.1. A copied environment has
-no such link. On Windows you do not need it.
+A copied environment has no such link. On Windows you do not need it.
+
+Since 0.101.1: that problem is fixed in 0.102.0 (issue #493), so from there a normal environment
+(`python3 -m venv "<env>"`) works. This was read from the changelog, not run. `--copies` is safe on
+any version.
 
 ### 2b. Install the instructions each assistant reads (the skills)
 
@@ -230,6 +241,11 @@ That creates `<team>/.agenttalk/` and the four seat names. Change the names to f
 You should see your four names, `messages: 0`, and `(no heartbeat)` for each: nobody
 has started yet.
 
+Since 0.101.1: on the main branch (not yet in a release), `init` also loads 124 migration lessons into a
+new store and says so. They show up in `knowledge search --type lesson`, with keys that start with
+`pack.migration:`. Add `--no-packs` to `init` to start with an empty store. This was read from the
+code, not run.
+
 **What `.agenttalk/` is.** It is the team's record: every message, the roster, open
 requests, decisions and lessons, all as plain files. The team's memory lives there.
 
@@ -244,7 +260,9 @@ requests, decisions and lessons, all as plain files. The team's memory lives the
   (a new shell forgets it): PowerShell `$env:AGENTTALK_RECOVERY_DIR = "<folder>"`, sh
   `export AGENTTALK_RECOVERY_DIR="<folder>"`. With the default folder on another drive (a team on `D:` and the
   default on `C:`, or a team on a separate data disk on Linux), the backup fails (known
-  bug, issue #505: https://github.com/zoolok17/agenttalk/issues/505). Back up before
+  bug in 0.101.1, issue #505: https://github.com/zoolok17/agenttalk/issues/505). Since 0.101.1:
+  0.102.0 fixes it, so a backup between two drives completes by copying. This was read from the
+  changelog, not run, so keep the same-drive habit until someone has run it. Back up before
   upgrades and at the end of each week.
 
 > **Tell your human:** "The team's records live in `<team>/.agenttalk`. Please include
@@ -865,7 +883,11 @@ wait, or stop an idle seat first.
 
 **Give a seat a fresh conversation when its context has grown long.** A seat that has
 worked for hours answers more slowly and carries stale ideas. In 0.101.1 no command
-gives **one** seat a fresh conversation. (`agenttalk reset` exists, but it clears the
+gives **one** seat a fresh conversation. Since 0.101.1: 0.102.0 adds
+`agenttalk session fresh --for <seat> --reason "..."`, which starts that seat's next turn on a new
+conversation, between turns, without stopping it. The seat should write down what comes next first.
+This was read from the changelog and `--help`, not run; the steps below are the ones that were
+checked. (`agenttalk reset` exists, but it clears the
 whole team's messages and state: never use it for this.) A wrapped seat gets a new
 conversation when its **model or effort changes**; with the same settings it resumes its
 old one (checked both ways). To start
@@ -1023,13 +1045,18 @@ each session.
 
   `--applies-to` takes a few short tags (for example `shell,start-script`). They are how a
   lesson is found again later: `knowledge search --tags <tag>` lists every lesson with that
-  tag (add a word to narrow it down), and the wrapper uses them when it picks lessons for a
+  tag (add a word to narrow it down; 0.101.1 also demands a search word and stops without one),
+  and the wrapper uses them when it picks lessons for a
   seat.
 
   `--scope` is one of `craft`, `docs`, `ops`, `process`, `release`, `review`,
   `security`, `test`. It says what kind of lesson this is; it does **not** choose the
   lesson's *domain*. In 0.101.1 a lesson's domain is `process` whatever the scope, and a
-  hit shows as `process/<key>`. Publishing the same `--key` again replaces the old lesson. For a
+  hit shows as `process/<key>`. Since 0.101.1, on the main branch, `publish` also prints
+  `stored in domain process` on a second line: use the domain it prints in the next command.
+  If `publish` refuses, 0.101.1 may report one problem at a time; on the main branch it lists a
+  missing `--key` or `-m`, an unknown `--scope` and a refused domain together with the other option
+  problems. Publishing the same `--key` again replaces the old lesson. For a
   note about one place in the code, use `--type gotcha`, `pointer` or `seam`.
 - **Curate them. This part is yours.** A new lesson is *uncurated*, and **uncurated
   lessons are hidden from the normal search and from the seats' lookups** (checked).
@@ -1153,11 +1180,16 @@ works from a fresh shell; and your human knows how to start, stop and restart.
 
 - **A seat quits within seconds of starting, with "executable not found on PATH".** The
   script's PATH has no `claude` or `codex`. Put the full path in the script (step 5a) and run
-  it again; the seat starts, and no `ack` is needed.
-- **A `task` to a seat that has never started is refused**, with a message that the seat
-  "has not started yet". It has not run, so agenttalk cannot tell whether its version can
-  read a task. Start it (step 5), wait for `idle_waiting`, and send the order again. Do not
-  use `--force`.
+  it again; the seat starts, and no `ack` is needed. Since 0.101.1, on the main branch, the notice
+  names the seat's own tool: for a Claude seat it asks for the full path of `claude` after `--` and
+  says how to print it (`where.exe claude` on Windows, `command -v claude` on Linux and macOS).
+  0.101.1 gives the Codex advice to every seat; ignore it for a Claude seat.
+- **A `task` to a seat that has never started is refused.** In 0.101.1 the refusal blames the
+  seat's version ("predates task-kind support ... (unknown)"). Since 0.101.1, on the main branch,
+  it says the seat "has not started yet", which is the real cause: it has not run, so agenttalk
+  cannot tell whether its version can read a task. Either way, start it (step 5), wait for
+  `idle_waiting`, and send the order again. Do not use `--force`; it only queues the order until
+  the seat starts.
 - **A frozen assistant can look busy forever.** While a seat works, its status shows a
   working health state, even if the assistant inside is stuck. Check the **log file**:
   `<team>/logs/<seat>.out.log` should keep growing during a turn. If a seat shows
@@ -1181,8 +1213,13 @@ works from a fresh shell; and your human knows how to start, stop and restart.
   messages behind it, and the skipped order is not done, so send it again. Then answer
   the question so it stops showing as owed:
   `agenttalk --root "<team>" relay operator-answer --from lead --to-request <the esc- id> -m "fixed: ..."`.
+  Since 0.101.1: from 0.102.0, `release` also stands a parked seat down (read from the changelog,
+  not run).
 - **`request-restart` does not restart anything** here. It only records a request for a
-  supervisor, which this setup does not run.
+  supervisor, which this setup does not run. Since 0.101.1, on the main branch, the notice a seat
+  sends when it cannot start its assistant says so when no supervisor is running, and tells you to
+  fix the launch command and start the seat again yourself. The notice for a parked message
+  ("wrapper config-blocked") still mentions `request-restart`; ignore that part.
 - **A Codex seat on Linux or macOS answers in a broken command shape.** Set
   `reply_shell` (step 5a).
 - **A seat will not run commands you put in a question.** Use `task` (step 7a).
@@ -1192,9 +1229,8 @@ works from a fresh shell; and your human knows how to start, stop and restart.
 - **Skills load when an assistant starts.** Restart a window after `install-skills`.
 - **`doctor` shows `FAIL powershell_host` on Windows.** It checks the supervisor. Ignore
   it while you do not use one.
-- **Fixed in the source, not in 0.101.1:** the Linux and macOS start problem with a
-  linked environment (step 2a). When a later release has it, the `--copies` workaround
-  stops being needed.
+- **Fixed after 0.101.1:** the Linux and macOS start problem with a linked environment (step 2a)
+  is fixed in 0.102.0, so with that release or a newer one the `--copies` workaround is not needed.
 
 **Never run these unless your human asks you to:**
 
@@ -1213,8 +1249,8 @@ output over this page, and tell your human what differed.
 
 - `README.md`: why agenttalk works the way it does, and the full command reference.
 - `docs/AGENT-MANUAL.md`: how each role (lead, builder, reviewer) works, step by step.
-- `docs/LEAD-GUIDE.md`: a longer guide for the lead. It covers the supervisor, which this
-  brief leaves out.
+- `docs/LEAD-GUIDE.md`: the guide for running a team with the supervisor, which this brief leaves
+  out. This brief is the first setup; read the lead guide after it if you want the supervisor.
 
 ## What this brief was checked against
 
@@ -1258,7 +1294,34 @@ dashboard (loopback only), work orders, a review and a final read, lessons and c
 company), macOS, `install-skills` without `--dry-run`, `/loop`, a stricter permission mode,
 and a seat stopped in the middle of a turn.
 
+**Changed since v0.101.1 (read from the code and the changelog; nothing here was run again).** The checks
+above are still the ones made against v0.101.1, on Windows and on Linux. There was no new run on
+Linux or macOS. These commands and messages changed afterwards, and the steps named say so where it
+matters:
+
+In v0.102.0 (released 2026-10-16):
+
+- `wrap` on Linux and macOS starts from a normal virtual environment (issue #493): steps 2a and 12.
+- `backup` between two drives completes by copying (issue #505): step 2c.
+- `session fresh` is new, and `status` shows each seat's conversation size and `fresh=`: step 6.
+- `release` stands down a seat that is parked on a message: step 12.
+
+On the main branch, not yet in a release:
+
+- `init` loads the migration lessons into a new store; `--no-packs` skips them: step 2c.
+- The notice when a seat cannot start its assistant names that assistant's own tool, and no longer
+  says to run `request-restart` when no supervisor is running (issue #508, items 1 and 2): step 12.
+- `task` to a seat that has never started says "has not started yet" (issue #508, item 3): step 12.
+- `knowledge search --tags <tag>` works without a search word (issue #508, item 5): step 8.
+- `knowledge publish` lists every problem in one refusal (issue #513) and prints the domain it stored
+  the note in (issue #508, item 6): step 8.
+- New commands this brief does not use: `overview`, `relay result`, `lead-routine` and
+  `knowledge pack`.
+
 **Not run:** `roster rename` and `retire`; `codex-config --enable` and `--disable`;
 `install-skills` without `--dry-run`; `prune`; the challenge skill; a
 Codex timer (none found); and, on macOS, everything (`vm_stat`, the `sh` scripts, the `--copies` environment); on
 Linux, the Codex parts (`-a never -s workspace-write`, `--add-dir`, the `reply_shell` file).
+
+**Still untried:** macOS, a Codex seat on Linux, `/loop` (it works only in an interactive session) and
+Windows PowerShell 5.1 (the brief only warns about its file encoding).
