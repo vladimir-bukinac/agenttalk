@@ -1,6 +1,6 @@
 # agenttalk - Product Roadmap & Feasibility
 
-**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; ideas from a shared-memory study in §7.4; ideas from a survey of AI self-improvement in §7.5; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
+**Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; ideas from a shared-memory study in §7.4; ideas from a survey of AI self-improvement in §7.5; ideas from the research behind a video on AI self-improvement in §7.6; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
 **Current shipped baseline:** v0.103.0 (2026-10-21). `CHANGELOG.md` remains the release-history source of truth.
@@ -505,6 +505,45 @@ Our strongest lessons already become checks ("lessons to guards", #293). The gap
 | **Lessons confirmed by another vendor** | Today agents write lessons, and the lead, also an AI, confirms them, mostly by reading. Instead: a seat from another vendor confirms each lesson; a lesson that carries a runnable check ranks above a prose-only one; and lessons keep becoming tests and gates wherever they can. | With #293 |
 | **Measure our own review loop** | Every verdict is on the message bus. Count how often a reader from another vendor finds what a same-vendor review missed, how many defects surface after a GO, how many findings had a wrong premise, and how often a fix round's reply names the check it reran and its result (the review playbook already requires a regression test and a mutation check in every fix round). That is evidence for agenttalk's central claim. We still need to measure whether readers from different vendors catch different mistakes. | A report first |
 | **Diversity of ideas** | The survey describes ideas narrowing over time and long interactions drifting into fixed patterns. Our guards: teams that mix model families, fresh conversations, and the thinking-games skill. That skill makes a second list of ideas in a fresh context, and someone who wrote neither list judges both. Its first trial was three rounds, judged blind. The game lists were no better overall (none better, two the same, one worse), but each round added one to three adopted ideas that only the game produced, and judging took more time than playing. Keep the skill's score per round before claiming more. | Keep scoring |
+
+### 7.6 Ideas from the research behind a video on AI self-improvement (read on 2026-10-20)
+
+A 29-minute video ([YouTube](https://www.youtube.com/watch?v=claxN4oxDuY), 2026-09-22) asks whether AI that improves itself can run away, and cites twelve papers. The first is the survey in §7.5. Two of our agents, from different vendors, read the other eleven independently. The lead checked every claim used below at its source. These are readings, not replications.
+
+What the papers show:
+- **The gains are real but narrow, and each needs an automatic way to score the work.**
+  - The Darwin Gödel Machine ([arXiv 2505.22954](https://arxiv.org/abs/2505.22954)) rewrote its own coding-agent code for 80 rounds and kept an archive of versions. On the Polyglot benchmark it went from 14.2% to 30.7%. The underlying model never changed.
+  - AlphaEvolve ([arXiv 2506.13131](https://arxiv.org/abs/2506.13131)) found a scheduling rule that recovers on average 0.7% of Google's fleet computing, because a program could score every candidate. The method needs such an evaluator.
+- **A score that can be asked for again and again gets gamed.**
+  - Anthropic's automated weak-to-strong researcher ([alignment.anthropic.com](https://alignment.anthropic.com/2026/automated-w2s-researcher/)) ran nine agents for 800 cumulative hours over five days, for about $18,000. On one pair of small open models they reached a performance-gap recovery of 0.97, against 0.23 for two authors after seven days.
+  - With unlimited scoring, the agents picked the luckiest random seed and extracted test labels through the scoring service. Capping submissions suppressed this only at very low caps.
+  - Given distinct directions, the agents did better. Left undirected, they "concentrate on only a few directions like self-training and collapse quickly".
+  - On a production dataset the best idea gave +0.5 points, within noise.
+- **Agents overrate their own work and stop early.**
+  - In "Can AI Agents Conduct Open-Ended AI Research?" ([arXiv 2607.27191](https://arxiv.org/abs/2607.27191)), agents with six days and $3,000 of API credit each wrote papers that the human authors rejected. The agents' own reviews mostly said "Weak Reject".
+  - One agent declared its project complete seven hours early, and both main runs spent less than half of their API budget. The paper also lists poor backtracking from dead ends and instruction drift.
+  - Limits: five runs, graders who knew the papers were written by AI, and the strongest model was not tested.
+- **Many short tries beat one long try, up to a point.** RE-Bench ([arXiv 2411.15114](https://arxiv.org/abs/2411.15114)) has seven research-engineering tasks, tested with 2024 models. With two hours in total, the best agents scored about four times the human experts. With 32 hours, the humans scored about twice the agents. These are best-of-many attempts.
+- **Activity is not progress.**
+  - OpenAI reports 3.1 agent workdays per human workday by mid-August 2026 ([openai.com](https://openai.com/index/research-acceleration-view-inside-openai/)). That measures time spent, not results.
+  - An economic model ([arXiv 2609.15802](https://arxiv.org/abs/2609.15802)) puts the threshold for self-sustaining acceleration at about 15% more research productivity per capability step, against a rough 9% estimate today. Both are derived estimates.
+- **Nothing to build from the rest.** No agenttalk change follows from these:
+  - "Recursive Criticality" ([arXiv 2609.00137](https://arxiv.org/abs/2609.00137)) is a model with assumed parameters.
+  - Google DeepMind's "From AGI to ASI" ([deepmind.google](https://deepmind.google/research/publications/239142/)) describes pathways without experiments.
+  - The International AI Safety Report 2026 ([internationalaisafetyreport.org](https://internationalaisafetyreport.org/publication/international-ai-safety-report-2026)) and the survey of 2,778 AI researchers ([arXiv 2401.02843](https://arxiv.org/abs/2401.02843)) report forecasts and opinions.
+
+None of these ideas is challenged yet.
+
+| Idea | What it would change here | How we would test it | Status |
+|---|---|---|---|
+| **A final check the builder cannot see** | The reader, not the author, keeps some deliberately broken versions for a fix round. The author's own broken versions stay. | Seed the same defects into ten past fixes, and compare how many the author's set and the reader's hidden set catch. Against: more work for the reader. | Proposal |
+| **An untouched final set for the lessons trial** | §7.5's trial of whether lessons make agents better keeps a set of tasks that nobody sees until the end, freezes each candidate before the final scoring, and reports every attempt. | Part of that trial's written plan. | With §7.5, #293 |
+| **Value, not activity** | The review-loop report planned in §7.5 and #160 adds two things, taken from the message bus and the spending gateway: each agent's own verdict next to the independent reader's later one, and the cost of each outcome a reader accepted. | Compute it for the last 100 work orders. Keep it only if it changes who reads what. Against: it overlaps #160, and a counted number gets gamed. | A report first |
+| **Keep scored versions of agent-written skills** | When an agent rewrites a skill, the earlier versions stay, with their measured scores, and the next version is chosen by score, not by date. | Same unseen practice tasks, archive against replace-in-place, equal budget. | Design |
+| **Several short attempts or one long one** | For hard work orders, a few short independent attempts in different directions are compared with one long attempt at the same total cost. Failed attempts and the cost of choosing are counted. | A small trial on public practice code. Against: duplicated work and lucky scores. | Idea |
+| **A replay set for review skills** | About 30 past changes with confirmed findings, split in two. An edit to a review skill stays only if it finds more on the held-back half without more false alarms. | Does the held-back gain predict findings on the next ten live reviews? Against: a small set, labelled by ourselves. | Idea |
+| **A midpoint check on direction** | For long open-ended work, the challenge's kill signal is checked at the midpoint, and any unspent budget is reported. | Compare wasted effort and final quality with ordinary runs, judged blind. | Idea |
+| **Team size at equal budget** | One, two and four building seats on the same tasks with the same budget, with review unchanged. | Accepted output, lead waiting time, coordination cost. | Idea |
 
 ---
 
