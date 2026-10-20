@@ -337,10 +337,10 @@ On 2026-10-14 the operator put all effort on one goal until the first outside te
 
 The operator asked for "a UI for storage usage overview - which project is using how much space and for what, with a clear graphical representation on what is going on".
 
-**Why.** On 2026-10-20 the project drive of the maintainers' desktop had about 10 GB free. Nothing in agenttalk had shown it filling up. Finding out what held the space took most of a day:
-- hand-written scripts listed 651 old folders and sorted them into plain scratch, folders with their own git history, and evidence that records still point to;
-- half of the plain folders refused a normal delete, because one AI tool's sandbox had created them, so an agent of that tool had to remove them;
-- 81 folders hold their own git history, so they wait for the janitor instead of a plain delete.
+**Why.** On 2026-10-20 the project drive of the maintainers' desktop had about 10 GB free. Nothing in agenttalk had shown it filling up. Finding the large folders and checking what could be removed took hand-written scripts and a follow-up pass:
+- the first list held 651 old candidate folders and flagged 81 of them as holding their own git history;
+- many deletions were denied in the first agent's context; a second agent removed some of them, while others were kept by its checks or stayed inaccessible;
+- that second pass found 69 more folders with git history nested inside them. Folders with git history go to the janitor, which may also decide to keep them.
 
 Afterwards the drive had about 30 GB free.
 
@@ -348,7 +348,7 @@ Afterwards the drive had about 30 GB free.
 - **space per project,** and inside each project per kind: agents' scratch folders, worktrees and clones, build outputs, test and review evidence, session histories, agenttalk stores and runtimes, and container images and volumes;
 - **a clear picture of the split,** for example a treemap or stacked bars, with the largest items named;
 - **growth over time,** so a filling drive shows up well before it is full;
-- **for each item, what the clean-up rule allows:** kept because a record points to it, removable by the janitor, removable only by the AI tool that created it, or belonging to someone else.
+- **for each item, what the clean-up rule says:** kept because a record points to it, eligible under the janitor's checks, not the team's, or not checked yet. A separate warning marks items the scan could not read. The page never infers a right to remove something from which tool created it, and the janitor checks again before any removal.
 
 **Limits from the start.**
 - **Read-only.** It never deletes. Removing stays with the janitor and the team's clean-up rule. Anything that is not the team's own leftover stays the operator's decision.
