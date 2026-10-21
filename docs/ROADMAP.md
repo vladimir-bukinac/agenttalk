@@ -3,7 +3,7 @@
 **Status:** Official · **Owner:** lead (operator-facing) · **Last updated:** 2026-10-20 (UTC; a storage overview the operator asked for in §6.14; ideas from a shared-memory study in §7.4; the Python practice and what it changes in §6.13; ideas from another single-agent harness in §7.3; conversations that grow too long added to §6.11; outside use of the same subscriptions in §6.12; the operator's order of 2026-10-12 in §6.11, the ideas round in §7.2)
 **Audience:** maintainers, operators, and agents deciding what to build next.
 **Horizon:** the plan the operator approved on 2026-10-07 for the next 4-6 weeks (§6): weeks 1-2 are committed, the team re-plans at the end of week 2, and weeks 5-6 are optional. Older items the plan does not carry are in a labelled "later" tier (§8). §5 records what v0.94.0 shipped and is kept for the record.
-**Current shipped baseline:** v0.102.0 (2026-10-16). `CHANGELOG.md` remains the release-history source of truth.
+**Current shipped baseline:** v0.103.0 (2026-10-21). `CHANGELOG.md` remains the release-history source of truth.
 
 **Platform requirement:** agenttalk must run on **Windows, macOS, and Linux**. The Python core (bus, store, CLI, wrapper) is cross-platform and CI-tested on all three (Windows/macOS/Ubuntu × Python 3.10–3.13). The model gateway has a Windows scheduled-task backend and, since v0.91.0, a Linux systemd `--user` backend. **The supervisor is still the open platform gap:** it needs PowerShell Core 7+ and the Windows-only `Win32_Process`. A POSIX supervisor path is unbuilt (§8).
 
@@ -101,7 +101,7 @@ By theme. Versions are in brackets; details are in `CHANGELOG.md`.
 
 ## 5. Shipped: the v0.94.0 Line (2026-09-28)
 
-*Kept for the record. What v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0, v0.101.0, v0.101.1 and v0.102.0 shipped is in `CHANGELOG.md`.*
+*Kept for the record. What v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0, v0.101.0, v0.101.1, v0.102.0 and v0.103.0 shipped is in `CHANGELOG.md`.*
 
 **Theme: a work board that moves itself, and seats that survive a busy store.** The first delivery of #207 and the console v2 preview it renders in both shipped in v0.94.0. The acceptance test is the operator's own walkthrough on live data (the script is in `docs/STEP-WORK-BOARD.md`); there is no scripted demo.
 
@@ -311,12 +311,12 @@ On 2026-10-14 the operator put all effort on one goal until the first outside te
 
 **What it taught about agenttalk.** These are problems a new Linux or Python team meets in its first days.
 - Background agents would not start from a normal Python virtual environment on Linux and macOS. Fixed in v0.102.0 (#493).
-- Messages that point the wrong way when something fails:
-  - a Claude agent that cannot start gets advice about Codex (#508, item 1);
-  - a restart hint needs the supervisor, which a new team does not run (#508, item 2);
-  - a refusal blames an old version when the agent simply has not started yet (#508, item 3);
-  - searching lessons by tag alone fails, and a lesson filed under a chosen scope is stored under a different domain without saying so (#508, items 5 and 6);
-  - the command that records a lesson reports its missing options one at a time (#513).
+- First-hour problems addressed in v0.103.0 (the limits of #513's grouped refusals are in `CHANGELOG.md`):
+  - a Claude agent that could not start got advice about Codex (#508, item 1);
+  - a restart hint needed the supervisor, which a new team does not run (#508, item 2);
+  - a refusal blamed an old version when the agent simply had not started yet (#508, item 3);
+  - searching lessons by tag alone failed, and a lesson filed under a chosen scope was stored under a different domain without saying so (#508, items 5 and 6);
+  - the command that records a lesson reported its missing options one at a time (#513).
 - The code-understanding scan can report a Python repository as complete although it understood nothing in it (#496). A trial read of both shops showed that Python support is feasible (#495, design only).
 - An AI tool that hangs at start-up shows as "working" forever (#497).
 - Coordination gaps:
@@ -325,13 +325,14 @@ On 2026-10-14 the operator put all effort on one goal until the first outside te
   - a review request that reuses a task's id loses its thread (#516).
 
 **What changes in the plan.** Each larger item keeps its own challenge; the challenge on this list asked for it to stay small.
-1. **Released:** v0.102.0 (2026-10-16), with the virtual-environment fix.
-2. **Next release, before the outside team starts:**
-   - one batch of fixes for the wrong-way messages above (#508 items 1-3, 5 and 6, and #513), an honest scan status for languages the scan cannot read (#496), and a docs line on hung tools and on restarting agents after a tool update (#497);
-   - the first-run setup guide brought up to v0.102.0 and linked from the README (#507).
-3. **The migration method moves up** from the optional weeks 5-6 (§6.7). Its first increment is a short skill, about 150 lines, carrying the rules above with no project or payment specifics (#153). It ships only if a blind test shows that it helps: two fresh agents port the same small old app, which hides four problems of the kinds above, one agent with the skill and one without.
-4. **Designed later, each with its own challenge:** #514, #515 and #516. Detecting a hung tool (#497) has no place in the plan yet; start-on-boot (#356) keeps its place in §6.7.
-5. **Python code understanding (#495)** follows the outside team's first week, with its own challenge.
+1. **Released:** v0.103.0 (2026-10-21), following v0.102.0's virtual-environment fix.
+2. **Delivered in v0.103.0:**
+   - the first-hour fixes above (#508 items 1-3, 5 and 6, and #513 with its documented validation limits), plus recovery advice for hung tools and restarting agents after a tool update (#497); #508 item 4 and automatic hang detection remain open;
+   - the first-run setup guide linked from the README, with its relationship to the lead guide and later command changes explained (#507). Its tested/install baseline remains v0.101.1; no new platform run is claimed.
+3. **Still planned before the outside team starts:** an honest scan status for languages the scan cannot read (#496). This did not ship in v0.103.0.
+4. **The migration method moves up** from the optional weeks 5-6 (§6.7). v0.103.0 ships the migration playbook and lesson pack; the planned skill and blind comparison remain outstanding. That skill is about 150 lines, carrying the rules above with no project or payment specifics (#153). It ships only if a blind test shows that it helps: two fresh agents port the same small old app, which hides four problems of the kinds above, one agent with the skill and one without.
+5. **Designed later, each with its own challenge:** #514, #515 and #516. Detecting a hung tool (#497) has no place in the plan yet; start-on-boot (#356) keeps its place in §6.7.
+6. **Python code understanding (#495)** follows the outside team's first week, with its own challenge.
 
 ### 6.14 A storage overview *(the operator's request, 2026-10-20)*
 
@@ -472,8 +473,8 @@ agenttalk already hands up to five matched lessons to each team member every tur
 |---|---|---|
 | **Lessons in front of the lead too** | Team members get matched lessons before each turn; the lead gets none and must remember to search. In the study's small Sonnet sample, lessons handed over before the first step succeeded in 24 of 24 runs against 19 of 24 with search, a difference it could not establish. A hook could put the top matches in front of the lead's prompt the same way. | Small probe, inside the memory study (#293) |
 | **Measure whether the right lesson gets chosen** | A fixed set of situations, each paired with the lesson that should come up, scored against our real store (about 1,400 lessons) with no model calls, so it costs nothing to rerun. It would show which lessons never surface and whether the selector's ordering hides them. | A report first, no build (#293) |
-| **Out-of-date lessons as a tested hazard** | The selector already leaves out expired or superseded lessons and marks those due for review or near expiry. We have not measured whether a team member notices outdated advice that still passes those checks. Add that case to the study, and assess whether showing a lesson's age helps. | Add to the study (#293) |
-| **Every documented search must find something** | Our own version of the "category that returns nothing" is already on the list: a lesson filed under another domain without saying so, and searches by tag alone (#508, items 5 and 6). A check that every search the docs recommend returns a known lesson would catch the next one. | With #508 |
+| **Out-of-date lessons as a tested hazard** | The selector already leaves out expired or superseded lessons and marks those due for review and otherwise shows the expiry date. We have not measured whether a team member notices outdated advice that still passes those checks. Add that case to the study, and assess whether showing a lesson's age helps. | Add to the study (#293) |
+| **Every documented search must find something** | Our own version of the "category that returns nothing" was a lesson filed under another domain without saying so, and searches by tag alone (#508, items 5 and 6, fixed in v0.103.0). A check that every search the docs recommend returns a known lesson would catch the next one. | Follow-up to #508 |
 | **Measure what agenttalk adds to every turn** | The study counted the tool definitions and instructions sent with every request (about 8,600 tokens for its full tool set, about 650 for three tools). agenttalk sends skills, injected lessons and the brief with every turn; counting them per seat would show where each turn's cost goes. | A report first |
 | **A memory shared across teams** | The study's tool is built for one memory shared by every team in an organisation. That is one possible engine for the shared general layer of the layered-knowledge idea (2026-10-07). Two differences matter: its votes against our curator, and the risk that a shared memory carries one team's private details to another. | Later, inside the layered-knowledge design; the tool is a week old (1.0.0, 2026-10-12) |
 
@@ -635,7 +636,7 @@ Do not ship broad workflow claims if any of these are true:
 
 ## 13. Recommendation
 
-1. **Done: v0.94.0 shipped** (the first board delivery plus the console v2 preview, with the fleet upgraded once), followed by v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0, v0.101.0 (2026-10-12), v0.101.1 (2026-10-13) and v0.102.0 (2026-10-16). #407 and #433 are merged (2026-10-10). Until the first outside team starts (about 2026-10-21), the focus is the Python practice and the fixes it found (§6.13). After that, the next steps are the operator's order of 2026-10-12 (§6.11); the rest of wave 1 and wave 2 (§6.3 and §6.4) and the end-of-week-2 re-plan (§6.5) follow, and the re-plan also weighs the §7.1 and §7.2 ideas.
+1. **Done: v0.94.0 shipped** (the first board delivery plus the console v2 preview, with the fleet upgraded once), followed by v0.95.0, v0.96.0, v0.97.0, v0.98.0, v0.99.0, v0.100.0, v0.101.0 (2026-10-12), v0.101.1 (2026-10-13), v0.102.0 (2026-10-16) and v0.103.0 (2026-10-21). #407 and #433 are merged (2026-10-10). Until the first outside team starts (about 2026-10-21), the focus is the Python practice and its remaining fixes (§6.13 separates delivered work from what remains). After that, the next steps are the operator's order of 2026-10-12 (§6.11); the rest of wave 1 and wave 2 (§6.3 and §6.4) and the end-of-week-2 re-plan (§6.5) follow, and the re-plan also weighs the §7.1 and §7.2 ideas.
 2. **Later, not in the approved plan (§8):** make the team self-healing (restart a dead seat, run the supervisor, stop a dead seat waiting out its heartbeat threshold, then the crash harness and guard-aware relaunch, then host-restart survival); fix the store at the mechanism (measure and shrink the publication critical section, reconcile stale obligations). Wrappers surviving store contention already shipped in 0.94.0 (#218).
 3. **Also later:** the remaining refocus items (context policy with knowledge and memory, §8). The first-class migration method (#153) has moved up: its first increment is in §6.13. Spec-kitty removal is done.
 4. **Each of these keeps its own challenge:** nothing in §8 starts without one.

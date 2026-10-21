@@ -10,7 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.103.0] - 2026-10-21
+
+New teams get clearer setup and restart advice, more useful lesson searches, and fewer repeated refusals when saving what they learned. Leads are reminded when a teammate is waiting for a decision, and can pass that decision on with one command. New skills, the team playbook and the migration guide help teams agree what done means and carry lessons into their next project.
+
+After upgrading, preview the skill update with `agenttalk install-skills --dry-run --force`, back up any local edits you want to keep, then run `agenttalk install-skills --force` to refresh the bundled skills. Restart wrapped agents after switching their tool runtime. Existing teams can use `agenttalk knowledge pack load migration` to load the bundled migration lessons; new stores receive them at setup.
+
 ### Added
+
+- **The team playbook:** `docs/playbook/` collects the standing team rules and the reasons behind them (#534, #547).
 
 - **A shared meaning of "done" for every task: the new `definition-of-done` skill.** Teams
   lost time when "the work is finished", "the product is accepted" and "it may be released"
@@ -170,7 +178,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   applies, why, and one check you can run. It starts with the twelve rules to apply first, and
   keeps general practice that was not measured in these runs in its own marked section. The same
   124 lessons are in `src/agenttalk/knowledge_packs/migration.jsonl`, one per line, for tools that
-  load them into a team's lesson store; the command that does that is a separate, later change.
+  load them into a team's lesson store; `agenttalk knowledge pack load migration` loads them into an existing store (see the lesson-pack entry above).
   Many rules rest on a single case, and the guide says so.
 
   What you need to do: nothing. Read the guide before a migration.
