@@ -23,6 +23,16 @@ Who owns a lesson is read from the store (the provenance pair above), not from t
 short before the ledger was written is recovered by the next one. The team always wins: a key the team
 retracted, republished, re-verified or superseded with a lesson of its own is left alone on every reload,
 upgrade and unload; the loader undoes only its own retraction.
+
+An outside pack is the same file in a folder the user checked out themselves (``load <name> --from
+<folder>``; agenttalk never fetches it). Its id is ``ext.<name>``: keys ``pack.ext.<name>:<slug>``, tag
+``pack-ext.<name>``, ledger entry ``ext.<name>``. A shipped pack name cannot hold a dot, so no shipped
+pack, today's or a later one, can meet an outside pack's keys or tags. The ledger entry also records
+where the pack came from (folder, file hash, and the HEAD commit when the folder is a git checkout).
+Only lessons are read from the folder, never roles, prompts or brief templates.
+
+``export`` goes the other way: it writes some of the team's own verified lessons as a pack file, as
+review candidates for another team, and a separate provenance file that stays with the exporting team.
 """
 
 from __future__ import annotations
@@ -30,6 +40,8 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
+import subprocess  # nosec B404 - one fixed read-only git argv, shell disabled
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -45,10 +57,15 @@ PACK_RESOLVED_FROM = kn.PACK_RESOLVED_FROM
 DEFAULT_PACKS = ("migration",)
 REVIEW_AFTER_DAYS = 365
 EXPIRES_AFTER_DAYS = 730
+OUTSIDE_PREFIX = "ext."             # outside pack ids; shipped pack names never contain a dot
 
 _PACK_NAME_RE = re.compile(r"\A[a-z][a-z0-9-]{0,39}\Z")
 _SLUG_RE = re.compile(r"\A[a-z0-9]+(-[a-z0-9]+)*\Z")
+_SLUG_MAX = 60
 _LINE_KEYS = ["key", "scope", "trigger", "body", "applies_to", "evidence", "pack", "pack_version"]
+_CONFIRMED_AT = "confirmed_at"      # optional last line field: when the lesson was last confirmed
+_RESERVED_TAG_PREFIXES = ("pack-", kn.PACK_KEY_PREFIX)
+_COMMIT_RE = re.compile(r"\A[0-9a-f]{40}([0-9a-f]{24})?\Z")
 _STATE_LOADED = "loaded"
 _STATE_RETRACTED = "retracted"      # retracted by the loader (retired, removed or unloaded)
 
@@ -56,21 +73,23 @@ _STATE_RETRACTED = "retracted"      # retracted by the loader (retired, removed 
 @dataclass(frozen=True)
 class PackLesson:
     slug: str
-    key: str                # pack.<name>:<slug>
+    key: str                # pack.<id>:<slug>
     scope: str
     trigger: str
     body: str
     tags: tuple[str, ...]
     evidence: str
     source_hash: str
+    confirmed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
 class Pack:
-    name: str
+    name: str               # the pack id: a shipped name, or ext.<name> for an outside pack
     version: int
     lessons: tuple[PackLesson, ...]
     retired: tuple[str, ...] = ()
+    source: dict[str, str] | None = None    # outside packs only: where the pack came from
 
 
 @dataclass
@@ -82,11 +101,15 @@ class Report:
     retracted: list[str] = field(default_factory=list)
     kept_for_team: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    source: dict[str, str] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"pack": self.pack, "version": self.version, "published": self.published,
-                "updated": self.updated, "retracted": self.retracted,
-                "kept_for_team": self.kept_for_team, "unchanged": self.unchanged}
+        out = {"pack": self.pack, "version": self.version, "published": self.published,
+               "updated": self.updated, "retracted": self.retracted,
+               "kept_for_team": self.kept_for_team, "unchanged": self.unchanged}
+        if self.source is not None:
+            out["source"] = self.source
+        return out
 
     def changed(self) -> bool:
         return bool(self.published or self.updated or self.retracted)
@@ -109,68 +132,154 @@ def available() -> list[str]:
     return sorted(p.stem for p in PACKS_DIR.glob("*.jsonl") if _PACK_NAME_RE.match(p.stem))
 
 
-def read_pack(name: str) -> Pack:
-    """Read and validate a pack file; any bad line refuses the whole pack."""
+def outside_id(name: str) -> str:
+    """The id an outside pack is stored under; it holds a dot, which no shipped pack name can."""
+    return f"{OUTSIDE_PREFIX}{name}"
+
+
+def _refuse_shipped_name(name: str, what: str) -> None:
+    if name in available():
+        raise kn.KnowledgeError(
+            f"{name!r} is the name of a pack that ships with agenttalk; give the {what} another name")
+
+
+def read_pack(name: str, *, folder: Path | str | None = None, now: datetime | None = None) -> Pack:
+    """Read and validate a pack file; any bad line refuses the whole pack. Without ``folder`` it is a
+    shipped pack; with it, the outside pack ``<folder>/<name>.jsonl`` under the id ``ext.<name>``."""
     _check_name(name)
-    path = PACKS_DIR / f"{name}.jsonl"
-    if not path.is_file():
-        raise kn.KnowledgeError(f"unknown pack {name!r} (available: {', '.join(available()) or 'none'})")
+    if folder is None:
+        pack_id, path = name, PACKS_DIR / f"{name}.jsonl"
+        if not path.is_file():
+            raise kn.KnowledgeError(f"unknown pack {name!r} (available: {', '.join(available()) or 'none'})")
+    else:
+        _refuse_shipped_name(name, "outside pack")
+        directory = Path(folder).resolve()
+        if not directory.is_dir():
+            raise kn.KnowledgeError(f"pack {name}: the folder {directory} does not exist")
+        pack_id, path = outside_id(name), directory / f"{name}.jsonl"
+        if not path.is_file():
+            raise kn.KnowledgeError(f"pack {name}: there is no file {path}")
+    at = now or datetime.now(timezone.utc)
+    data = path.read_bytes()
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise kn.KnowledgeError(f"pack {name}: {path.name} is not UTF-8 text ({exc})") from exc
     lessons: list[PackLesson] = []
     versions: set[int] = set()
     seen: set[str] = set()
-    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+    for number, line in enumerate(text.splitlines(), 1):
         if not line.strip():
             continue
         try:
-            raw = json.loads(line)
-        except ValueError as exc:
-            raise kn.KnowledgeError(f"pack {name} line {number}: invalid json: {exc}") from exc
-        if not isinstance(raw, dict) or list(raw) != _LINE_KEYS:
-            raise kn.KnowledgeError(f"pack {name} line {number}: keys must be exactly {_LINE_KEYS}")
-        slug = raw["key"]
-        if not isinstance(slug, str) or not _SLUG_RE.match(slug) or len(slug) > 60:
-            raise kn.KnowledgeError(f"pack {name} line {number}: key {slug!r} is not a safe slug")
-        if slug in seen:
-            raise kn.KnowledgeError(f"pack {name} line {number}: duplicate key {slug!r}")
-        seen.add(slug)
-        if raw["pack"] != name:
-            raise kn.KnowledgeError(f"pack {name} line {number}: pack field is {raw['pack']!r}")
-        version = raw["pack_version"]
-        if not isinstance(version, int) or isinstance(version, bool) or version < 1:
-            raise kn.KnowledgeError(f"pack {name} line {number}: pack_version must be a whole number")
+            lesson, version = _read_line(line, name=name, pack_id=pack_id, seen=seen, at=at)
+        except kn.KnowledgeError as exc:
+            raise kn.KnowledgeError(f"pack {name} line {number}: {exc}") from exc
         versions.add(version)
-        tags = raw["applies_to"]
-        if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
-            raise kn.KnowledgeError(f"pack {name} line {number}: applies_to must be a list of tags")
-        lessons.append(PackLesson(
-            slug=slug, key=pack_key(name, slug), scope=raw["scope"], trigger=raw["trigger"],
-            body=raw["body"], tags=tuple(tags), evidence=raw["evidence"],
-            # The version is left out, so a new pack version rewrites only the lessons whose text changed.
-            source_hash=hashlib.sha256(json.dumps(
-                {k: v for k, v in raw.items() if k != "pack_version"}, sort_keys=True).encode("utf-8")).hexdigest()))
+        lessons.append(lesson)
     if not lessons:
         raise kn.KnowledgeError(f"pack {name} has no lessons")
     if len(versions) != 1:
         raise kn.KnowledgeError(f"pack {name}: every line must carry the same pack_version, got {sorted(versions)}")
-    pack = Pack(name=name, version=versions.pop(), lessons=tuple(lessons), retired=_read_retired(name))
-    for lesson in pack.lessons:           # validate each lesson the way the store will
-        lesson_for_store(lesson, datetime.now(timezone.utc))
-        kn.validate_key(lesson.key)
-        kn.validate_body(lesson.body)
-    return pack
+    retired_path = path.with_name(f"{name}.retired.json")
+    source = None
+    if folder is not None:
+        source = {"folder": str(path.parent), "file_sha256": hashlib.sha256(data).hexdigest()}
+        if retired_path.is_file():
+            source["retired_sha256"] = hashlib.sha256(retired_path.read_bytes()).hexdigest()
+        commit = _git_head(path.parent)
+        if commit:
+            source["commit"] = commit
+    return Pack(name=pack_id, version=versions.pop(), lessons=tuple(lessons),
+                retired=_read_retired(name, retired_path), source=source)
 
 
-def _read_retired(name: str) -> tuple[str, ...]:
-    path = PACKS_DIR / f"{name}.retired.json"
+def _read_line(line: str, *, name: str, pack_id: str, seen: set[str], at: datetime) -> tuple[PackLesson, int]:
+    """One pack line as a lesson, validated the way the store will validate it."""
+    try:
+        raw = json.loads(line)
+    except ValueError as exc:
+        raise kn.KnowledgeError(f"invalid json: {exc}") from exc
+    if not isinstance(raw, dict) or list(raw) not in (_LINE_KEYS, [*_LINE_KEYS, _CONFIRMED_AT]):
+        raise kn.KnowledgeError(f"keys must be exactly {_LINE_KEYS}, optionally followed by {_CONFIRMED_AT!r}")
+    slug = raw["key"]
+    if isinstance(slug, str) and slug.startswith(kn.PACK_KEY_PREFIX):
+        raise kn.KnowledgeError(
+            f"key {slug!r} uses the reserved prefix {kn.PACK_KEY_PREFIX!r}: write the bare slug, "
+            "agenttalk adds the pack's own prefix")
+    if not isinstance(slug, str) or not _SLUG_RE.match(slug) or len(slug) > _SLUG_MAX:
+        raise kn.KnowledgeError(f"key {slug!r} is not a safe slug")
+    if slug in seen:
+        raise kn.KnowledgeError(f"duplicate key {slug!r}")
+    seen.add(slug)
+    if raw["pack"] != name:
+        raise kn.KnowledgeError(f"pack field is {raw['pack']!r}")
+    version = raw["pack_version"]
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise kn.KnowledgeError("pack_version must be a whole number")
+    tags = raw["applies_to"]
+    if not isinstance(tags, list) or not all(isinstance(t, str) for t in tags):
+        raise kn.KnowledgeError("applies_to must be a list of tags")
+    for tag in tags:
+        if tag.casefold().startswith(_RESERVED_TAG_PREFIXES):
+            raise kn.KnowledgeError(f"tag {tag!r} is reserved: agenttalk adds the pack's own tag")
+    for text_field in ("scope", "trigger", "body", "evidence"):
+        if not isinstance(raw[text_field], str):
+            raise kn.KnowledgeError(f"{text_field} must be text")
+    lesson = PackLesson(
+        slug=slug, key=pack_key(pack_id, slug), scope=raw["scope"], trigger=raw["trigger"],
+        body=raw["body"], tags=tuple(tags), evidence=raw["evidence"],
+        # The version is left out, so a new pack version rewrites only the lessons whose text changed.
+        source_hash=hashlib.sha256(json.dumps(
+            {k: v for k, v in raw.items() if k != "pack_version"}, sort_keys=True).encode("utf-8")).hexdigest(),
+        confirmed_at=_confirmed_at(raw.get(_CONFIRMED_AT), at) if _CONFIRMED_AT in raw else None)
+    lesson_for_store(lesson, at)
+    kn.validate_key(lesson.key)
+    kn.validate_body(lesson.body)
+    return lesson, version
+
+
+def _confirmed_at(value: object, at: datetime) -> datetime:
+    """When the lesson was last confirmed: an ISO date or date and time, never later than the load (a date
+    in the future would make the advice look fresher than it is)."""
+    if not isinstance(value, str):
+        raise kn.KnowledgeError(f"{_CONFIRMED_AT} must be an ISO date or date and time")
+    try:
+        moment = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise kn.KnowledgeError(f"{_CONFIRMED_AT} {value!r} is not an ISO date or date and time") from exc
+    moment = moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
+    if moment > at:
+        raise kn.KnowledgeError(f"{_CONFIRMED_AT} {value!r} is in the future")
+    return moment
+
+
+def _read_retired(name: str, path: Path) -> tuple[str, ...]:
     if not path.is_file():
         return ()
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        raw = json.loads(path.read_text(encoding="utf-8-sig"))
     except ValueError as exc:
         raise kn.KnowledgeError(f"pack {name}: {path.name} is not valid json: {exc}") from exc
     if not isinstance(raw, list) or not all(isinstance(s, str) and _SLUG_RE.match(s) for s in raw):
         raise kn.KnowledgeError(f"pack {name}: {path.name} must be a list of lesson slugs")
     return tuple(raw)
+
+
+def _git_head(folder: Path) -> str | None:
+    """The HEAD commit of the git checkout that holds ``folder``, or None. Read only: ``rev-parse``
+    changes nothing, and agenttalk never fetches or authenticates."""
+    git = shutil.which("git")
+    if git is None:
+        return None
+    try:
+        done = subprocess.run(  # nosec B603 - resolved executable, argv list
+            [git, "-C", str(folder), "rev-parse", "--verify", "--quiet", "HEAD"],
+            stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    head = done.stdout.strip()
+    return head if done.returncode == 0 and _COMMIT_RE.match(head) else None
 
 
 def _iso(moment: datetime) -> str:
@@ -179,14 +288,15 @@ def _iso(moment: datetime) -> str:
 
 def lesson_for_store(lesson: PackLesson, now: datetime) -> dict[str, Any]:
     """The store's lesson object for a pack lesson: evidence becomes evidence_ref, the pack tag is
-    added, and the dates are relative to the load."""
+    added, and the dates count from when the lesson was last confirmed, or else from the load."""
     name = lesson.key[len(kn.PACK_KEY_PREFIX):].split(":", 1)[0]
     tags = list(dict.fromkeys([*lesson.tags, f"pack-{name}"]))
+    base = lesson.confirmed_at or now
     stored = {
         "scope": lesson.scope, "trigger": lesson.trigger, "evidence_ref": lesson.evidence,
         "applies_to": tags, "owner": PACK_AUTHOR,
-        "review_after": _iso(now + timedelta(days=REVIEW_AFTER_DAYS)),
-        "expires_at": _iso(now + timedelta(days=EXPIRES_AFTER_DAYS)),
+        "review_after": _iso(base + timedelta(days=REVIEW_AFTER_DAYS)),
+        "expires_at": _iso(base + timedelta(days=EXPIRES_AFTER_DAYS)),
     }
     return kn.validate_lesson(stored, default_status=kn.LESSON_STATUS_PROPOSED)
 
@@ -229,6 +339,9 @@ def _ledger_problem(data: dict) -> str:
         for key, state in entry["keys"].items():
             if not isinstance(state, dict) or not all(isinstance(v, str) for v in state.values()):
                 return f"pack {name!r}, key {key!r}: the key state must be an object of text values"
+        source = entry.get("source", {})
+        if not isinstance(source, dict) or not all(isinstance(v, str) for v in source.values()):
+            return f"pack {name!r}: the source must be an object of text values"
     return ""
 
 
@@ -273,12 +386,14 @@ def _superseded_keys(views: dict[tuple, dict]) -> set[str]:
 
 
 def _matches(latest: dict, lesson: PackLesson) -> bool:
-    """True when the stored lesson has the text of the pack lesson (the dates are the load's, so they
-    are not compared)."""
+    """True when the stored lesson has the text of the pack lesson. Dates count only when the line says
+    when it was last confirmed: then a newer confirmation is a change. Otherwise they are the load's."""
     stored = latest.get("lesson") or {}
     wanted = lesson_for_store(lesson, datetime.now(timezone.utc))
-    return (latest.get("body") == lesson.body
-            and all(stored.get(f) == wanted[f] for f in ("scope", "trigger", "evidence_ref", "applies_to")))
+    fields = ("scope", "trigger", "evidence_ref", "applies_to")
+    if lesson.confirmed_at is not None:
+        fields += ("review_after", "expires_at")
+    return latest.get("body") == lesson.body and all(stored.get(f) == wanted[f] for f in fields)
 
 
 def _store_keys(views: dict[tuple, dict], name: str) -> set[str]:
@@ -318,15 +433,17 @@ def _ledger_entry(latest: dict, source_hash: str, state: str) -> dict[str, str]:
 # ---------------------------------------------------------------- load and unload
 
 def load(store, name: str, *, registry: RegistryHashes, now: datetime | None = None,
-         dry_run: bool = False) -> Report:
-    """Load (or upgrade) a pack. Writes nothing when the same version is already loaded.
+         dry_run: bool = False, folder: Path | str | None = None) -> Report:
+    """Load (or upgrade) a pack: a shipped one, or with ``folder`` an outside one. Writes nothing when
+    the same version is already loaded.
 
     The events are written first and the ledger last. A run cut short between the two is recovered by
     the next load, which adopts the lessons it finds already written by the loader (same author, same
     text) instead of writing them again, and completes a lesson whose curate event is missing."""
-    pack = read_pack(name)
     at = now or datetime.now(timezone.utc)
-    report = Report(pack=name, version=pack.version)
+    pack = read_pack(name, folder=folder, now=at)
+    name = pack.name
+    report = Report(pack=name, version=pack.version, source=pack.source)
     with store._config_lock():
         hashes = registry()
         views, _problems = kn.resolve_views_with_problems(kn.read_events(store)[0])
@@ -388,7 +505,9 @@ def load(store, name: str, *, registry: RegistryHashes, now: datetime | None = N
             return report
         for event in writes:
             kn.write_event_locked(store, event)
-        new_entry = {"version": pack.version, "keys": keys}
+        new_entry: dict[str, Any] = {"version": pack.version, "keys": keys}
+        if pack.source is not None:
+            new_entry["source"] = pack.source
         if new_entry != entry:
             ledger["packs"][name] = new_entry
             ledger["schema_version"] = LEDGER_SCHEMA
@@ -396,20 +515,32 @@ def load(store, name: str, *, registry: RegistryHashes, now: datetime | None = N
     return report
 
 
+def _held(ledger: dict, views: dict[tuple, dict], pack_id: str) -> tuple[dict | None, set[str]]:
+    """The ledger entry of a pack and the keys whose latest event the loader wrote."""
+    ours = {key for key in _store_keys(views, pack_id) if _is_ours(views[(kn.PROCESS_DOMAIN, key)].get("latest"))}
+    return ledger["packs"].get(pack_id), ours
+
+
 def unload(store, name: str, *, registry: RegistryHashes, now: datetime | None = None,
-           dry_run: bool = False) -> Report:
+           dry_run: bool = False, outside: bool = False) -> Report:
     """Retract every lesson of the pack that the team has not touched. Works from the store, so it also
-    removes what a cut-short load wrote before the ledger existed."""
+    removes what a cut-short load wrote before the ledger existed.
+
+    ``name`` is a shipped pack, or an outside one when no shipped pack of that name is known here;
+    ``outside`` picks the outside pack of that name in any case."""
     _check_name(name)
     at = now or datetime.now(timezone.utc)
     with store._config_lock():
         hashes = registry()
         ledger = read_ledger(store)
-        entry = ledger["packs"].get(name)
         views, _problems = kn.resolve_views_with_problems(kn.read_events(store)[0])
-        ours = {key for key in _store_keys(views, name) if _is_ours(views[(kn.PROCESS_DOMAIN, key)].get("latest"))}
+        asked, name = name, outside_id(name) if outside else name
+        entry, ours = _held(ledger, views, name)
+        if not outside and entry is None and not ours and name not in available():
+            name = outside_id(name)
+            entry, ours = _held(ledger, views, name)
         if entry is None and not ours:
-            raise kn.KnowledgeError(f"pack {name!r} is not loaded")
+            raise kn.KnowledgeError(f"pack {asked!r} is not loaded" + (" as an outside pack" if outside else ""))
         entry = entry or {"version": 0, "keys": {}}
         report = Report(pack=name, version=entry.get("version", 0))
         superseded = _superseded_keys(views)
@@ -432,16 +563,35 @@ def unload(store, name: str, *, registry: RegistryHashes, now: datetime | None =
             return report
         for event in writes:
             kn.write_event_locked(store, event)
-        new_entry = {"version": entry.get("version", 0), "keys": keys}
+        new_entry = {**entry, "version": entry.get("version", 0), "keys": keys}
         if new_entry != entry:
             ledger["packs"][name] = new_entry
             _write_ledger(store, ledger)
     return report
 
 
+def _counts(views: dict[tuple, dict], superseded: set[str], pack_id: str) -> dict[str, int]:
+    live = retracted_by_loader = retracted_by_team = changed_by_team = 0
+    for key in _store_keys(views, pack_id):
+        latest = views[(kn.PROCESS_DOMAIN, key)].get("latest") or {}
+        if _team_touched(views[(kn.PROCESS_DOMAIN, key)], superseded, key):
+            if kn.is_retracted(latest) or key in superseded:
+                retracted_by_team += 1
+            else:
+                changed_by_team += 1
+        elif _retracted_by_loader(latest):
+            retracted_by_loader += 1
+        elif kn.is_curated(latest):
+            live += 1
+    return {"live": live, "retracted_by_pack": retracted_by_loader, "retracted_by_team": retracted_by_team,
+            "changed_by_team": changed_by_team}
+
+
 def describe(store) -> list[dict[str, Any]]:
-    """One row per available pack: its version and size, and what this store holds now. The counts are
-    folded from the store (what is live, what the team retracted or changed), not read from the ledger."""
+    """One row per available pack, then one per outside pack this store has loaded: its version and size,
+    and what this store holds now. The counts are folded from the store (what is live, what the team
+    retracted or changed), not read from the ledger. An outside pack's folder is not read again, so its
+    size is unknown (``lessons`` is None)."""
     ledger = read_ledger(store)["packs"]
     views, _problems = kn.resolve_views_with_problems(kn.read_events(store)[0])
     superseded = _superseded_keys(views)
@@ -449,21 +599,186 @@ def describe(store) -> list[dict[str, Any]]:
     for name in available():
         pack = read_pack(name)
         entry = ledger.get(name)
-        live = retracted_by_loader = retracted_by_team = changed_by_team = 0
-        for key in _store_keys(views, name):
-            latest = views[(kn.PROCESS_DOMAIN, key)].get("latest") or {}
-            if _team_touched(views[(kn.PROCESS_DOMAIN, key)], superseded, key):
-                if kn.is_retracted(latest) or key in superseded:
-                    retracted_by_team += 1
-                else:
-                    changed_by_team += 1
-            elif _retracted_by_loader(latest):
-                retracted_by_loader += 1
-            elif kn.is_curated(latest):
-                live += 1
-        rows.append({"name": name, "version": pack.version, "lessons": len(pack.lessons),
-                     "loaded_version": entry["version"] if entry else None, "loaded": bool(entry) and live > 0,
-                     "live": live,
-                     "retracted_by_pack": retracted_by_loader, "retracted_by_team": retracted_by_team,
-                     "changed_by_team": changed_by_team})
+        counts = _counts(views, superseded, name)
+        rows.append({"name": name, "origin": "shipped", "version": pack.version, "lessons": len(pack.lessons),
+                     "loaded_version": entry["version"] if entry else None,
+                     "loaded": bool(entry) and counts["live"] > 0, **counts})
+    for pack_id in sorted(p for p in ledger if p.startswith(OUTSIDE_PREFIX)):
+        entry, source = ledger[pack_id], ledger[pack_id].get("source", {})
+        counts = _counts(views, superseded, pack_id)
+        rows.append({"name": pack_id[len(OUTSIDE_PREFIX):], "origin": "outside", "version": entry["version"],
+                     "lessons": None, "loaded_version": entry["version"], "loaded": counts["live"] > 0,
+                     **counts, "from": source.get("folder"), "commit": source.get("commit"),
+                     "file_sha256": source.get("file_sha256")})
     return rows
+
+
+# ---------------------------------------------------------------- export
+
+_PACK_KEY_RE = re.compile(r"\Apack\.[^:]+:")        # a key in a pack's namespace: pack.<id>:<slug>
+
+
+@dataclass
+class ExportReport:
+    pack: str
+    version: int
+    out: str
+    written: list[dict[str, str]] = field(default_factory=list)     # slug and key of each exported lesson
+    skipped: list[dict[str, str]] = field(default_factory=list)     # key and why, for --tag
+    unchanged: bool = False
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"pack": self.pack, "version": self.version, "out": self.out, "written": self.written,
+                "skipped": self.skipped, "unchanged": self.unchanged}
+
+
+def slug_for_key(key: str) -> str:
+    """A pack slug for a store key: lower case, and each run of other characters becomes one dash. A slug
+    longer than 60 characters is cut and ends in 8 characters of the key's hash, so it stays unique."""
+    slug = re.sub(r"[^a-z0-9]+", "-", key.lower()).strip("-")
+    if len(slug) > _SLUG_MAX:
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:8]
+        slug = slug[:_SLUG_MAX - len(digest) - 1].rstrip("-") + "-" + digest
+    return slug
+
+
+def _not_exportable(rec: dict, key: str, superseded: set[str]) -> str:
+    """Why a lesson cannot be exported, or an empty string. Only the team's own current verified content goes."""
+    curated = rec.get("curated")
+    if curated is None:
+        return "is not verified"
+    if rec.get("tombstoned"):
+        return "is retracted"
+    if rec.get("curated_origin") or _PACK_KEY_RE.match(key):
+        return "comes from a lesson pack"
+    if key in superseded:
+        return "is replaced by a newer lesson"
+    return ""
+
+
+def _verified_at(note: dict) -> datetime:
+    try:
+        return datetime.fromisoformat(str(note.get("curated_at")).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise kn.KnowledgeError("has no readable verify time") from exc
+
+
+def _line_problem(rec: dict, key: str, name: str) -> str:
+    """Why the loader would refuse this lesson's pack line, or an empty string: an export never writes a
+    pack that its own loader refuses."""
+    try:
+        line = json.dumps(_export_line(rec, name=name, slug=slug_for_key(key), version=1))
+        _read_line(line, name=name, pack_id=outside_id(name), seen=set(), at=datetime.now(timezone.utc))
+    except kn.KnowledgeError as exc:
+        return f"cannot be a pack line ({exc})"
+    return ""
+
+
+def _export_line(rec: dict, *, name: str, slug: str, version: int) -> dict[str, Any]:
+    note = rec["curated"]
+    lesson = note["lesson"]
+    confirmed = _verified_at(note)
+    return {"key": slug, "scope": lesson["scope"], "trigger": lesson["trigger"], "body": note["body"],
+            "applies_to": list(lesson.get("applies_to") or []), "evidence": lesson["evidence_ref"],
+            "pack": name, "pack_version": version, _CONFIRMED_AT: _iso(confirmed)}
+
+
+def _render(chosen: list[tuple[str, str, dict]], *, name: str, version: int) -> tuple[str, str]:
+    lines = [_export_line(rec, name=name, slug=slug, version=version) for slug, _key, rec in chosen]
+    provenance = {
+        "pack": name, "pack_version": version,
+        "note": ("Keep this file with the team that exported the pack; do not share it. It links each "
+                 "lesson to its key and event in that team's store."),
+        "lessons": {slug: {"key": key, "domain": rec["curated"]["domain_id"], "event_id": rec["curated"]["id"]}
+                    for slug, key, rec in chosen},
+    }
+    return ("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines),
+            json.dumps(provenance, indent=2, ensure_ascii=False) + "\n")
+
+
+def _existing_version(path: Path) -> int | None:
+    try:
+        first = next(line for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip())
+        version = json.loads(first).get("pack_version")
+    except (OSError, ValueError, StopIteration, AttributeError):
+        return None
+    return version if _is_count(version) and version >= 1 else None
+
+
+def _read_or_none(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
+def export(store, name: str, *, out: Path | str, keys: tuple[str, ...] | list[str] = (),
+           tag: str | None = None, dry_run: bool = False, force: bool = False) -> ExportReport:
+    """Write the team's own verified lessons, chosen by key or by tag, as review candidates: the pack
+    file ``<out>/<name>.jsonl`` and the provenance file ``<out>/<name>.provenance.json``. Writes nothing
+    in the store, and never publishes, commits or pushes. A lesson that is not verified, is retracted or
+    came from a pack is never exported: by key it refuses the export, by tag it is skipped."""
+    _check_name(name)
+    _refuse_shipped_name(name, "exported pack")
+    if bool(keys) == bool(tag):
+        raise kn.KnowledgeError("choose the lessons with --key (one or more) or with --tag, not both")
+    views, _problems = kn.resolve_views_with_problems(kn.read_events(store)[0])
+    lessons = {key: rec for (_domain, key), rec in sorted(views.items(), key=lambda item: item[0][1])
+               if (rec.get("curated") or rec["latest"]).get("type") == kn.TYPE_LESSON}
+    superseded = _superseded_keys(views)
+    chosen: list[tuple[str, dict]] = []
+    skipped: list[dict[str, str]] = []
+    if keys:
+        for key in dict.fromkeys(keys):
+            rec = lessons.get(key)
+            why = "is not a lesson in this store" if rec is None else (
+                _not_exportable(rec, key, superseded) or _line_problem(rec, key, name))
+            if why:
+                raise kn.KnowledgeError(f"lesson {key!r} {why}; only the team's own verified lessons are exported")
+            chosen.append((key, rec))
+    else:
+        for key, rec in lessons.items():
+            shown = rec.get("curated") or rec["latest"]
+            if tag not in ((shown.get("lesson") or {}).get("applies_to") or []):
+                continue
+            why = _not_exportable(rec, key, superseded) or _line_problem(rec, key, name)
+            if why:
+                skipped.append({"key": key, "why": why})
+            else:
+                chosen.append((key, rec))
+        if not chosen:
+            raise kn.KnowledgeError(f"no verified lesson of this team carries the tag {tag!r}")
+    by_slug: dict[str, list[str]] = {}
+    for key, _rec in chosen:
+        by_slug.setdefault(slug_for_key(key), []).append(key)
+    clashes = [keys_ for keys_ in by_slug.values() if len(keys_) > 1]
+    if clashes:
+        raise kn.KnowledgeError("these keys would get the same slug: " + "; ".join(
+            " and ".join(repr(k) for k in keys_) for keys_ in clashes) + "; export them in separate packs")
+    named = sorted(((slug_for_key(key), key, rec) for key, rec in chosen), key=lambda row: row[0])
+
+    folder = Path(out).resolve()
+    if folder.exists() and not folder.is_dir():
+        raise kn.KnowledgeError(f"{folder} is not a folder")
+    pack_path, provenance_path = folder / f"{name}.jsonl", folder / f"{name}.provenance.json"
+    existing = _existing_version(pack_path)
+    version = existing or 1
+    lines, provenance = _render(named, name=name, version=version)
+    seen = _read_or_none(pack_path)
+    report = ExportReport(pack=name, version=version, out=str(folder),
+                          written=[{"slug": slug, "key": key} for slug, key, _rec in named], skipped=skipped)
+    # Only the pack file decides "a different pack": the provenance file may have been moved away, as asked.
+    report.unchanged = seen == lines
+    if seen is not None and not report.unchanged:
+        if not force:
+            raise kn.KnowledgeError(
+                f"{folder} already holds a different pack called {name!r}; add --force to replace it")
+        report.version = (existing or 0) + 1
+        lines, provenance = _render(named, name=name, version=report.version)
+    if dry_run:
+        return report
+    if not report.unchanged:
+        _atomic.write_text(pack_path, lines)
+    if _read_or_none(provenance_path) != provenance:
+        _atomic.write_text(provenance_path, provenance)
+    return report

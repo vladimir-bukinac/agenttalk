@@ -1137,6 +1137,76 @@ whose text changed, and it retracts the ones it took back, but never one you tou
 `pack unload` retracts the pack lessons you have not touched. What the loader wrote is recorded in
 `.agenttalk/knowledge/packs.json`, so it can tell its own lessons from yours.
 
+#### Share lessons with another team
+
+In plain words: a team can hand some of its lessons to another team as a pack. The sending team
+exports its own verified lessons to a folder, and a person reads them. The file then goes into a
+repository both teams can reach. The receiving team checks out that repository itself, at a revision
+it chose, and loads the pack from that folder. agenttalk never downloads anything and never signs in
+anywhere: it reads only the folder you name.
+
+To export lessons (the sending team):
+
+```powershell
+agenttalk knowledge pack export --name team-lessons --out ..\lesson-export --tag shareable --dry-run
+agenttalk knowledge pack export --name team-lessons --out ..\lesson-export --tag shareable
+```
+
+To pick lessons one by one, use `--key <key>` instead of `--tag`, once per lesson. The export writes
+two files:
+
+- `team-lessons.jsonl`: the pack, one lesson per line, in the format of the packs that ship with
+  agenttalk. Each line also carries `confirmed_at`, the time your team last verified the lesson.
+- `team-lessons.provenance.json`: which key and event in your store each line came from. This file
+  stays with your team: do not share it with the pack.
+
+Only your team's own verified lessons go out. A lesson that is not verified, is retracted, is replaced
+by a newer lesson or came from a pack is never exported: named with `--key`, it stops the export;
+picked by `--tag`, it is skipped and listed. The export changes nothing in the store and never
+publishes, commits or pushes. If the folder already holds a different pack of the same name, the
+export refuses; `--force` replaces it and raises its version by one.
+
+The pack is a list of candidates, not a finished product. Read every line before you share it, and
+take out anything confidential: client names, client systems and paths, secrets, another team's
+product details (see [playbook rule L5](playbook/learning.md)).
+
+To load a pack from a folder (the receiving team):
+
+```powershell
+agenttalk knowledge pack load team-lessons --from D:\checkouts\shared-lessons --dry-run
+agenttalk knowledge pack load team-lessons --from D:\checkouts\shared-lessons
+```
+
+The folder holds `team-lessons.jsonl` and, if the pack takes lessons back, `team-lessons.retired.json`.
+agenttalk reads only these two files. It never reads roles, prompts or brief templates, so loading
+lessons never installs operating instructions.
+
+An outside pack follows the rules of a shipped pack: your team always wins, loading it again unchanged
+writes nothing, a changed line updates its lesson, `pack unload team-lessons` takes it back, and its
+lessons never take one of the lesson slots put into an agent's turn. It also has its own identity, so
+it can never mix with a shipped pack:
+
+- Its lessons get the key prefix `pack.ext.team-lessons:` and the tag `pack-ext.team-lessons`. A shipped
+  pack name cannot contain a dot, so no shipped pack, now or later, uses these keys or tags.
+- A name that a shipped pack uses, such as `migration`, is refused.
+- If a later agenttalk ships a pack with the same name, `pack unload <name> --outside` still reaches
+  the outside one.
+
+The store records where the pack came from, in `.agenttalk/knowledge/packs.json`: the folder, the
+SHA-256 hash of the pack file and, when the folder is in a git checkout, its HEAD commit. agenttalk
+only reads that commit; it never changes the checkout. `knowledge pack list` shows the folder next to
+the pack.
+
+A line with `confirmed_at` gets review and expiry dates counted from that time (365 and 730 days
+later), so old advice does not look fresh. A line without it counts from the load, as before. The
+shipped packs accept the same field.
+
+A pack with a bad line is refused as a whole and writes nothing; the message names the line. These are
+refused: a line that is not JSON or has fields other than the pack format's, a key that is not a slug
+(lower-case letters, digits and single dashes, at most 60 characters), a key or tag that starts with
+the reserved `pack.` or `pack-`, a key that appears twice, a line that names another pack, a
+`confirmed_at` that is not a date or lies in the future, and a missing file or folder.
+
 Knowledge freshness is scoped to the effective domain definition. Editing an
 unrelated domain adds a caution but does not hide the note; editing its own domain
 requires re-verification. Historical rows without the scoped hash remain visible
