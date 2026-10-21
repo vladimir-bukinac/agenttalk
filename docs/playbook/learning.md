@@ -25,7 +25,7 @@
 ### L5. Share lessons across teams only without confidential data
 - **The rule.** Lessons may be shared between teams only if they hold no confidential data: no client names, no client systems or paths, no secrets, no product details of another team, and nothing that would carry a blind team's earlier findings into it.
 - **Why.** Cross-team sharing is valuable and the operator allowed it on exactly that condition.
-- **How to apply.** Nothing is shared until a filter and a review step guarantee it. Treat sharing without the filter as forbidden. Retag generic lessons that apply on every turn, and keep their wording neutral.
+- **How to apply.** Nothing is shared until a filter and a review step guarantee it. Treat sharing without the filter as forbidden. Retag generic lessons that apply on every turn, and keep their wording neutral. To share lessons as a pack, `agenttalk knowledge pack export` picks only your team's own verified lessons, but it does not check the text for confidential data: a person reads every line before the file leaves the team, and the provenance file it writes stays home. The other team loads the pack from its own checkout with `agenttalk knowledge pack load <name> --from <folder>` (see [Share lessons with another team](../USER-MANUAL.md#share-lessons-with-another-team)).
 
 ### L6. Put what is learned in a mechanism
 - **The rule.** "I will do better" is gone at the next compaction. A lesson counts only once it lands in a memory file, a skill, a template or a script.

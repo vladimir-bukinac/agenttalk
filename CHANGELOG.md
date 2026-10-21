@@ -10,6 +10,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A team can now share lessons with another team as a lesson pack, and load another team's pack
+  from a folder.** Until now a new store could start only with the lessons that ship with agenttalk.
+  What one team learned stayed in that team's store, and there was no way to hand it over.
+
+  What you will notice: `agenttalk knowledge pack export --name <name> --out <folder>` (with `--key`
+  once per lesson, or `--tag`) writes some of your team's own verified lessons as a pack file, ready
+  for a person to read before it is shared. Next to it, it writes a provenance file that links each
+  lesson back to your store; that file stays with your team. Lessons that are not verified, are
+  retracted, are replaced by a newer lesson or came from a pack are never exported. The export never
+  publishes, commits or pushes anything, and it refuses to overwrite a different pack of the same name
+  unless you add `--force`.
+  `agenttalk knowledge pack load <name> --from <folder>` loads such a pack from a folder you checked
+  out yourself. agenttalk never downloads anything and reads only the lesson files, never roles,
+  prompts or brief templates. The rules of the shipped packs apply: your team always wins, loading
+  the same pack again writes nothing, and `unload` takes it back. Outside packs have their own key
+  prefix and tag, so they can never mix with a shipped pack, and a name that a shipped pack uses is
+  refused. `knowledge pack list` shows where each outside pack came from. Before this, a lesson
+  pack's review and expiry dates always counted from the day it was loaded, so old advice looked new.
+  Now a pack line may say when the lesson was last confirmed, and the dates count from then. A pack
+  with a bad line is refused as a whole, the message names the line, and nothing is written.
+
+  What you need to do: nothing. Read an exported pack, and take out anything confidential, before you
+  share it.
+
+  Technical details: `knowledge_pack.py` gains `read_pack(name, folder=...)`, `load(..., folder=...)`,
+  `unload(..., outside=...)` and `export(...)`; `cli.py` gains `pack load --from`, `pack unload
+  --outside` and `pack export`. An outside pack's id is `ext.<name>`: keys `pack.ext.<name>:<slug>`,
+  tag `pack-ext.<name>`, ledger entry `ext.<name>`. Shipped pack names cannot contain a dot, so the two
+  namespaces never meet. The ledger entry gains `source` (folder, `file_sha256`, `retired_sha256` when
+  there is a retired file, and `commit`, read with `git rev-parse --verify HEAD` when the folder is in a
+  git checkout). The event schema is unchanged. The optional last line field `confirmed_at` (an ISO
+  date or date and time, not in the future) sets `review_after` and `expires_at` to 365 and 730 days
+  after it, and a newer `confirmed_at` counts as a change on reload. The line reader now also refuses a
+  key or tag with the reserved `pack.` or `pack-` prefix, a line that is not UTF-8 or holds an unpaired
+  surrogate, and a `<name>.retired.json` that retires a slug the pack still carries, and names the line
+  for every refusal. Records end only at a newline (`_physical_lines`), never at U+0085, U+2028 or
+  U+2029, which the export writes unescaped (`_dump_line`, shared by the export's checks and its writer).
+  Before writing, the export reads its own bytes back the way the loader does, and it refuses when the
+  folder's retirement file is malformed or retires an exported slug; it never changes that file. Export
+  keeps each lesson's `(domain, key)` identity: a bare `--key` held by several domains is refused with
+  the candidates listed, and `--key <domain>/<key>` names one. Ownership is read from content provenance
+  (`curated_origin`), never from the key's spelling, so a team lesson keyed like `pack.<x>:<y>` exports.
+  Supersession follows the store, which applies a `supersedes` key in every domain. The report carries
+  `provenance_changed` next to `unchanged`, and an existing non-UTF-8 pack or provenance file is
+  refused with its path. Export slugs are the key in lower case with each run of other characters
+  turned into one dash (cut to 60 characters with an 8-character hash ending); two lessons that would
+  share a slug refuse the export. Tests:
+  `tests/test_knowledge_pack_outside.py`. Docs: `docs/USER-MANUAL.md` (Share lessons with another
+  team) and `docs/playbook/learning.md` (L5).
+
 ## [0.103.0] - 2026-10-21
 
 New teams get clearer setup and restart advice, more useful lesson searches, and fewer repeated refusals when saving what they learned. Leads are reminded when a teammate is waiting for a decision, and can pass that decision on with one command. New skills, the team playbook and the migration guide help teams agree what done means and carry lessons into their next project.

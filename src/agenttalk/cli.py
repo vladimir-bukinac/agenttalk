@@ -6674,8 +6674,32 @@ def _kn_pack_summary(report, *, dry_run: bool, verb: str) -> str:
         "; ".join(parts) if parts else "nothing to do")
 
 
+def _kn_pack_source(source: dict) -> str:
+    commit = source.get("commit")
+    return (f"  from {source['folder']} ({'commit ' + commit if commit else 'not a git checkout'}; "
+            f"file sha256 {source['file_sha256'][:12]})")
+
+
+def _kn_pack_export_summary(report, *, dry_run: bool) -> str:
+    wrote = "would write" if dry_run else "wrote"
+    if report.unchanged:
+        head = f"knowledge pack export {report.pack}: {report.out} already holds this pack"
+        if not report.provenance_changed:
+            head += "; nothing to write"
+    else:
+        head = (f"knowledge pack export {report.pack} (version {report.version}): "
+                f"{wrote} {len(report.written)} lesson(s) to {report.out}")
+    lines = [head, *(f"  {row['slug']}  <- {row['domain']}/{row['key']}" for row in report.written)]
+    if report.provenance_changed:
+        lines.append(f"  {wrote} {report.pack}.provenance.json (keep it with your team; do not share it)")
+    if report.skipped:
+        lines.append(f"  skipped {len(report.skipped)}:")
+        lines.extend(f"    {row['domain']}/{row['key']} {row['why']}" for row in report.skipped)
+    return "\n".join(lines)
+
+
 def _kn_pack(args: argparse.Namespace, store) -> int:
-    """``knowledge pack list|load|unload`` (see knowledge_pack.py)."""
+    """``knowledge pack list|load|unload|export`` (see knowledge_pack.py)."""
     from agenttalk import knowledge as kn
     from agenttalk import knowledge_pack as kp
 
@@ -6686,7 +6710,8 @@ def _kn_pack(args: argparse.Namespace, store) -> int:
             if getattr(args, "json", False):
                 print(json.dumps(rows, indent=2))
                 return 0
-            print(f"knowledge pack list: {len(rows)} pack(s) shipped with this install")
+            shipped = [row for row in rows if row["origin"] == "shipped"]
+            print(f"knowledge pack list: {len(shipped)} pack(s) shipped with this install")
             for row in rows:
                 if row["loaded"]:
                     state = f"loaded v{row['loaded_version']}"
@@ -6700,21 +6725,39 @@ def _kn_pack(args: argparse.Namespace, store) -> int:
                                      ("retracted by agenttalk", "retracted_by_pack")):
                     if row[field]:
                         counts += f", {row[field]} {label}"
-                print(f"  {row['name']}  v{row['version']}  {row['lessons']} lessons  {state}: {counts}")
+                if row["origin"] == "outside":
+                    print(f"  {row['name']}  v{row['version']}  outside pack from {row['from']}  {state}: {counts}")
+                else:
+                    print(f"  {row['name']}  v{row['version']}  {row['lessons']} lessons  {state}: {counts}")
             return 0
         if sub in ("load", "unload"):
             dry_run = bool(getattr(args, "dry_run", False))
-            run = kp.load if sub == "load" else kp.unload
-            report = run(store, args.name, registry=_kn_pack_registry(store), dry_run=dry_run)
+            if sub == "load":
+                report = kp.load(store, args.name, registry=_kn_pack_registry(store), dry_run=dry_run,
+                                 folder=getattr(args, "from_dir", None))
+            else:
+                report = kp.unload(store, args.name, registry=_kn_pack_registry(store), dry_run=dry_run,
+                                   outside=bool(getattr(args, "outside", False)))
             if getattr(args, "json", False):
                 print(json.dumps(report.as_dict(), indent=2))
             else:
                 print(_kn_pack_summary(report, dry_run=dry_run, verb=sub))
+                if report.source is not None:
+                    print(_kn_pack_source(report.source))
             return 0
-    except kn.KnowledgeError as exc:
+        if sub == "export":
+            dry_run = bool(getattr(args, "dry_run", False))
+            report = kp.export(store, args.name, out=args.out, keys=args.keys or (), tag=args.tag,
+                               dry_run=dry_run, force=bool(args.force))
+            if getattr(args, "json", False):
+                print(json.dumps(report.as_dict(), indent=2))
+            else:
+                print(_kn_pack_export_summary(report, dry_run=dry_run))
+            return 0
+    except (kn.KnowledgeError, OSError) as exc:      # OSError: an unreadable pack folder or --out folder
         sys.stderr.write(f"agenttalk knowledge pack: {exc}\n")
         return 2
-    sys.stderr.write("agenttalk knowledge pack: expected list, load or unload.\n")
+    sys.stderr.write("agenttalk knowledge pack: expected list, load, unload or export.\n")
     return 2
 
 
@@ -16919,22 +16962,64 @@ def build_parser() -> argparse.ArgumentParser:
     knsearch.set_defaults(func=cmd_knowledge)
 
     knpack = knsub.add_parser(
-        "pack", help="Lesson packs: curated lessons that a new team starts with (list, load, unload).")
+        "pack", help="Lesson packs: curated lessons that a new team starts with (list, load, unload, export).")
     knpack.set_defaults(func=cmd_knowledge, pack_cmd=None)
     knpacksub = knpack.add_subparsers(dest="pack_cmd")
-    knpack_list = knpacksub.add_parser("list", help="Packs that ship with this install, and what is loaded.")
+    knpack_list = knpacksub.add_parser(
+        "list", help="Packs that ship with this install, outside packs this store loaded, and what is loaded.")
     knpack_list.add_argument("--json", action="store_true")
     knpack_list.set_defaults(func=cmd_knowledge)
+    knpack_verbs = {}
     for pack_verb, pack_help in (
             ("load", "Load a pack, or upgrade a loaded one. The team's own retractions and lessons "
                      "always win; loading the same version again writes nothing."),
             ("unload", "Retract the pack's lessons that the team has not changed.")):
-        knpack_verb = knpacksub.add_parser(pack_verb, help=pack_help)
+        knpack_verb = knpack_verbs[pack_verb] = knpacksub.add_parser(pack_verb, help=pack_help)
         knpack_verb.add_argument("name", help="Pack name (see `knowledge pack list`).")
         knpack_verb.add_argument("--dry-run", dest="dry_run", action="store_true",
                                  help="Show what would change; write nothing.")
         knpack_verb.add_argument("--json", action="store_true")
         knpack_verb.set_defaults(func=cmd_knowledge)
+    knpack_verbs["load"].add_argument(
+        "--from", dest="from_dir", metavar="FOLDER",
+        help="Load the pack from a folder you checked out yourself: FOLDER/<name>.jsonl, and "
+             "FOLDER/<name>.retired.json if it is there. agenttalk never downloads anything and reads "
+             "only these lesson files, never roles, prompts or brief templates. The name must not be one "
+             "that ships with agenttalk. The lessons get the key prefix pack.ext.<name>: and the tag "
+             "pack-ext.<name>, and the store records the folder, the file's hash and, in a git "
+             "checkout, its commit.")
+    knpack_verbs["unload"].add_argument(
+        "--outside", action="store_true",
+        help="Unload the outside pack of this name, even if a pack of the same name ships with agenttalk.")
+    knpack_export = knpacksub.add_parser(
+        "export",
+        help="Write some of this team's verified lessons as a pack another team can review and load.",
+        description=(
+            "Write some of this team's own verified lessons as a lesson pack, for another team to review "
+            "and load with `knowledge pack load <name> --from <folder>`. It writes two files: "
+            "OUT/<name>.jsonl, the pack, and OUT/<name>.provenance.json, which links each lesson back to "
+            "its key and event in this store. The provenance file stays with your team: do not share it "
+            "with the pack. Lessons that are not verified, are retracted, are replaced by a newer lesson "
+            "or came from a pack are never exported. If OUT/<name>.retired.json takes back a lesson you "
+            "export, the export refuses; it never changes that file. Read the pack before you share it: it "
+            "is a list of candidates for review. Nothing is published, committed or pushed."))
+    knpack_export.add_argument("--name", required=True, help="Name of the pack to write (lower case, dashes).")
+    knpack_export.add_argument("--out", required=True, metavar="FOLDER", help="Folder to write the two files to.")
+    knpack_export_pick = knpack_export.add_mutually_exclusive_group(required=True)
+    knpack_export_pick.add_argument(
+        "--key", dest="keys", action="append", metavar="KEY",
+        help="A lesson to export, by its key; repeat for more. When the same key is in more than one "
+             "domain, write DOMAIN/KEY (as `knowledge search` shows it). A key that is not a verified "
+             "lesson of this team stops the export.")
+    knpack_export_pick.add_argument(
+        "--tag", metavar="TAG", help="Export every verified lesson of this team that carries this tag.")
+    knpack_export.add_argument(
+        "--force", action="store_true",
+        help="Replace a different pack of the same name in the folder (its version goes up by one).")
+    knpack_export.add_argument("--dry-run", dest="dry_run", action="store_true",
+                               help="Show what would be written; write nothing.")
+    knpack_export.add_argument("--json", action="store_true")
+    knpack_export.set_defaults(func=cmd_knowledge)
 
     knonb = knsub.add_parser(
         "onboard", help="Bounded mixed digest (20 pointer notes plus 5 lessons by default).")
