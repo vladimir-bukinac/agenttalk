@@ -45,7 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   git checkout). The event schema is unchanged. The optional last line field `confirmed_at` (an ISO
   date or date and time, not in the future) sets `review_after` and `expires_at` to 365 and 730 days
   after it, and a newer `confirmed_at` counts as a change on reload. The line reader now also refuses a
-  key or tag with the reserved `pack.` or `pack-` prefix and names the line for every refusal. Export
+  key or tag with the reserved `pack.` or `pack-` prefix, a line that is not UTF-8 or holds an unpaired
+  surrogate, and a `<name>.retired.json` that retires a slug the pack still carries, and names the line
+  for every refusal. Records end only at a newline (`_physical_lines`), never at U+0085, U+2028 or
+  U+2029, which the export writes unescaped (`_dump_line`, shared by the export's checks and its writer).
+  Before writing, the export reads its own bytes back the way the loader does, and it refuses when the
+  folder's retirement file is malformed or retires an exported slug; it never changes that file. Export
   slugs are the key in lower case with each run of other characters turned into one dash (cut to 60
   characters with an 8-character hash ending); two keys that would share a slug refuse the export. Tests:
   `tests/test_knowledge_pack_outside.py`. Docs: `docs/USER-MANUAL.md` (Share lessons with another

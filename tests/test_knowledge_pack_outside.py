@@ -296,6 +296,8 @@ _MALFORMED = [
                  id="bad-confirmed-at"),
     pytest.param(json.dumps(_line("alpha", confirmed_at="2999-01-01")) + "\n", "line 1",
                  id="future-confirmed-at"),
+    pytest.param(json.dumps(_line("alpha")) + "\n" + json.dumps(_line("beta", body="Bad " + chr(0xD800) + " text"))
+                 + "\n", "line 2", id="unpaired-surrogate"),
 ]
 
 
@@ -419,9 +421,10 @@ def test_list_shows_an_outside_pack_and_where_it_came_from(root: Path, outside, 
 # ---- export
 
 def _publish(root: Path, key: str, *, tags: str = "shared", scope: str = "review",
-             body: str | None = None) -> None:
+             body: str | None = None, trigger: str | None = None) -> None:
     assert _run(root, "knowledge", "publish", "--from", "dev", "--type", "lesson", "--key", key,
-                "--scope", scope, "--trigger", f"When {key} applies", "--evidence-ref", f"PR for {key}",
+                "--scope", scope, "--trigger", trigger or f"When {key} applies",
+                "--evidence-ref", f"PR for {key}",
                 "--applies-to", tags, "--review-after", "2099-01-01", "--expires-at", "2100-01-01",
                 "-m", body or f"Lesson {key}. Why: x. Check: y.") == 0
 
@@ -431,7 +434,8 @@ def _export(root: Path, out: Path | str, *argv: str, name: str = "shared") -> in
 
 
 def _read_lines(path: Path) -> list[dict]:
-    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    """The records of an exported pack, split at physical newlines only, as the loader splits them."""
+    return [json.loads(x) for x in path.read_bytes().split(bytes([10])) if x.strip()]
 
 
 def test_slug_conversion() -> None:
@@ -564,3 +568,96 @@ def test_export_help_says_the_provenance_file_stays_with_the_team(capsys) -> Non
         cli.main(["knowledge", "pack", "export", "--help"])
     text = " ".join(capsys.readouterr().out.split())
     assert "provenance" in text and "stays with your team" in text
+
+
+# ---- fix round 1 (PR #554 read): line separators, a reused folder's retirement file, invalid Unicode
+
+_SEPARATORS = [pytest.param(chr(0x85), id="NEL"), pytest.param(chr(0x2028), id="LS"),
+               pytest.param(chr(0x2029), id="PS")]
+
+
+@pytest.mark.parametrize("char", _SEPARATORS)
+def test_an_exported_lesson_with_a_unicode_line_separator_loads_in_another_store(
+        root: Path, tmp_path: Path, char: str) -> None:
+    body, trigger = f"First part.{char}Second part. Why: x. Check: y.", f"When{char}it applies"
+    _publish(root, "team.sep", body=body, trigger=trigger)
+    assert _verify(root, "team.sep") == 0
+    out = tmp_path / "out"
+    assert _export(root, out, "--key", "team.sep") == 0
+    data = (out / "shared.jsonl").read_bytes()
+    assert data.count(b"\n") == 1 and data.count(char.encode("utf-8")) == 2      # one record, written as is
+    other = tmp_path / "other"
+    other.mkdir()
+    Store(other).init(["lead"])
+    assert _load(other, out, "shared") == 0
+    live = _live(other, "team-sep", prefix="pack.ext.shared:")
+    assert live["body"] == body and live["lesson"]["trigger"] == trigger
+
+
+@pytest.mark.parametrize("char", _SEPARATORS)
+def test_the_version_of_a_pack_with_a_line_separator_is_read(root: Path, tmp_path: Path, char: str) -> None:
+    _publish(root, "team.sep", body=f"One.{char}Two. Why: x. Check: y.")
+    _publish(root, "team.other")
+    for key in ("team.sep", "team.other"):
+        assert _verify(root, key) == 0
+    out = tmp_path / "out"
+    assert _export(root, out, "--key", "team.sep") == 0
+    assert _export(root, out, "--key", "team.sep") == 0                          # the same pack: unchanged
+    assert _export(root, out, "--key", "team.sep", "--key", "team.other", "--force") == 0
+    assert {x["pack_version"] for x in _read_lines(out / "shared.jsonl")} == {2}
+
+
+def test_a_hand_written_pack_with_line_separators_and_crlf_loads(root: Path, outside) -> None:
+    folder, write = outside
+    body = f"A.{chr(0x85)}B.{chr(0x2028)}C.{chr(0x2029)}D. Why: x. Check: y."
+    crlf = chr(13) + chr(10)
+    write([], raw=json.dumps(_line("alpha", body=body), ensure_ascii=False) + crlf + json.dumps(_line("beta")) + crlf)
+    assert _load(root, folder) == 0
+    assert _live(root, "alpha")["body"] == body and _live(root, "beta") is not None
+
+
+def test_export_refuses_a_reused_folder_whose_retirement_file_names_an_exported_lesson(
+        root: Path, tmp_path: Path, capsys) -> None:
+    for key in ("team.one", "team.two"):
+        _publish(root, key)
+        assert _verify(root, key) == 0
+    out = tmp_path / "out"
+    assert _export(root, out, "--key", "team.one") == 0
+    retired = out / "shared.retired.json"
+    retired.write_text(json.dumps(["team-one", "an-old-one"]), encoding="utf-8")
+    pack, before = (out / "shared.jsonl").read_bytes(), retired.read_bytes()
+    capsys.readouterr()
+    for extra in ((), ("--force",), ("--dry-run",)):
+        assert _export(root, out, "--key", "team.one", *extra) == 2
+        err = capsys.readouterr().err
+        assert "shared.retired.json" in err and "team-one" in err and "an-old-one" not in err
+    assert (out / "shared.jsonl").read_bytes() == pack and retired.read_bytes() == before    # nothing touched
+    retired.write_text(json.dumps(["an-old-one"]), encoding="utf-8")         # retires only what is not exported
+    assert _export(root, out, "--key", "team.one", "--key", "team.two", "--force") == 0
+    other = tmp_path / "other"
+    other.mkdir()
+    Store(other).init(["lead"])
+    assert _load(other, out, "shared") == 0
+    assert _live(other, "team-one", prefix="pack.ext.shared:") is not None
+    retired.write_text("{not json", encoding="utf-8")                           # a retirement file the loader refuses
+    capsys.readouterr()
+    assert _export(root, out, "--key", "team.one", "--key", "team.two") == 2
+    assert "shared.retired.json" in capsys.readouterr().err
+
+
+def test_load_refuses_a_pack_whose_retirement_file_names_a_lesson_it_carries(root: Path, outside, capsys) -> None:
+    folder, write = outside
+    write([_line("alpha"), _line("beta")], retired=["beta", "gone"])
+    assert _load(root, folder) == 2
+    err = capsys.readouterr().err
+    assert "team-x.retired.json" in err and "'beta'" in err and "line 2" in err
+    assert not _notes(root).exists() and not _ledger_file(root).exists()
+
+
+def test_a_line_that_is_not_utf8_is_refused_naming_the_line(root: Path, outside, capsys) -> None:
+    folder, write = outside
+    path = write([_line("alpha")])
+    path.write_bytes(path.read_bytes() + b'{"key": "' + bytes([0xFF, 0xFE]) + b'"}' + bytes([10]))
+    assert _load(root, folder) == 2
+    assert "team-x line 2" in capsys.readouterr().err
+    assert not _notes(root).exists()

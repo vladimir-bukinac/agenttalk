@@ -37,6 +37,7 @@ review candidates for another team, and a separate provenance file that stays wi
 
 from __future__ import annotations
 
+import codecs
 import hashlib
 import json
 import re
@@ -161,27 +162,19 @@ def read_pack(name: str, *, folder: Path | str | None = None, now: datetime | No
             raise kn.KnowledgeError(f"pack {name}: there is no file {path}")
     at = now or datetime.now(timezone.utc)
     data = path.read_bytes()
-    try:
-        text = data.decode("utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise kn.KnowledgeError(f"pack {name}: {path.name} is not UTF-8 text ({exc})") from exc
-    lessons: list[PackLesson] = []
-    versions: set[int] = set()
-    seen: set[str] = set()
-    for number, line in enumerate(text.splitlines(), 1):
-        if not line.strip():
-            continue
-        try:
-            lesson, version = _read_line(line, name=name, pack_id=pack_id, seen=seen, at=at)
-        except kn.KnowledgeError as exc:
-            raise kn.KnowledgeError(f"pack {name} line {number}: {exc}") from exc
-        versions.add(version)
-        lessons.append(lesson)
+    lessons, versions, line_of = _parse_lessons(data, name=name, pack_id=pack_id, at=at)
     if not lessons:
         raise kn.KnowledgeError(f"pack {name} has no lessons")
     if len(versions) != 1:
         raise kn.KnowledgeError(f"pack {name}: every line must carry the same pack_version, got {sorted(versions)}")
     retired_path = path.with_name(f"{name}.retired.json")
+    retired = _read_retired(name, retired_path)
+    carried = [slug for slug in retired if slug in line_of]
+    if carried:      # the retirement would silently cancel these lessons
+        raise kn.KnowledgeError(
+            f"pack {name}: {retired_path.name} retires "
+            + ", ".join(f"{slug!r} (line {line_of[slug]})" for slug in carried)
+            + ", which the pack still carries; take each one out of one of the two files")
     source = None
     if folder is not None:
         source = {"folder": str(path.parent), "file_sha256": hashlib.sha256(data).hexdigest()}
@@ -190,8 +183,37 @@ def read_pack(name: str, *, folder: Path | str | None = None, now: datetime | No
         commit = _git_head(path.parent)
         if commit:
             source["commit"] = commit
-    return Pack(name=pack_id, version=versions.pop(), lessons=tuple(lessons),
-                retired=_read_retired(name, retired_path), source=source)
+    return Pack(name=pack_id, version=versions.pop(), lessons=tuple(lessons), retired=retired, source=source)
+
+
+def _physical_lines(data: bytes) -> list[bytes]:
+    """The records of a JSONL file. Only a newline ends a record: ``str.splitlines()`` would also split at
+    U+0085, U+2028 and U+2029, which JSON writes unescaped inside a string."""
+    return [line.removesuffix(b"\r") for line in data.removeprefix(codecs.BOM_UTF8).split(b"\n")]
+
+
+def _parse_lessons(data: bytes, *, name: str, pack_id: str,
+                   at: datetime) -> tuple[list[PackLesson], set[int], dict[str, int]]:
+    """Every lesson in a pack file, the versions its lines carry, and the line of each slug. Any bad line
+    refuses the pack, with the pack name and the line number."""
+    lessons: list[PackLesson] = []
+    versions: set[int] = set()
+    line_of: dict[str, int] = {}
+    seen: set[str] = set()
+    for number, chunk in enumerate(_physical_lines(data), 1):
+        try:
+            line = chunk.decode("utf-8")
+            if not line.strip():
+                continue
+            lesson, version = _read_line(line, name=name, pack_id=pack_id, seen=seen, at=at)
+        except UnicodeDecodeError as exc:
+            raise kn.KnowledgeError(f"pack {name} line {number}: not UTF-8 text ({exc.reason})") from exc
+        except kn.KnowledgeError as exc:
+            raise kn.KnowledgeError(f"pack {name} line {number}: {exc}") from exc
+        versions.add(version)
+        lessons.append(lesson)
+        line_of[lesson.slug] = number
+    return lessons, versions, line_of
 
 
 def _read_line(line: str, *, name: str, pack_id: str, seen: set[str], at: datetime) -> tuple[PackLesson, int]:
@@ -200,6 +222,10 @@ def _read_line(line: str, *, name: str, pack_id: str, seen: set[str], at: dateti
         raw = json.loads(line)
     except ValueError as exc:
         raise kn.KnowledgeError(f"invalid json: {exc}") from exc
+    try:
+        json.dumps(raw, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:       # an escaped half of a surrogate pair, alone
+        raise kn.KnowledgeError("the text holds invalid Unicode (an unpaired surrogate)") from exc
     if not isinstance(raw, dict) or list(raw) not in (_LINE_KEYS, [*_LINE_KEYS, _CONFIRMED_AT]):
         raise kn.KnowledgeError(f"keys must be exactly {_LINE_KEYS}, optionally followed by {_CONFIRMED_AT!r}")
     slug = raw["key"]
@@ -663,11 +689,17 @@ def _verified_at(note: dict) -> datetime:
         raise kn.KnowledgeError("has no readable verify time") from exc
 
 
+def _dump_line(line: dict[str, Any]) -> str:
+    """How the export writes a pack line, and how its checks see it. Text is kept as it is, not escaped, so
+    a person can read the pack before sharing it; the loader splits records at newlines only."""
+    return json.dumps(line, ensure_ascii=False)
+
+
 def _line_problem(rec: dict, key: str, name: str) -> str:
     """Why the loader would refuse this lesson's pack line, or an empty string: an export never writes a
     pack that its own loader refuses."""
     try:
-        line = json.dumps(_export_line(rec, name=name, slug=slug_for_key(key), version=1))
+        line = _dump_line(_export_line(rec, name=name, slug=slug_for_key(key), version=1))
         _read_line(line, name=name, pack_id=outside_id(name), seen=set(), at=datetime.now(timezone.utc))
     except kn.KnowledgeError as exc:
         return f"cannot be a pack line ({exc})"
@@ -692,13 +724,13 @@ def _render(chosen: list[tuple[str, str, dict]], *, name: str, version: int) -> 
         "lessons": {slug: {"key": key, "domain": rec["curated"]["domain_id"], "event_id": rec["curated"]["id"]}
                     for slug, key, rec in chosen},
     }
-    return ("".join(json.dumps(line, ensure_ascii=False) + "\n" for line in lines),
+    return ("".join(_dump_line(line) + "\n" for line in lines),
             json.dumps(provenance, indent=2, ensure_ascii=False) + "\n")
 
 
 def _existing_version(path: Path) -> int | None:
     try:
-        first = next(line for line in path.read_text(encoding="utf-8-sig").splitlines() if line.strip())
+        first = next(line for line in _physical_lines(path.read_bytes()) if line.strip())
         version = json.loads(first).get("pack_version")
     except (OSError, ValueError, StopIteration, AttributeError):
         return None
@@ -712,12 +744,28 @@ def _read_or_none(path: Path) -> str | None:
         return None
 
 
+def _refuse_retired_conflict(path: Path, name: str, slugs: set[str]) -> None:
+    """Refuse an export whose folder holds a retirement file that the loader would refuse, or that retires
+    lessons this export includes: a team loading the folder would not get them. The file is the pack's own
+    record of what it took back, so it is never changed here; the person decides."""
+    try:
+        retired = _read_retired(name, path)
+    except kn.KnowledgeError as exc:
+        raise kn.KnowledgeError(f"{exc}; a team could not load this folder: fix or remove {path}") from exc
+    clash = [slug for slug in retired if slug in slugs]
+    if clash:
+        raise kn.KnowledgeError(
+            f"{path} retires {', '.join(repr(s) for s in clash)}, which this export includes, so a team loading "
+            "this folder would not get them; take them out of that file, or export to another folder")
+
+
 def export(store, name: str, *, out: Path | str, keys: tuple[str, ...] | list[str] = (),
            tag: str | None = None, dry_run: bool = False, force: bool = False) -> ExportReport:
     """Write the team's own verified lessons, chosen by key or by tag, as review candidates: the pack
     file ``<out>/<name>.jsonl`` and the provenance file ``<out>/<name>.provenance.json``. Writes nothing
     in the store, and never publishes, commits or pushes. A lesson that is not verified, is retracted or
-    came from a pack is never exported: by key it refuses the export, by tag it is skipped."""
+    came from a pack is never exported: by key it refuses the export, by tag it is skipped. A retirement
+    file already in the folder that retires an exported lesson refuses the export."""
     _check_name(name)
     _refuse_shipped_name(name, "exported pack")
     if bool(keys) == bool(tag):
@@ -761,6 +809,7 @@ def export(store, name: str, *, out: Path | str, keys: tuple[str, ...] | list[st
     if folder.exists() and not folder.is_dir():
         raise kn.KnowledgeError(f"{folder} is not a folder")
     pack_path, provenance_path = folder / f"{name}.jsonl", folder / f"{name}.provenance.json"
+    _refuse_retired_conflict(folder / f"{name}.retired.json", name, {slug for slug, _key, _rec in named})
     existing = _existing_version(pack_path)
     version = existing or 1
     lines, provenance = _render(named, name=name, version=version)
@@ -775,6 +824,13 @@ def export(store, name: str, *, out: Path | str, keys: tuple[str, ...] | list[st
                 f"{folder} already holds a different pack called {name!r}; add --force to replace it")
         report.version = (existing or 0) + 1
         lines, provenance = _render(named, name=name, version=report.version)
+    try:                # the exact bytes, read the way the loader reads them
+        loaded, _versions, _line_of = _parse_lessons(lines.encode("utf-8"), name=name, pack_id=outside_id(name),
+                                                     at=datetime.now(timezone.utc))
+    except kn.KnowledgeError as exc:
+        raise kn.KnowledgeError(f"the export would write a pack its own loader refuses: {exc}") from exc
+    if len(loaded) != len(named):
+        raise kn.KnowledgeError(f"the export would write {len(named)} lessons, but the loader reads {len(loaded)}")
     if dry_run:
         return report
     if not report.unchanged:

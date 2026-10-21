@@ -1166,6 +1166,12 @@ picked by `--tag`, it is skipped and listed. The export changes nothing in the s
 publishes, commits or pushes. If the folder already holds a different pack of the same name, the
 export refuses; `--force` replaces it and raises its version by one.
 
+If you export into a folder you used before, such as a checkout of the shared repository, the export
+also reads `team-lessons.retired.json` there, the list of lessons the pack took back. When that file
+names a lesson you are exporting now, a team loading the folder would not get that lesson, so the
+export refuses and names it, even with `--force`. Take the lesson out of that file yourself, or export
+to another folder. The export never changes or deletes that file.
+
 The pack is a list of candidates, not a finished product. Read every line before you share it, and
 take out anything confidential: client names, client systems and paths, secrets, another team's
 product details (see [playbook rule L5](playbook/learning.md)).
@@ -1202,10 +1208,12 @@ later), so old advice does not look fresh. A line without it counts from the loa
 shipped packs accept the same field.
 
 A pack with a bad line is refused as a whole and writes nothing; the message names the line. These are
-refused: a line that is not JSON or has fields other than the pack format's, a key that is not a slug
-(lower-case letters, digits and single dashes, at most 60 characters), a key or tag that starts with
-the reserved `pack.` or `pack-`, a key that appears twice, a line that names another pack, a
-`confirmed_at` that is not a date or lies in the future, and a missing file or folder.
+refused: a line that is not UTF-8 text, not JSON, holds invalid Unicode, or has fields other than the
+pack format's, a key that is not a slug (lower-case letters, digits and single dashes, at most 60
+characters), a key or tag that starts with the reserved `pack.` or `pack-`, a key that appears twice, a
+line that names another pack, a `confirmed_at` that is not a date or lies in the future, a retirement
+file that names a lesson the pack still carries, and a missing file or folder. Only a newline ends a
+line: text may hold other line-break characters, such as U+2028, and they stay part of the lesson.
 
 Knowledge freshness is scoped to the effective domain definition. Editing an
 unrelated domain adds a caution but does not hide the note; editing its own domain

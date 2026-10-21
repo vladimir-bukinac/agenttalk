@@ -16995,8 +16995,9 @@ def build_parser() -> argparse.ArgumentParser:
             "OUT/<name>.jsonl, the pack, and OUT/<name>.provenance.json, which links each lesson back to "
             "its key and event in this store. The provenance file stays with your team: do not share it "
             "with the pack. Lessons that are not verified, are retracted, are replaced by a newer lesson "
-            "or came from a pack are never exported. Read the pack before you share it: it is a list of "
-            "candidates for review. Nothing is published, committed or pushed."))
+            "or came from a pack are never exported. If OUT/<name>.retired.json takes back a lesson you "
+            "export, the export refuses; it never changes that file. Read the pack before you share it: it "
+            "is a list of candidates for review. Nothing is published, committed or pushed."))
     knpack_export.add_argument("--name", required=True, help="Name of the pack to write (lower case, dashes).")
     knpack_export.add_argument("--out", required=True, metavar="FOLDER", help="Folder to write the two files to.")
     knpack_export_pick = knpack_export.add_mutually_exclusive_group(required=True)
