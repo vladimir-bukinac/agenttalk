@@ -661,3 +661,110 @@ def test_a_line_that_is_not_utf8_is_refused_naming_the_line(root: Path, outside,
     assert _load(root, folder) == 2
     assert "team-x line 2" in capsys.readouterr().err
     assert not _notes(root).exists()
+
+
+# ---- fix round 2 (PR #554 final read): the (domain, key) identity, content provenance, companion files
+
+def _two_domains(root: Path) -> None:
+    """Two configured domains, each holding a verified lesson called same-key with the tag shared."""
+    (Store(root).dir / "domains.json").write_text(json.dumps({"schema_version": 1, "domains": {
+        name: {"title": name, "owners": {"agents": ["lead"]}, "curators": {"agents": ["lead"]},
+               "owned_globs": [name + "/**"]} for name in ("public-advice", "internal-advice")},
+        "shared_paths": []}), encoding="utf-8")
+    for domain, body in (("public-advice", "Generic advice. Why: x. Check: y."),
+                         ("internal-advice", "Internal-only advice. Why: x. Check: y.")):
+        assert _run(root, "knowledge", "publish", "--from", "dev", "--type", "lesson", "--domain", domain,
+                    "--key", "same-key", "--scope", "review", "--trigger", "When it applies",
+                    "--evidence-ref", "a fixture", "--applies-to", "shared", "--review-after", "2099-01-01",
+                    "--expires-at", "2100-01-01", "-m", body) == 0
+        assert _run(root, "knowledge", "curate", "verify", "--from", "lead", "--domain", domain,
+                    "--key", "same-key") == 0
+
+
+def test_export_refuses_a_bare_key_that_names_lessons_in_two_domains(root: Path, tmp_path: Path, capsys) -> None:
+    _two_domains(root)
+    out = tmp_path / "out"
+    capsys.readouterr()
+    assert _export(root, out, "--key", "same-key") == 2
+    err = capsys.readouterr().err
+    assert "internal-advice/same-key" in err and "public-advice/same-key" in err and "<domain>/<key>" in err
+    assert not out.exists()
+    assert _export(root, out, "--key", "public-advice/same-key") == 0
+    (line,) = _read_lines(out / "shared.jsonl")
+    assert line["key"] == "same-key" and line["body"].startswith("Generic advice.")
+    provenance = json.loads((out / "shared.provenance.json").read_text(encoding="utf-8"))
+    assert provenance["lessons"]["same-key"]["domain"] == "public-advice"
+    assert "public-advice/same-key" in capsys.readouterr().out
+    assert _export(root, tmp_path / "elsewhere", "--key", "nowhere/same-key") == 2
+    assert "'nowhere/same-key' is not a lesson in this store" in capsys.readouterr().err
+
+
+def test_export_by_tag_keeps_both_domains_and_refuses_their_shared_slug(
+        root: Path, tmp_path: Path, capsys) -> None:
+    _two_domains(root)
+    capsys.readouterr()
+    assert _export(root, tmp_path / "out", "--tag", "shared") == 2
+    err = capsys.readouterr().err
+    assert "internal-advice/same-key" in err and "public-advice/same-key" in err
+    assert not (tmp_path / "out").exists()
+
+
+def test_a_superseded_lesson_is_skipped_and_named_with_its_domain(root: Path, tmp_path: Path, capsys) -> None:
+    _two_domains(root)
+    assert _run(root, "knowledge", "publish", "--from", "dev", "--type", "lesson", "--key", "team.newer",
+                "--scope", "review", "--trigger", "When it applies", "--evidence-ref", "a fixture",
+                "--applies-to", "shared", "--supersedes", "same-key", "--review-after", "2099-01-01",
+                "--expires-at", "2100-01-01", "-m", "Newer advice. Why: x. Check: y.") == 0
+    assert _verify(root, "team.newer") == 0
+    capsys.readouterr()
+    assert _export(root, tmp_path / "out", "--tag", "shared") == 0
+    report = capsys.readouterr().out
+    assert [x["key"] for x in _read_lines(tmp_path / "out" / "shared.jsonl")] == ["team-newer"]
+    skipped = report.split("skipped", 1)[1]
+    assert "internal-advice/same-key" in skipped and "public-advice/same-key" in skipped
+
+
+def test_a_team_lesson_whose_key_is_spelled_like_a_pack_key_is_exported(root: Path, tmp_path: Path) -> None:
+    kn.append_event(Store(root), _team_event("pack.legacy:owned", tags=("shared",)))
+    assert _verify(root, "pack.legacy:owned") == 0
+    assert not kn.resolve_views(_events(root))[(PROCESS, "pack.legacy:owned")]["curated_origin"]
+    out = tmp_path / "out"
+    assert _export(root, out, "--key", "pack.legacy:owned") == 0
+    assert [x["key"] for x in _read_lines(out / "shared.jsonl")] == ["pack-legacy-owned"]
+
+
+def test_export_reports_a_recreated_provenance_file(root: Path, tmp_path: Path, capsys) -> None:
+    _publish(root, "team.one")
+    assert _verify(root, "team.one") == 0
+    out = tmp_path / "out"
+    assert _export(root, out, "--key", "team.one") == 0
+    (out / "shared.provenance.json").unlink()
+    capsys.readouterr()
+    assert _export(root, out, "--key", "team.one", "--dry-run") == 0
+    text = capsys.readouterr().out
+    assert "nothing to write" not in text and "would write shared.provenance.json" in text
+    assert not (out / "shared.provenance.json").exists()
+    assert _export(root, out, "--key", "team.one", "--json") == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["unchanged"] is True and report["provenance_changed"] is True
+    assert (out / "shared.provenance.json").is_file()
+    (out / "shared.provenance.json").unlink()
+    assert _export(root, out, "--key", "team.one") == 0
+    text = capsys.readouterr().out
+    assert "nothing to write" not in text and "wrote shared.provenance.json" in text
+    assert _export(root, out, "--key", "team.one") == 0
+    assert "nothing to write" in capsys.readouterr().out
+
+
+def test_export_refuses_an_existing_pack_file_that_is_not_utf8(root: Path, tmp_path: Path, capsys) -> None:
+    _publish(root, "team.one")
+    assert _verify(root, "team.one") == 0
+    out = tmp_path / "out"
+    out.mkdir()
+    junk = bytes([0xFF, 0xFE, 0x00])
+    (out / "shared.jsonl").write_bytes(junk)
+    capsys.readouterr()
+    assert _export(root, out, "--key", "team.one", "--force") == 2
+    err = capsys.readouterr().err
+    assert "shared.jsonl" in err and "not UTF-8" in err
+    assert (out / "shared.jsonl").read_bytes() == junk and not (out / "shared.provenance.json").exists()

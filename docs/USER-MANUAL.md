@@ -1152,7 +1152,11 @@ agenttalk knowledge pack export --name team-lessons --out ..\lesson-export --tag
 agenttalk knowledge pack export --name team-lessons --out ..\lesson-export --tag shareable
 ```
 
-To pick lessons one by one, use `--key <key>` instead of `--tag`, once per lesson. The export writes
+To pick lessons one by one, use `--key <key>` instead of `--tag`, once per lesson. A lesson is known by
+its domain and its key together. If the same key is in more than one domain, the export does not guess:
+it refuses and lists them, and you name the one you mean as `--key <domain>/<key>`, the way
+`knowledge search` prints it. A tag that matches lessons with the same key in two domains also refuses,
+because both would get the same name in the pack; export them to separate packs. The export writes
 two files:
 
 - `team-lessons.jsonl`: the pack, one lesson per line, in the format of the packs that ship with
@@ -1164,7 +1168,10 @@ Only your team's own verified lessons go out. A lesson that is not verified, is 
 by a newer lesson or came from a pack is never exported: named with `--key`, it stops the export;
 picked by `--tag`, it is skipped and listed. The export changes nothing in the store and never
 publishes, commits or pushes. If the folder already holds a different pack of the same name, the
-export refuses; `--force` replaces it and raises its version by one.
+export refuses; `--force` replaces it and raises its version by one. If the folder holds a file of that
+name that is not UTF-8 text, the export refuses even with `--force`; move the file away yourself. The
+summary says separately whether it wrote the pack file and whether it wrote the provenance file, so
+you can see when only the provenance file was recreated.
 
 If you export into a folder you used before, such as a checkout of the shared repository, the export
 also reads `team-lessons.retired.json` there, the list of lessons the pack took back. When that file

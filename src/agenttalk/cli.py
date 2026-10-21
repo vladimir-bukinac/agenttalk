@@ -6681,15 +6681,20 @@ def _kn_pack_source(source: dict) -> str:
 
 
 def _kn_pack_export_summary(report, *, dry_run: bool) -> str:
+    wrote = "would write" if dry_run else "wrote"
     if report.unchanged:
-        head = f"knowledge pack export {report.pack}: {report.out} already holds this pack; nothing to write"
+        head = f"knowledge pack export {report.pack}: {report.out} already holds this pack"
+        if not report.provenance_changed:
+            head += "; nothing to write"
     else:
         head = (f"knowledge pack export {report.pack} (version {report.version}): "
-                f"{'would write' if dry_run else 'wrote'} {len(report.written)} lesson(s) to {report.out}")
-    lines = [head, *(f"  {row['slug']}  <- {row['key']}" for row in report.written)]
+                f"{wrote} {len(report.written)} lesson(s) to {report.out}")
+    lines = [head, *(f"  {row['slug']}  <- {row['domain']}/{row['key']}" for row in report.written)]
+    if report.provenance_changed:
+        lines.append(f"  {wrote} {report.pack}.provenance.json (keep it with your team; do not share it)")
     if report.skipped:
         lines.append(f"  skipped {len(report.skipped)}:")
-        lines.extend(f"    {row['key']} {row['why']}" for row in report.skipped)
+        lines.extend(f"    {row['domain']}/{row['key']} {row['why']}" for row in report.skipped)
     return "\n".join(lines)
 
 
@@ -17003,8 +17008,9 @@ def build_parser() -> argparse.ArgumentParser:
     knpack_export_pick = knpack_export.add_mutually_exclusive_group(required=True)
     knpack_export_pick.add_argument(
         "--key", dest="keys", action="append", metavar="KEY",
-        help="A lesson to export, by its key; repeat for more. A key that is not a verified lesson of "
-             "this team stops the export.")
+        help="A lesson to export, by its key; repeat for more. When the same key is in more than one "
+             "domain, write DOMAIN/KEY (as `knowledge search` shows it). A key that is not a verified "
+             "lesson of this team stops the export.")
     knpack_export_pick.add_argument(
         "--tag", metavar="TAG", help="Export every verified lesson of this team that carries this tag.")
     knpack_export.add_argument(

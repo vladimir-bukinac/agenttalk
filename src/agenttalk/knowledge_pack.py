@@ -641,7 +641,13 @@ def describe(store) -> list[dict[str, Any]]:
 
 # ---------------------------------------------------------------- export
 
-_PACK_KEY_RE = re.compile(r"\Apack\.[^:]+:")        # a key in a pack's namespace: pack.<id>:<slug>
+Ident = tuple[str, str]         # (domain, key): a lesson's identity in the store
+
+
+def _label(ident: Ident) -> str:
+    """A lesson as the user names it: domain/key, as ``knowledge search`` prints it (neither part can hold a
+    slash)."""
+    return f"{ident[0]}/{ident[1]}"
 
 
 @dataclass
@@ -649,13 +655,15 @@ class ExportReport:
     pack: str
     version: int
     out: str
-    written: list[dict[str, str]] = field(default_factory=list)     # slug and key of each exported lesson
-    skipped: list[dict[str, str]] = field(default_factory=list)     # key and why, for --tag
-    unchanged: bool = False
+    written: list[dict[str, str]] = field(default_factory=list)     # slug, domain and key of each lesson
+    skipped: list[dict[str, str]] = field(default_factory=list)     # domain, key and why, for --tag
+    unchanged: bool = False             # the folder already holds this pack file
+    provenance_changed: bool = False    # the provenance file is written (in a dry run: would be)
 
     def as_dict(self) -> dict[str, Any]:
         return {"pack": self.pack, "version": self.version, "out": self.out, "written": self.written,
-                "skipped": self.skipped, "unchanged": self.unchanged}
+                "skipped": self.skipped, "unchanged": self.unchanged,
+                "provenance_changed": self.provenance_changed}
 
 
 def slug_for_key(key: str) -> str:
@@ -675,9 +683,9 @@ def _not_exportable(rec: dict, key: str, superseded: set[str]) -> str:
         return "is not verified"
     if rec.get("tombstoned"):
         return "is retracted"
-    if rec.get("curated_origin") or _PACK_KEY_RE.match(key):
+    if rec.get("curated_origin"):       # where the verified content came from, never how the key is spelled
         return "comes from a lesson pack"
-    if key in superseded:
+    if key in superseded:               # supersedes names bare keys, and the store applies them in every domain
         return "is replaced by a newer lesson"
     return ""
 
@@ -715,14 +723,14 @@ def _export_line(rec: dict, *, name: str, slug: str, version: int) -> dict[str, 
             "pack": name, "pack_version": version, _CONFIRMED_AT: _iso(confirmed)}
 
 
-def _render(chosen: list[tuple[str, str, dict]], *, name: str, version: int) -> tuple[str, str]:
-    lines = [_export_line(rec, name=name, slug=slug, version=version) for slug, _key, rec in chosen]
+def _render(named: list[tuple[str, Ident, dict]], *, name: str, version: int) -> tuple[str, str]:
+    lines = [_export_line(rec, name=name, slug=slug, version=version) for slug, _ident, rec in named]
     provenance = {
         "pack": name, "pack_version": version,
         "note": ("Keep this file with the team that exported the pack; do not share it. It links each "
                  "lesson to its key and event in that team's store."),
-        "lessons": {slug: {"key": key, "domain": rec["curated"]["domain_id"], "event_id": rec["curated"]["id"]}
-                    for slug, key, rec in chosen},
+        "lessons": {slug: {"key": key, "domain": domain, "event_id": rec["curated"]["id"]}
+                    for slug, (domain, key), rec in named},
     }
     return ("".join(_dump_line(line) + "\n" for line in lines),
             json.dumps(provenance, indent=2, ensure_ascii=False) + "\n")
@@ -742,6 +750,9 @@ def _read_or_none(path: Path) -> str | None:
         return path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
+    except UnicodeDecodeError as exc:
+        raise kn.KnowledgeError(f"{path} is not UTF-8 text, so it is not a file this export wrote; "
+                                "move it away, then export again") from exc
 
 
 def _refuse_retired_conflict(path: Path, name: str, slugs: set[str]) -> None:
@@ -759,63 +770,84 @@ def _refuse_retired_conflict(path: Path, name: str, slugs: set[str]) -> None:
             "this folder would not get them; take them out of that file, or export to another folder")
 
 
+def _pick(lessons: dict[Ident, dict], wanted: str) -> Ident:
+    """The lesson a --key names: ``domain/key``, or a bare key that only one domain holds. A bare key held
+    by several domains is refused, never guessed: the wrong one could be content that must not be shared."""
+    domain, slash, key = wanted.partition("/")
+    if slash:
+        found = [(domain, key)] if (domain, key) in lessons else []
+    else:
+        found = [ident for ident in lessons if ident[1] == wanted]
+    if not found:
+        raise kn.KnowledgeError(f"lesson {wanted!r} is not a lesson in this store")
+    if len(found) > 1:
+        raise kn.KnowledgeError(
+            f"lesson {wanted!r} is in {len(found)} domains ({', '.join(_label(i) for i in found)}); "
+            "name the one to export as --key <domain>/<key>")
+    return found[0]
+
+
 def export(store, name: str, *, out: Path | str, keys: tuple[str, ...] | list[str] = (),
            tag: str | None = None, dry_run: bool = False, force: bool = False) -> ExportReport:
     """Write the team's own verified lessons, chosen by key or by tag, as review candidates: the pack
     file ``<out>/<name>.jsonl`` and the provenance file ``<out>/<name>.provenance.json``. Writes nothing
     in the store, and never publishes, commits or pushes. A lesson that is not verified, is retracted or
     came from a pack is never exported: by key it refuses the export, by tag it is skipped. A retirement
-    file already in the folder that retires an exported lesson refuses the export."""
+    file already in the folder that retires an exported lesson refuses the export.
+
+    A lesson is its (domain, key) pair throughout: a key held by several domains must be named as
+    ``domain/key``, and two lessons that would share a slug refuse the export rather than lose one."""
     _check_name(name)
     _refuse_shipped_name(name, "exported pack")
     if bool(keys) == bool(tag):
         raise kn.KnowledgeError("choose the lessons with --key (one or more) or with --tag, not both")
     views, _problems = kn.resolve_views_with_problems(kn.read_events(store)[0])
-    lessons = {key: rec for (_domain, key), rec in sorted(views.items(), key=lambda item: item[0][1])
+    lessons = {ident: rec for ident, rec in sorted(views.items(), key=lambda item: (item[0][1], item[0][0]))
                if (rec.get("curated") or rec["latest"]).get("type") == kn.TYPE_LESSON}
     superseded = _superseded_keys(views)
-    chosen: list[tuple[str, dict]] = []
+    chosen: dict[Ident, dict] = {}
     skipped: list[dict[str, str]] = []
     if keys:
-        for key in dict.fromkeys(keys):
-            rec = lessons.get(key)
-            why = "is not a lesson in this store" if rec is None else (
-                _not_exportable(rec, key, superseded) or _line_problem(rec, key, name))
+        for wanted in keys:
+            ident = _pick(lessons, wanted)
+            rec = lessons[ident]
+            why = _not_exportable(rec, ident[1], superseded) or _line_problem(rec, ident[1], name)
             if why:
-                raise kn.KnowledgeError(f"lesson {key!r} {why}; only the team's own verified lessons are exported")
-            chosen.append((key, rec))
+                raise kn.KnowledgeError(
+                    f"lesson {_label(ident)!r} {why}; only the team's own verified lessons are exported")
+            chosen[ident] = rec
     else:
-        for key, rec in lessons.items():
+        for ident, rec in lessons.items():
             shown = rec.get("curated") or rec["latest"]
             if tag not in ((shown.get("lesson") or {}).get("applies_to") or []):
                 continue
-            why = _not_exportable(rec, key, superseded) or _line_problem(rec, key, name)
+            why = _not_exportable(rec, ident[1], superseded) or _line_problem(rec, ident[1], name)
             if why:
-                skipped.append({"key": key, "why": why})
+                skipped.append({"domain": ident[0], "key": ident[1], "why": why})
             else:
-                chosen.append((key, rec))
+                chosen[ident] = rec
         if not chosen:
             raise kn.KnowledgeError(f"no verified lesson of this team carries the tag {tag!r}")
-    by_slug: dict[str, list[str]] = {}
-    for key, _rec in chosen:
-        by_slug.setdefault(slug_for_key(key), []).append(key)
-    clashes = [keys_ for keys_ in by_slug.values() if len(keys_) > 1]
+    by_slug: dict[str, list[Ident]] = {}
+    for ident in chosen:
+        by_slug.setdefault(slug_for_key(ident[1]), []).append(ident)
+    clashes = [idents for idents in by_slug.values() if len(idents) > 1]
     if clashes:
-        raise kn.KnowledgeError("these keys would get the same slug: " + "; ".join(
-            " and ".join(repr(k) for k in keys_) for keys_ in clashes) + "; export them in separate packs")
-    named = sorted(((slug_for_key(key), key, rec) for key, rec in chosen), key=lambda row: row[0])
+        raise kn.KnowledgeError("these lessons would get the same slug: " + "; ".join(
+            " and ".join(repr(_label(i)) for i in idents) for idents in clashes) + "; export them in separate packs")
+    named = sorted(((slug_for_key(ident[1]), ident, rec) for ident, rec in chosen.items()), key=lambda row: row[0])
 
     folder = Path(out).resolve()
     if folder.exists() and not folder.is_dir():
         raise kn.KnowledgeError(f"{folder} is not a folder")
     pack_path, provenance_path = folder / f"{name}.jsonl", folder / f"{name}.provenance.json"
-    _refuse_retired_conflict(folder / f"{name}.retired.json", name, {slug for slug, _key, _rec in named})
+    _refuse_retired_conflict(folder / f"{name}.retired.json", name, {slug for slug, _ident, _rec in named})
     existing = _existing_version(pack_path)
     version = existing or 1
     lines, provenance = _render(named, name=name, version=version)
     seen = _read_or_none(pack_path)
-    report = ExportReport(pack=name, version=version, out=str(folder),
-                          written=[{"slug": slug, "key": key} for slug, key, _rec in named], skipped=skipped)
+    report = ExportReport(pack=name, version=version, out=str(folder), skipped=skipped,
+                          written=[{"slug": slug, "domain": domain, "key": key} for slug, (domain, key), _rec in named])
     # Only the pack file decides "a different pack": the provenance file may have been moved away, as asked.
     report.unchanged = seen == lines
     if seen is not None and not report.unchanged:
@@ -831,10 +863,11 @@ def export(store, name: str, *, out: Path | str, keys: tuple[str, ...] | list[st
         raise kn.KnowledgeError(f"the export would write a pack its own loader refuses: {exc}") from exc
     if len(loaded) != len(named):
         raise kn.KnowledgeError(f"the export would write {len(named)} lessons, but the loader reads {len(loaded)}")
+    report.provenance_changed = _read_or_none(provenance_path) != provenance
     if dry_run:
         return report
     if not report.unchanged:
         _atomic.write_text(pack_path, lines)
-    if _read_or_none(provenance_path) != provenance:
+    if report.provenance_changed:
         _atomic.write_text(provenance_path, provenance)
     return report

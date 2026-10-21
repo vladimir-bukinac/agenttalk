@@ -51,8 +51,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   U+2029, which the export writes unescaped (`_dump_line`, shared by the export's checks and its writer).
   Before writing, the export reads its own bytes back the way the loader does, and it refuses when the
   folder's retirement file is malformed or retires an exported slug; it never changes that file. Export
-  slugs are the key in lower case with each run of other characters turned into one dash (cut to 60
-  characters with an 8-character hash ending); two keys that would share a slug refuse the export. Tests:
+  keeps each lesson's `(domain, key)` identity: a bare `--key` held by several domains is refused with
+  the candidates listed, and `--key <domain>/<key>` names one. Ownership is read from content provenance
+  (`curated_origin`), never from the key's spelling, so a team lesson keyed like `pack.<x>:<y>` exports.
+  Supersession follows the store, which applies a `supersedes` key in every domain. The report carries
+  `provenance_changed` next to `unchanged`, and an existing non-UTF-8 pack or provenance file is
+  refused with its path. Export slugs are the key in lower case with each run of other characters
+  turned into one dash (cut to 60 characters with an 8-character hash ending); two lessons that would
+  share a slug refuse the export. Tests:
   `tests/test_knowledge_pack_outside.py`. Docs: `docs/USER-MANUAL.md` (Share lessons with another
   team) and `docs/playbook/learning.md` (L5).
 
