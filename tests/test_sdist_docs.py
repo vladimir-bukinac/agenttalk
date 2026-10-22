@@ -43,7 +43,8 @@ def test_every_top_level_file_the_readme_links_is_in_the_sdist() -> None:
     tomllib = pytest.importorskip("tomllib")  # Python 3.11+
     pyproject = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     include = {entry.strip("/") for entry in pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]}
-    links = set(re.findall(r"\]\(([A-Za-z0-9_.-]+\.[A-Za-z]+)(?:#[^)]*)?\)", (REPO / "README.md").read_text(encoding="utf-8")))
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
+    links = set(re.findall(r"\]\(([A-Za-z0-9_.-]+\.[A-Za-z]+)(?:#[^)]*)?\)", readme))
     assert {"CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md"} <= links
     missing = sorted(name for name in links if (REPO / name).is_file() and name not in include)
     assert missing == [], f"add to [tool.hatch.build.targets.sdist] include in pyproject.toml: {missing}"
