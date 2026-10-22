@@ -1945,4 +1945,5 @@ This reference deliberately stays shallow. For more:
 - [docs/BACKUP.md](docs/BACKUP.md) — what `agenttalk backup` guarantees and does not.
 - [CHANGELOG.md](CHANGELOG.md) — release history.
 - [SECURITY.md](SECURITY.md) — security posture and trust model.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to report a problem or propose a change, and what happens to a pull request.
 - [docs/README-ARCHIVE-2026-09.md](docs/README-ARCHIVE-2026-09.md) — the pre-rewrite README, kept for reference (superseded, not maintained).
