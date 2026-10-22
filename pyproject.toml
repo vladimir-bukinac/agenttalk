@@ -65,7 +65,6 @@ include = [
     "/dev-gate.json",
     "/dev-gate-requirements.txt",
     "/CHANGELOG.md",
-    "/docs/LEAD-SETUP-BRIEF.md",
     "/CONTRIBUTING.md",
     "/README.md",
     "/SECURITY.md",

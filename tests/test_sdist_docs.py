@@ -54,7 +54,9 @@ def test_the_links_in_the_readme_and_the_contributing_guide_find_their_files() -
     shipped = "LICENSE"  # the build adds the licence file by itself
     readme_links, guide_links = _local_links("README.md"), _local_links("CONTRIBUTING.md")
     assert {"CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md"} <= readme_links
-    assert {"docs/LEAD-SETUP-BRIEF.md", "SECURITY.md"} <= guide_links
+    assert {"README.md", "SECURITY.md", "LICENSE"} <= guide_links
+    # A page under docs/ is not in the source package, so the guide links to it by its web address.
+    assert not [link for link in guide_links if link.startswith("docs/")]
     nowhere = sorted(link for link in readme_links | guide_links if not (REPO / link).exists())
     assert nowhere == [], f"these links point at files that do not exist: {nowhere}"
     wanted = guide_links | {link for link in readme_links if "/" not in link}
