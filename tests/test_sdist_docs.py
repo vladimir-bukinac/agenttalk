@@ -37,14 +37,27 @@ def test_every_docs_file_a_test_opens_is_in_the_sdist() -> None:
     assert missing == [], f"add to [tool.hatch.build.targets.sdist] include in pyproject.toml: {missing}"
 
 
-def test_every_top_level_file_the_readme_links_is_in_the_sdist() -> None:
-    """The README ships in the sdist, so a link from it to a top-level file must find that file there
+def _local_links(name: str) -> set[str]:
+    """Relative link targets in a Markdown file at the top of the repository (no address, no anchor)."""
+    text = (REPO / name).read_text(encoding="utf-8")
+    links = set(re.findall(r"\]\(([^)\s#]+)(?:#[^)]*)?\)", text))
+    return {link for link in links if not re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", link)}
+
+
+def test_the_links_in_the_readme_and_the_contributing_guide_find_their_files() -> None:
+    """Both files ship in the sdist, so each link must point at a file that exists, and a link from the
+    contributing guide, or from the README to a top-level file, must find that file in the sdist too
     (a checkout always has it, which hides the gap)."""
     tomllib = pytest.importorskip("tomllib")  # Python 3.11+
     pyproject = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
-    include = {entry.strip("/") for entry in pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]}
-    readme = (REPO / "README.md").read_text(encoding="utf-8")
-    links = set(re.findall(r"\]\(([A-Za-z0-9_.-]+\.[A-Za-z]+)(?:#[^)]*)?\)", readme))
-    assert {"CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md"} <= links
-    missing = sorted(name for name in links if (REPO / name).is_file() and name not in include)
+    include = [entry.strip("/") for entry in pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]]
+    shipped = "LICENSE"  # the build adds the licence file by itself
+    readme_links, guide_links = _local_links("README.md"), _local_links("CONTRIBUTING.md")
+    assert {"CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md"} <= readme_links
+    assert {"docs/LEAD-SETUP-BRIEF.md", "SECURITY.md"} <= guide_links
+    nowhere = sorted(link for link in readme_links | guide_links if not (REPO / link).exists())
+    assert nowhere == [], f"these links point at files that do not exist: {nowhere}"
+    wanted = guide_links | {link for link in readme_links if "/" not in link}
+    missing = sorted(link for link in wanted if link != shipped
+                     and not any(link == entry or link.startswith(entry + "/") for entry in include))
     assert missing == [], f"add to [tool.hatch.build.targets.sdist] include in pyproject.toml: {missing}"
