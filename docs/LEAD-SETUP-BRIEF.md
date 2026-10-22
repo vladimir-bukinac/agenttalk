@@ -1320,6 +1320,18 @@ In v0.103.0 (released 2026-10-21):
   prints the domain it stored the note in (issue #508, item 6): step 8.
 - New commands this brief does not use: `relay result`, `lead-routine` and `knowledge pack`.
 
+In v0.104.0 (released 2026-10-22):
+
+- `knowledge pack` can now share lessons between teams, and this brief does not use it. `knowledge pack
+  export --name <name> --out <folder>` writes some of your team's own verified lessons as a pack file for
+  a person to read before it is shared. `knowledge pack load <name> --from <folder>` loads another team's
+  pack from a folder you checked out yourself; agenttalk downloads nothing. `knowledge pack unload <name>
+  --outside` takes such a pack back out. Read a pack file, and take out anything confidential, before you
+  share it or load it.
+- A lesson in a pack may say when it was last confirmed, so its review and expiry dates count from then
+  and not from the day the pack was loaded.
+- No other command used in this brief changed in 0.104.0 (read from the changelog).
+
 **Not run:** `roster rename` and `retire`; `codex-config --enable` and `--disable`;
 `install-skills` without `--dry-run`; `prune`; the challenge skill; a
 Codex timer (none found); and, on macOS, everything (`vm_stat`, the `sh` scripts, the `--copies` environment); on
