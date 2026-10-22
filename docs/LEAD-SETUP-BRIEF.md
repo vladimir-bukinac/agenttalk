@@ -1323,8 +1323,10 @@ In v0.103.0 (released 2026-10-21):
 In v0.104.0 (released 2026-10-22):
 
 - `knowledge pack` can now share lessons between teams, and this brief does not use it. `knowledge pack
-  export --name <name> --out <folder>` writes some of your team's own verified lessons as a pack file for
-  a person to read before it is shared. `knowledge pack load <name> --from <folder>` loads another team's
+  export --name <name> --out <folder> --key <lesson-key>` writes some of your team's own verified lessons as a
+  pack file for a person to read before it is shared. Name the lessons with `--key`, once for each lesson, or
+  with `--tag <tag>` for every verified lesson that carries that tag; one of the two is required.
+  `knowledge pack load <name> --from <folder>` loads another team's
   pack from a folder you checked out yourself; agenttalk downloads nothing. `knowledge pack unload <name>
   --outside` takes such a pack back out. Read a pack file, and take out anything confidential, before you
   share it or load it.
