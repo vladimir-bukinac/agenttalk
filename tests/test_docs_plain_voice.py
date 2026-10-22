@@ -10,6 +10,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 README = REPO / "README.md"
 MANUAL = REPO / "docs" / "AGENTTALK-NEW-USER-MANUAL.md"
+OPERATOR_MANUAL = REPO / "docs" / "USER-MANUAL.md"
 PDF = "docs/AGENTTALK-NEW-USER-MANUAL.pdf"
 PIN = re.compile(r'pip install "git\+https://github\.com/zoolok17/agenttalk\.git@(v\d+\.\d+\.\d+)"')
 
@@ -37,6 +38,19 @@ def test_manual_and_readme_pin_the_same_release() -> None:
     manual_pins = set(PIN.findall(MANUAL.read_text(encoding="utf-8")))
     assert readme_pins and manual_pins
     assert manual_pins == readme_pins
+
+
+def test_every_install_guide_pins_the_same_release() -> None:
+    """The operator manual, like the README and the new-user manual, tells a reader to install
+    the release this tree ships. It once kept an old pin because the test above named two files."""
+    any_pin = re.compile(r"pip install\s+\"?git\+https://github\.com/zoolok17/agenttalk\.git@(v\d+\.\d+\.\d+)")
+    readme_pins = set(any_pin.findall(README.read_text(encoding="utf-8")))
+    assert readme_pins
+    for path in (MANUAL, OPERATOR_MANUAL):
+        pins = set(any_pin.findall(path.read_text(encoding="utf-8")))
+        assert pins == readme_pins, f"{path.name} installs {sorted(pins)}, the README {sorted(readme_pins)}"
+    version = re.search(r'^version = "([^"]+)"', (REPO / "pyproject.toml").read_text(encoding="utf-8"), re.M).group(1)
+    assert readme_pins == {f"v{version}"}
 
 
 def test_stale_pdf_manual_is_not_shipped() -> None:

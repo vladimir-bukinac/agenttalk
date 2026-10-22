@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.104.0] - 2026-10-22
+
+A team can now share what it learned with another team: one team exports some of its own checked lessons as a pack file, and another team loads that pack from a folder it checked out itself. Nothing is downloaded or sent anywhere by agenttalk. Pack lessons can also carry the date they were last confirmed, so old advice no longer looks new. The release also adds two roadmap sections on research into AI that improves itself (documentation only).
+
+After upgrading, preview the skill update with `agenttalk install-skills --dry-run --force`, back up any local edits you want to keep, then run `agenttalk install-skills --force`. The plain command keeps files that differ, so it cannot refresh changed skills. To use a pack from another team, read the pack file first and take out anything confidential, then run `agenttalk knowledge pack load <name> --from <folder>`.
+
 ### Added
 
 - **A team can now share lessons with another team as a lesson pack, and load another team's pack
