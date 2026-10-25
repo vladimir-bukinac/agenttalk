@@ -814,7 +814,7 @@ lands rather than after. Wire up roles directly:
 
 ```powershell
 agenttalk init --here --agents claude-dev,codex-dev,claude-rev,codex-rev,claude-lead
-agenttalk roster set-role claude-dev implementer
+agenttalk roster set-role claude-dev developer
 agenttalk roster set-role codex-rev reviewer
 agenttalk roster set-group devs claude-dev,codex-dev
 agenttalk roster set-group reviewers claude-rev,codex-rev
