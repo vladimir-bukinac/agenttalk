@@ -93,3 +93,54 @@ def test_release_reason_alias_and_file_refused(body_store, tmp_path, capsys):
     assert rc == 2
     assert "use either -m or --file, not both" in capsys.readouterr().err
     assert list(body_store.valid_messages()) == before
+
+
+@pytest.mark.parametrize("command", BODY_COMMANDS, ids=lambda argv: " ".join(argv))
+def test_empty_file_path_conflicts_with_message(command, body_store, monkeypatch, capsys):
+    if command[0] == "request-launch":
+        monkeypatch.setattr(cli, "_resolve_revision", lambda *_args: ("a" * 40, "commit"))
+    monkeypatch.setattr("sys.stdin", None)
+    argv = [*command, "--from", "alpha", "-m", "note", "--file", ""]
+    if command[0] == "progress":
+        argv.extend(["--to-id", body_store.messages_for("alpha")[0].id])
+    before = list(body_store.valid_messages())
+
+    rc = cli.main(["--root", str(body_store.root), *argv])
+
+    assert rc == 2
+    assert "use either -m or --file, not both" in capsys.readouterr().err
+    assert list(body_store.valid_messages()) == before
+
+
+@pytest.mark.parametrize("source", ["--reason", "-m", "--file"])
+def test_release_single_source_preserves_reason(source, body_store, tmp_path, monkeypatch):
+    reason = "operator decided to stop\n"
+    body_file = tmp_path / "reason.txt"
+    body_file.write_text(reason, encoding="utf-8")
+    value = str(body_file) if source == "--file" else reason
+    monkeypatch.setattr("sys.stdin", None)
+    before = {message.id for message in body_store.valid_messages()}
+
+    rc = cli.main(["--root", str(body_store.root), "release", "--from", "alpha", "--to", "beta",
+                   "--relay-human", source, value])
+
+    assert rc == 0
+    sent = [message for message in body_store.valid_messages() if message.id not in before]
+    assert len(sent) == 1
+    message = sent[0]
+    assert (message.sender, message.recipient, message.kind, message.body) == ("alpha", "beta", "release", reason)
+    assert message.meta["authority_reason"] == reason
+    assert message.meta["release_authority"] == "human"
+
+
+@pytest.mark.parametrize("source", ["--reason", "-m"])
+def test_release_empty_inline_reason_sends_nothing(source, body_store, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", None)  # an explicit empty value must not sniff stdin
+    before = list(body_store.valid_messages())
+
+    rc = cli.main(["--root", str(body_store.root), "release", "--from", "alpha", "--to", "beta",
+                   "--relay-human", source, ""])
+
+    assert rc == 2
+    assert "--reason (-m) is required" in capsys.readouterr().err
+    assert list(body_store.valid_messages()) == before
