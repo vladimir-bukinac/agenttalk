@@ -96,11 +96,12 @@ def test_release_reason_alias_and_file_refused(body_store, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("command", BODY_COMMANDS, ids=lambda argv: " ".join(argv))
-def test_empty_file_path_conflicts_with_message(command, body_store, monkeypatch, capsys):
+@pytest.mark.parametrize("message", ["note", ""])
+def test_empty_file_path_conflicts_with_message(command, message, body_store, monkeypatch, capsys):
     if command[0] == "request-launch":
         monkeypatch.setattr(cli, "_resolve_revision", lambda *_args: ("a" * 40, "commit"))
     monkeypatch.setattr("sys.stdin", None)
-    argv = [*command, "--from", "alpha", "-m", "note", "--file", ""]
+    argv = [*command, "--from", "alpha", "-m", message, "--file", ""]
     if command[0] == "progress":
         argv.extend(["--to-id", body_store.messages_for("alpha")[0].id])
     before = list(body_store.valid_messages())
@@ -110,6 +111,23 @@ def test_empty_file_path_conflicts_with_message(command, body_store, monkeypatch
     assert rc == 2
     assert "use either -m or --file, not both" in capsys.readouterr().err
     assert list(body_store.valid_messages()) == before
+
+
+@pytest.mark.parametrize("command, kind, body", [
+    (["rescind", "--to-request", "outgoing"], "rescind", ""),
+    (["reply", "--to-request", "incoming", "--na"], "message", "n/a"),
+])
+@pytest.mark.parametrize("options", [[], ["--file", ""], ["-m", ""]], ids=["bare", "empty-file", "empty-message"])
+def test_optional_body_defaults_preserved_without_stdin(command, kind, body, options, body_store, monkeypatch):
+    monkeypatch.setattr("sys.stdin", None)
+    before = {message.id for message in body_store.valid_messages()}
+
+    rc = cli.main(["--root", str(body_store.root), *command, "--from", "alpha", *options])
+
+    assert rc == 0
+    sent = [message for message in body_store.valid_messages() if message.id not in before]
+    assert len(sent) == 1
+    assert (sent[0].sender, sent[0].recipient, sent[0].kind, sent[0].body) == ("alpha", "beta", kind, body)
 
 
 @pytest.mark.parametrize("source", ["--reason", "-m", "--file"])
