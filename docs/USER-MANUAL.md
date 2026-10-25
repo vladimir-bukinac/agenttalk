@@ -202,8 +202,8 @@ Roster commands are deliberate local admin operations:
 
 ```powershell
 agenttalk roster
-agenttalk roster add claude-dev --role implementer --group devs
-agenttalk roster add codex-dev --role implementer --group devs
+agenttalk roster add claude-dev --role developer --group devs
+agenttalk roster add codex-dev --role developer --group devs
 agenttalk roster add claude-rev --role reviewer --group reviewers
 agenttalk roster add codex-rev --role reviewer --group reviewers
 agenttalk roster add claude-lead
