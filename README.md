@@ -162,7 +162,7 @@ assistant that talks to you.
 
 ## Get started
 
-New here? Give your assistant [`docs/LEAD-SETUP-BRIEF.md`](docs/LEAD-SETUP-BRIEF.md) and ask it to set up
+New here? Give your assistant [`docs/LEAD-SETUP-BRIEF.md`](https://github.com/zoolok17/agenttalk/blob/master/docs/LEAD-SETUP-BRIEF.md) and ask it to set up
 agenttalk: it sets up a first team without the supervisor and tells you what only a person can decide.
 To do it yourself, follow the steps below.
 
@@ -196,7 +196,7 @@ cases](#3-use-cases) shows the shapes a team grows into,
 [the migration method](#4-in-depth-how-a-migration-works) describes the flagship use,
 and [the technical reference](#5-technical-reference-and-faq) has the command tables
 and the FAQ. For a concept-first introduction, read [the new-user
-manual](docs/AGENTTALK-NEW-USER-MANUAL.md).
+manual](https://github.com/zoolok17/agenttalk/blob/master/docs/AGENTTALK-NEW-USER-MANUAL.md).
 
 ---
 
@@ -351,7 +351,7 @@ in the technical reference.
   - optionally, the supervisor, an independent watcher that restarts an assistant
     after a crash or an outage. It runs on Windows only today;
     [#356](https://github.com/zoolok17/agenttalk/issues/356) tracks a monitor for Linux
-    and macOS, and [the supervisor tutorial](docs/supervisor-tutorial.md) explains how
+    and macOS, and [the supervisor tutorial](https://github.com/zoolok17/agenttalk/blob/master/docs/supervisor-tutorial.md) explains how
     to start it.
 
 ### What agenttalk is not
@@ -537,7 +537,7 @@ watcher that restarts a seat after a crash: the lead writes its settings
 whose placeholders the lead renames to the roster names and fills in for each
 teammate, then checks with `agenttalk supervise --bootstrap-check`) and you
 start it with the PowerShell command in
-[the supervisor tutorial](docs/supervisor-tutorial.md). The supervisor then
+[the supervisor tutorial](https://github.com/zoolok17/agenttalk/blob/master/docs/supervisor-tutorial.md). The supervisor then
 starts the seats in its settings itself, so the start script is not needed for
 them. The two-terminal pair in the next section stays the simplest first try.
 
@@ -680,14 +680,14 @@ and give each one only the permissions its work needs.
    where the relay is the operator-facing seat (or the lead when the team has none),
    never by killing its process. If the supervisor runs, put its kill switch in place
    first, or it starts the seat again
-   ([Operations guide](docs/OPERATIONS.md#pause-stop-and-recover)).
+   ([Operations guide](https://github.com/zoolok17/agenttalk/blob/master/docs/OPERATIONS.md#pause-stop-and-recover)).
 4. **Optionally, the supervisor.** It watches from outside and restarts a seat after a
    crash or an outage, within a restart budget. Its scheduled task also starts when you
    log on, so after the computer restarts it brings back the seats in its settings once
    someone logs on. Without it, a crashed seat stays down until someone runs its line of
    the start script again. It needs Windows and PowerShell 7 today
    ([#356](https://github.com/zoolok17/agenttalk/issues/356) tracks Linux and macOS);
-   [the supervisor tutorial](docs/supervisor-tutorial.md) explains how to start it.
+   [the supervisor tutorial](https://github.com/zoolok17/agenttalk/blob/master/docs/supervisor-tutorial.md) explains how to start it.
 
 ### Leads that report to a lead
 
@@ -699,7 +699,7 @@ when a team has one, only it can relay a person's decision to stand a seat down.
 chain of leads is built from that rule:
 
 - **Inside one team,** a separate liaison seat can talk to the person while the lead
-  runs the work ([the split-identity setup](docs/AGENT-MANUAL.md#5-the-v0420-split-identity-lead-loop)).
+  runs the work ([the split-identity setup](https://github.com/zoolok17/agenttalk/blob/master/docs/AGENT-MANUAL.md#5-the-v0420-split-identity-lead-loop)).
 - **Across teams,** each team has its own project and its own lead. For a team whose
   lead reports to another lead, add the upper lead to that team's roster and make it
   that team's operator-facing seat. Escalations from that team then go to the upper
@@ -851,7 +851,7 @@ setting is needed for that since 0.100.0
 record, so that a finished work order is never run twice or lost, is still open,
 [#178](https://github.com/zoolok17/agenttalk/issues/178)). A team that runs
 while you are away also needs the lead's timers, which remind it to check on
-the team. See [docs/supervisor-tutorial.md](docs/supervisor-tutorial.md) for
+the team. See [docs/supervisor-tutorial.md](https://github.com/zoolok17/agenttalk/blob/master/docs/supervisor-tutorial.md) for
 the optional supervisor, and [Technical
 reference](#5-technical-reference-and-faq) for the assurance-gate
 command tables.
@@ -863,7 +863,7 @@ command tables.
 This section is for a team planning a migration of an existing application.
 It explains how to preserve behavior while changing the stack beneath it.
 
-For the method itself, read the [migration playbook](docs/MIGRATION-PLAYBOOK.md) first.
+For the method itself, read the [migration playbook](https://github.com/zoolok17/agenttalk/blob/master/docs/MIGRATION-PLAYBOOK.md) first.
 It collects what our own practice migrations taught, in seven stages, each rule with why it
 matters and how to check it, and starts with the twelve rules to apply first.
 
@@ -894,7 +894,7 @@ The team supplements those results where the application exceeds the adapter's s
 A feature inventory is not automatically a complete list of business capabilities.
 A static call inventory is not a complete runtime call graph.
 Scheduled work, framework binding, and indirect calls need particular care.
-Read the [comprehension limitations](docs/COMPREHENSION-LIMITATIONS.md)
+Read the [comprehension limitations](https://github.com/zoolok17/agenttalk/blob/master/docs/COMPREHENSION-LIMITATIONS.md)
 before treating an empty result as proof that a mechanism does not exist.
 
 At each slice close, capture the integrated revision again.
@@ -915,7 +915,7 @@ Capture metadata can differ between two scans of the same source.
 The team performs the cross-revision reconciliation as part of this method.
 Automatic multi-run fact comparison and richer runtime joins are planned
 but not yet tracked by a dedicated issue. The
-[comprehension design](docs/DESIGN-55-comprehension-plane.md)
+[comprehension design](https://github.com/zoolok17/agenttalk/blob/master/docs/DESIGN-55-comprehension-plane.md)
 describes those boundaries; its proposed surfaces are not an implementation checklist.
 
 The current Java extraction layer has documented parsing and binding limits.
@@ -983,7 +983,7 @@ Reusable documentation explains the method without carrying client identities,
 private machine details, account names, or internal work identifiers.
 Generated structure can also be sensitive even when it contains no source text.
 
-The [development methodology](docs/DEVELOPMENT-METHODOLOGY.md)
+The [development methodology](https://github.com/zoolok17/agenttalk/blob/master/docs/DEVELOPMENT-METHODOLOGY.md)
 explains the reasoning behind mutation checks, cold reads, and retained limitations.
 These practices require explicit execution records.
 Describing a practice does not prove that a particular run followed it.
@@ -1059,7 +1059,7 @@ Reintegrate the fixes and repeat the affected probes at the new revision.
 Recheck the acceptance bar required by the changed scope.
 
 A release remains a separate authorized action.
-The [assurance policy](docs/ASSURANCE.md) explains the project's release evidence
+The [assurance policy](https://github.com/zoolok17/agenttalk/blob/master/docs/ASSURANCE.md) explains the project's release evidence
 and review requirements in more detail.
 Neither a scan nor a favorable review is permission to deploy.
 
@@ -1087,14 +1087,14 @@ One concrete fleet pattern uses a mid-tier model for workers, a
 stronger model for the reviewer, and a different vendor at its highest
 reasoning effort for the closing cold sweep on each slice. This is a
 selected operating profile, not an agenttalk-enforced default — see
-the routing table in the [agent operating manual](docs/AGENT-MANUAL.md)
+the routing table in the [agent operating manual](https://github.com/zoolok17/agenttalk/blob/master/docs/AGENT-MANUAL.md)
 for concrete model/effort choices.
 
 Keep the model profile stable enough to preserve useful working context.
 Change effort when the task's risk or observed difficulty warrants it.
 Do not turn routine coordination into an expensive review task by default.
 
-The [agent operating manual](docs/AGENT-MANUAL.md)
+The [agent operating manual](https://github.com/zoolok17/agenttalk/blob/master/docs/AGENT-MANUAL.md)
 explains effective model selection and session resets.
 An effective model or effort change can reset a wrapped conversation.
 Choose provider-supported profiles and record the settings used for important reviews.
@@ -1122,7 +1122,7 @@ Apply the migration's network policy to child processes and application librarie
 Place temporary output in an owned task area.
 Make child processes inherit that location and verify where they actually write.
 Check files as well as directories when auditing temporary artifacts.
-The [scratch hygiene guide](docs/ops/scratch-hygiene.md) explains cleanup ownership.
+The [scratch hygiene guide](https://github.com/zoolok17/agenttalk/blob/master/docs/ops/scratch-hygiene.md) explains cleanup ownership.
 
 At close, preserve the evidence that must outlive the workspace.
 Stop only the services whose ownership was established for the run.
@@ -1235,7 +1235,7 @@ command for the full set.
 | Command | What it does |
 | --- | --- |
 | `gate {set,list,check,waive}` | Lightweight `HOLD`/`GO` assurance state; `check` exits 3 on an unwaived blocker. |
-| `close {open,ack,draft,counter,check,publish,reopen,acceptance attach,acceptance cold,acceptance successor,list,show}` | Aggregates gates + typed review evidence into one milestone/release verdict. Acceptance open adds `--acceptance-plan PLAN --project-repo PROJECT`; attach takes `--file BUNDLE --from ACTOR`; cold phases commit observations before attachment and reconcile after reveal. Schema-3 cooperative GO requires bound reproducer/independent reviewer accepts and execution/offline/close-out hygiene evidence. `show` lists successor alternatives. Per-attempt operator amendments preserve original failures; recovery roots retain related-change obligations. See the [acceptance guide](docs/ACCEPTANCE.md) and [implementation contract](docs/STEP-ACCEPTANCE-INC1.md). |
+| `close {open,ack,draft,counter,check,publish,reopen,acceptance attach,acceptance cold,acceptance successor,list,show}` | Aggregates gates + typed review evidence into one milestone/release verdict. Acceptance open adds `--acceptance-plan PLAN --project-repo PROJECT`; attach takes `--file BUNDLE --from ACTOR`; cold phases commit observations before attachment and reconcile after reveal. Schema-3 cooperative GO requires bound reproducer/independent reviewer accepts and execution/offline/close-out hygiene evidence. `show` lists successor alternatives. Per-attempt operator amendments preserve original failures; recovery roots retain related-change obligations. See the [acceptance guide](https://github.com/zoolok17/agenttalk/blob/master/docs/ACCEPTANCE.md) and [implementation contract](https://github.com/zoolok17/agenttalk/blob/master/docs/STEP-ACCEPTANCE-INC1.md). |
 | `close signoffs {plan,apply,override}` | Derives specialist sign-off routing by risk class. |
 | `check` | Pre-action HOLD/GO check for one request: `agenttalk check --for <seat> --to-request <request-id> --epoch --gates`. It says stop (exit 3) for a rescinded request; `--epoch` adds a stop for a request sent before the latest epoch barrier, and `--gates` adds one for any gate at HOLD (without these flags neither is checked). A newer request sent in place of an old one does not stop the old one: rescind it. |
 | `lane {assign,check,deliver,status,approve-shared}` | Scoped deliver-gate: bounds a change against the domain registry and other active lanes. |
@@ -1297,7 +1297,7 @@ typed-evidence shape at the milestone level.
 | `codex-config` | `--enable`/`--disable`/`--status` for Codex sandbox approval settings. |
 | `install-skills` | Install bus skills (and the dev-discipline devkit) for Claude and/or Codex. |
 | `hmac-init` | Provision HMAC signing material. |
-| `backup` | (#156) Write a verified out-of-tree snapshot of the store, keyed by project identity; `--json`. See [docs/BACKUP.md](docs/BACKUP.md). |
+| `backup` | (#156) Write a verified out-of-tree snapshot of the store, keyed by project identity; `--json`. See [docs/BACKUP.md](https://github.com/zoolok17/agenttalk/blob/master/docs/BACKUP.md). |
 | `gateway` | `{init,task-install,start,stop,status,...}` — lifecycle of the optional managed model gateway, the supported route for gateway-backed seats: OVH AI Endpoints with the Qwen3.8-27B model, pinned in code. Start it through the managed task; `gateway run` is the internal service entry that task launches, not a supported way to start it by hand. |
 
 **Dashboards**
@@ -1544,7 +1544,7 @@ fresh one is only a sign.
 above. A cool-down (the overloaded and throttled kinds, next section) writes **no** marker at all.
 
 **Technical detail.** The park is recorded in the message's attempt record (see
-[docs/DESIGN.md](docs/DESIGN.md) section 4.9) and published for readers as
+[docs/DESIGN.md](https://github.com/zoolok17/agenttalk/blob/master/docs/DESIGN.md) section 4.9) and published for readers as
 `state/usage-limit-park/<agent>.json` (closed words, numbers and times only). Its health is the
 existing `rate_limited_or_outage` state with the reason `usage_limit_parked`. It replaces an earlier
 proposal (pull request #104, never merged) that read the provider's error text; this one uses
@@ -1936,14 +1936,14 @@ can consume.
 
 This reference deliberately stays shallow. For more:
 
-- [docs/AGENTTALK-NEW-USER-MANUAL.md](docs/AGENTTALK-NEW-USER-MANUAL.md) — concept-first onboarding.
-- [docs/USER-MANUAL.md](docs/USER-MANUAL.md) — operator-facing procedures and examples.
-- [docs/AGENT-MANUAL.md](docs/AGENT-MANUAL.md) — role-keyed operating guide for agents.
-- [docs/DESIGN.md](docs/DESIGN.md) — architecture, rationale, and decision history.
-- [docs/ASSURANCE.md](docs/ASSURANCE.md) — release attestation and gate evidence in depth.
-- [docs/supervisor-tutorial.md](docs/supervisor-tutorial.md) — full supervisor/wrapper walkthrough, including migrating an existing project in and out of supervision.
-- [docs/BACKUP.md](docs/BACKUP.md) — what `agenttalk backup` guarantees and does not.
+- [docs/AGENTTALK-NEW-USER-MANUAL.md](https://github.com/zoolok17/agenttalk/blob/master/docs/AGENTTALK-NEW-USER-MANUAL.md) — concept-first onboarding.
+- [docs/USER-MANUAL.md](https://github.com/zoolok17/agenttalk/blob/master/docs/USER-MANUAL.md) — operator-facing procedures and examples.
+- [docs/AGENT-MANUAL.md](https://github.com/zoolok17/agenttalk/blob/master/docs/AGENT-MANUAL.md) — role-keyed operating guide for agents.
+- [docs/DESIGN.md](https://github.com/zoolok17/agenttalk/blob/master/docs/DESIGN.md) — architecture, rationale, and decision history.
+- [docs/ASSURANCE.md](https://github.com/zoolok17/agenttalk/blob/master/docs/ASSURANCE.md) — release attestation and gate evidence in depth.
+- [docs/supervisor-tutorial.md](https://github.com/zoolok17/agenttalk/blob/master/docs/supervisor-tutorial.md) — full supervisor/wrapper walkthrough, including migrating an existing project in and out of supervision.
+- [docs/BACKUP.md](https://github.com/zoolok17/agenttalk/blob/master/docs/BACKUP.md) — what `agenttalk backup` guarantees and does not.
 - [CHANGELOG.md](CHANGELOG.md) — release history.
 - [SECURITY.md](SECURITY.md) — security posture and trust model.
 - [CONTRIBUTING.md](CONTRIBUTING.md) — how to report a problem or propose a change, and what happens to a pull request.
-- [docs/README-ARCHIVE-2026-09.md](docs/README-ARCHIVE-2026-09.md) — the pre-rewrite README, kept for reference (superseded, not maintained).
+- [docs/README-ARCHIVE-2026-09.md](https://github.com/zoolok17/agenttalk/blob/master/docs/README-ARCHIVE-2026-09.md) — the pre-rewrite README, kept for reference (superseded, not maintained).

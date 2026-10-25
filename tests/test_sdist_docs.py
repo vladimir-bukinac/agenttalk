@@ -45,9 +45,9 @@ def _local_links(name: str) -> set[str]:
 
 
 def test_the_links_in_the_readme_and_the_contributing_guide_find_their_files() -> None:
-    """Both files ship in the sdist, so each link must point at a file that exists, and a link from the
-    contributing guide, or from the README to a top-level file, must find that file in the sdist too
-    (a checkout always has it, which hides the gap)."""
+    """Both files ship in the sdist, so each link must point at a file that exists and that the sdist ships
+    too (a checkout always has it, which hides the gap). A docs/ page is linked by its web address instead,
+    which also works on the PyPI project page: PyPI shows the README there, and no relative link works."""
     tomllib = pytest.importorskip("tomllib")  # Python 3.11+
     pyproject = tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))
     include = [entry.strip("/") for entry in pyproject["tool"]["hatch"]["build"]["targets"]["sdist"]["include"]]
@@ -55,11 +55,10 @@ def test_the_links_in_the_readme_and_the_contributing_guide_find_their_files() -
     readme_links, guide_links = _local_links("README.md"), _local_links("CONTRIBUTING.md")
     assert {"CHANGELOG.md", "SECURITY.md", "CONTRIBUTING.md"} <= readme_links
     assert {"README.md", "SECURITY.md", "LICENSE"} <= guide_links
-    # A page under docs/ is not in the source package, so the guide links to it by its web address.
-    assert not [link for link in guide_links if link.startswith("docs/")]
+    # A page under docs/ may not be in the source package, so both link to it by its web address.
+    assert not [link for link in readme_links | guide_links if link.startswith("docs/")]
     nowhere = sorted(link for link in readme_links | guide_links if not (REPO / link).exists())
     assert nowhere == [], f"these links point at files that do not exist: {nowhere}"
-    wanted = guide_links | {link for link in readme_links if "/" not in link}
-    missing = sorted(link for link in wanted if link != shipped
+    missing = sorted(link for link in readme_links | guide_links if link != shipped
                      and not any(link == entry or link.startswith(entry + "/") for entry in include))
     assert missing == [], f"add to [tool.hatch.build.targets.sdist] include in pyproject.toml: {missing}"
