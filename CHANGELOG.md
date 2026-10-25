@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   those files ship in the source package, but on the PyPI page these three links still do not open.
   A test now fails if the README links a documentation page by its place again, or links any file
   that the source package does not contain.
+  The source package now also contains the field notes page ("from a message bus to a delivery OS"):
+  the package's file list named it, but a pattern in the project's list of ignored files left it out.
 
   What you need to do: nothing.
 
