@@ -119,6 +119,8 @@ def _note_inherited_root(args: argparse.Namespace, store: Store, command: str) -
 
 
 def _read_body(args: argparse.Namespace) -> str:
+    if getattr(args, "message", None) is not None and getattr(args, "file", None) is not None:
+        raise ValueError("use either -m or --file, not both (put the note in the file)")
     # `is not None` (not truthiness): an explicit `-m ""` is a deliberate
     # empty body, so it must short-circuit here rather than fall through to
     # --file / the stdin sniff (which could hang on an open pipe). Whether an
@@ -11741,7 +11743,7 @@ def cmd_release(args: argparse.Namespace) -> int:
             "stands no one down.\n")
         return 2
     reason = (args.message if args.message is not None else None)
-    if reason is None and args.file:
+    if reason is not None or args.file:
         reason = _read_body(args)
     if not (reason and reason.strip()):
         sys.stderr.write(
