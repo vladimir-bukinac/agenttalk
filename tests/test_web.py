@@ -6776,6 +6776,13 @@ def test_health_timeline_ring_window_expiry() -> None:
 
 
 # ---------------------------------------------------------- /api/learning
+# Lesson dates in these fixtures are compared by the product with the REAL clock, so a fixed date a year
+# ahead turns into a test failure on that day (it did for 2027-07-01). Keep "expires" and "review after"
+# of a lesson that must stay current far away; the already-past review_after of the verified lesson stays
+# past whatever the date.
+_NEVER_EXPIRES = "2100-01-01T00:00:00Z"
+_NEVER_DUE = "2099-01-01T00:00:00Z"
+
 
 def _write_verified_lesson(
         store: Store, *, note_id: str = "kn-review-final",
@@ -6793,7 +6800,7 @@ def _write_verified_lesson(
         "owner": "dev",
         "status": kn.LESSON_STATUS_PROPOSED,
         "review_after": "2026-07-01T00:00:00Z",
-        "expires_at": "2027-07-01T00:00:00Z",
+        "expires_at": _NEVER_EXPIRES,
         "applies_to": applies_to or [scope],
     }
     pub = kn.new_publish_event(
@@ -6832,8 +6839,8 @@ def _write_proposed_lesson(store: Store, *, key: str = "review.final-sha") -> di
         "evidence_ref": "rq-proposed-review",
         "owner": "dev",
         "status": kn.LESSON_STATUS_PROPOSED,
-        "review_after": "2027-07-01T00:00:00Z",
-        "expires_at": "2028-07-01T00:00:00Z",
+        "review_after": _NEVER_DUE,
+        "expires_at": _NEVER_EXPIRES,
         "applies_to": ["review"],
     }
     pub = kn.new_publish_event(
@@ -9865,7 +9872,7 @@ def test_api_risk_register_treats_future_onboarding_timestamp_as_unknown(
     ob.append_event(s, ob.new_record_event(
         run_id=run_id, kind=ob.KIND_DRIFT, key="future-drift", status="open",
         summary="from a clock-skewed writer", actor="alpha", blocking=True,
-        at="2030-01-01T00:00:00Z"))
+        at="2100-01-01T00:00:00Z"))
     srv, _t, base = _serve(s)
     try:
         payload = _risk_register(base)
