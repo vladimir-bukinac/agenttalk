@@ -296,7 +296,7 @@ flowchart TD
 ```
 
 1. **Build.** The developer builds in its own worktree, runs the relevant tests, pushes, and replies `done` with `work_head`.
-2. **Cold read.** The lead sends a `read` task, for the exact `work_head`, to a reviewer who did not build or design the change. Give it the commit and the scope, not the builder's reasoning or the verdict you expect. The reviewer:
+2. **Cold read.** Before the read starts, the lead posts "hold, review coming" on the pull request, so the author does not push meanwhile; the verdict comment ends the hold. The lead sends a `read` task, for the exact `work_head`, to a reviewer who did not build or design the change. Give it the commit and the scope, not the builder's reasoning or the verdict you expect. The reviewer:
    - reproduces each blocking finding;
    - files findings by severity;
    - replies GO, FIX or HOLD.
@@ -312,7 +312,7 @@ flowchart TD
 
    Repeat steps 3 and 4 until GO.
 5. **Sweep.** For a wider final pass, for example over a whole release or a set of documents, the lead sends a `sweep` task. Its verdicts are the same.
-6. **Final read.** The lead may say a read is the final one, and says so on the pull request. After it, only a serious finding blocks: a wrong result, lost data, a security problem, or a requirement the change was meant to meet and does not. A blocker found after it goes to the operator to decide, rather than into another round. Every other finding becomes a follow-up issue, linked from the pull request. A requirement that is not met is never turned into a follow-up.
+6. **Final read.** The lead may say a read is the final one, and says so on the pull request. After it, the author pushes only for a P1 or because the lead asks, and only a P1 blocks: a wrong result, lost data, a security problem, or a requirement the change was meant to meet and does not. A blocker found after it goes to the operator to decide, rather than into another round. Every P2 and P3 (and every automated-reviewer comment of those levels) becomes a follow-up issue, linked from the pull request. A requirement that is not met is never turned into a follow-up.
 7. **A read supplied by the second team** (the second team of agents on another machine, with its own lead; it is in the checklist) counts as the cold read or the delta read when it meets the same bar: it names the exact commit, its reader did not write the change, and it is from another vendor than the author when one is available. The lead records on the pull request that it was accepted, and does not send a duplicate read task automatically. The lead sends one when the supplied read does not meet the bar, or when a later push changes what it covered.
 
 A GO counts only for the commit it names: a GO on an earlier commit does not cover a later one.
@@ -341,7 +341,7 @@ Then the lead:
 5. **Merges** the pull request as a merge commit or a fast-forward, never a squash. GitHub also allows squash and rebase merges; the team does not use them. The administrator bypass is how the lead's own change merges (an author cannot approve their own pull request); it carries out the merge once the points above hold and never replaces one of them. The command that later frees the finished checkout (`agenttalk janitor --release`, step 7) proves the merge by commit ancestry, and refuses a squash-merged branch.
 6. **Records the merge,** if the project uses the work board: `agenttalk board verify-merges`. It refuses until the project's configuration names its repository as a `work_repos` entry.
 7. **Releases the finished checkout,** when its author has finished with it (see [4.9](#49-scratch-hygiene)).
-8. **Tells the other open pull requests** that master moved, with a comment on each saying what changed on it. The later sender rebases and runs the checks again, unless the lead has recorded why the change cannot interact. A second-team author is told through its lead.
+8. **Tells the other open pull requests** that master moved, with one comment on each saying what changed on it, which other pull requests touch the same files, and the merge order as one line, posted again whenever the order changes. The later sender rebases and runs the checks again, unless the lead has recorded why the change cannot interact. A second-team author is told through its lead.
 
 ### 4.4 The release ritual
 
