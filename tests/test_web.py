@@ -22,6 +22,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
@@ -6777,6 +6778,19 @@ def test_health_timeline_ring_window_expiry() -> None:
 
 # ---------------------------------------------------------- /api/learning
 
+# The product compares a lesson's review_after / expires_at with ITS notion of "now" (the real clock
+# unless a caller passes one; the HTTP route passes none). These tests get that "now" from a clock the
+# test controls: an instant after the fixtures' review_after (2026-07-01) and before their expiry
+# (2027-07-01 and later), so they give the same answer on any real date, past or future.
+LEARNING_NOW = "2026-07-20T00:00:00Z"
+
+
+@pytest.fixture
+def learning_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = kn._coerce_now
+    monkeypatch.setattr(kn, "_coerce_now", lambda now=None: real(LEARNING_NOW if now is None else now))
+
+
 def _write_verified_lesson(
         store: Store, *, note_id: str = "kn-review-final",
         key: str = "review.final-sha", scope: str = "review",
@@ -6856,6 +6870,7 @@ def _write_proposed_lesson(store: Store, *, key: str = "review.final-sha") -> di
     return pub
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_surfaces_lessons_and_exposure_without_message_body(
         tmp_path: Path) -> None:
     s = Store(tmp_path)
@@ -6915,6 +6930,7 @@ def test_api_learning_surfaces_lessons_and_exposure_without_message_body(
     ("created_at", "2099-12-31T23:59:59Z"),
     ("curator", "attacker"),
 ])
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_ignores_causal_curation_with_forged_display_provenance(
         tmp_path: Path, field: str, forged_value: str) -> None:
     store = Store(tmp_path)
@@ -6944,6 +6960,7 @@ def test_api_learning_ignores_causal_curation_with_forged_display_provenance(
     assert forged_value not in {lesson["created_at"], lesson["curator"]}
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_anchor_evidence_is_pointer_allowlisted(tmp_path: Path) -> None:
     s = Store(tmp_path)
     s.init(["lead", "dev"])
@@ -6980,6 +6997,7 @@ def test_api_learning_anchor_evidence_is_pointer_allowlisted(tmp_path: Path) -> 
     }
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_default_keeps_proposed_updates_separate(tmp_path: Path) -> None:
     s = Store(tmp_path)
     s.init(["lead", "dev"])
@@ -7002,6 +7020,7 @@ def test_api_learning_default_keeps_proposed_updates_separate(tmp_path: Path) ->
     ]
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_route_rejects_bad_filters(tmp_path: Path) -> None:
     s = Store(tmp_path)
     s.init(["lead", "dev"])
@@ -7024,6 +7043,7 @@ def test_api_learning_route_rejects_bad_filters(tmp_path: Path) -> None:
         srv.server_close()
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_empty_state_shape(tmp_path: Path) -> None:
     s = Store(tmp_path)
     s.init(["lead", "dev"])
@@ -7047,6 +7067,7 @@ def test_api_learning_empty_state_shape(tmp_path: Path) -> None:
     assert wire["lessons"] == []
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_keeps_real_legacy_process_lessons_visible(tmp_path: Path) -> None:
     store = Store(tmp_path)
     store.init(["lead", "dev"])
@@ -7067,6 +7088,7 @@ def test_api_learning_keeps_real_legacy_process_lessons_visible(tmp_path: Path) 
     )
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_retired_filter_is_explicit(tmp_path: Path) -> None:
     s = Store(tmp_path)
     s.init(["lead", "dev"])
@@ -7092,6 +7114,7 @@ def test_api_learning_retired_filter_is_explicit(tmp_path: Path) -> None:
     assert payload["lessons"][0]["stale_reasons"] == ["retracted"]
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_route_filters_scope_tag_and_root(tmp_path: Path) -> None:
     a, b = _make_two_stores(tmp_path)
     _write_verified_lesson(
@@ -7129,6 +7152,7 @@ def test_api_learning_route_filters_scope_tag_and_root(tmp_path: Path) -> None:
         srv.server_close()
 
 
+@pytest.mark.usefixtures("learning_clock")
 def test_api_learning_degrades_on_corrupt_ledger_lines(tmp_path: Path) -> None:
     s = Store(tmp_path)
     s.init(["lead", "dev"])
@@ -9846,6 +9870,11 @@ def test_api_risk_register_renders_unlisted_source_generically_instead_of_droppi
         srv.server_close()
 
 
+def _ten_years_ahead() -> str:
+    """A timestamp that is in the future whatever today's date is (it moves with the clock)."""
+    return (datetime.now(timezone.utc) + timedelta(days=3650)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def test_api_risk_register_treats_future_onboarding_timestamp_as_unknown(
     tmp_path: Path,
 ) -> None:
@@ -9865,7 +9894,7 @@ def test_api_risk_register_treats_future_onboarding_timestamp_as_unknown(
     ob.append_event(s, ob.new_record_event(
         run_id=run_id, kind=ob.KIND_DRIFT, key="future-drift", status="open",
         summary="from a clock-skewed writer", actor="alpha", blocking=True,
-        at="2030-01-01T00:00:00Z"))
+        at=_ten_years_ahead()))
     srv, _t, base = _serve(s)
     try:
         payload = _risk_register(base)

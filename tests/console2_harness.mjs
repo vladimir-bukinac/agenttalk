@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import { NOW } from './console2_fixtures.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const STATIC_DIR = path.join(here, '..', 'src', 'agenttalk', 'web_static');
@@ -210,6 +211,19 @@ export function texts(node, out = []) {
 
 // ---------------------------------------------------------- script loading
 
+// The page reads the clock through Date.now() and new Date(). A vm context has its own Date that
+// follows the real clock, so a page left on it ages every fixture date as the real days pass (the
+// 30-day "Later" keep then drops a stored deferral and the tests fail on a day nothing changed).
+// Give the page the fixtures' "now" plus the harness clock instead: the same time base as the
+// server's generated_at in console2_app.mjs, and never the real date.
+export function pageDate(clock) {
+  const at = () => NOW + clock.perf;
+  return class PageDate extends Date {
+    constructor(...args) { if (args.length === 0) super(at()); else super(...args); }
+    static now() { return at(); }
+  };
+}
+
 // Evaluate the model then console2.js inside one vm context with the given globals.
 export function loadConsole(opts) {
   const dom = opts.dom;
@@ -234,6 +248,7 @@ export function loadConsole(opts) {
     console,
     URLSearchParams,
     performance: { now: () => clock.perf },
+    Date: pageDate(clock),
     setTimeout(fn, ms) { const t = { fn, ms }; timers.push(t); return t; },
     clearTimeout(t) { const i = timers.indexOf(t); if (i >= 0) timers.splice(i, 1); },
     ...(opts.noAbort ? {} : { AbortController }),

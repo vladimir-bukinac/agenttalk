@@ -813,13 +813,45 @@ def test_layout_matches_the_spec_grid() -> None:
         "console2_model.test.mjs", "console2_view.test.mjs", "console2_render.test.mjs",
         "console2_data.test.mjs", "console2_stream.test.mjs", "console2_needs_you.test.mjs",
         "console2_board_model.test.mjs", "console2_board_app.test.mjs",
-        "console2_browser_check_wait.test.mjs",
+        "console2_browser_check_wait.test.mjs", "console2_clock.test.mjs",
     ],
 )
 def test_console2_node_tests(script: str) -> None:
     r = subprocess.run(
         ["node", str(REPO_ROOT / "tests" / script)],
         capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=REPO_ROOT, env={**os.environ, "TZ": "UTC"},
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    last = r.stdout.strip().splitlines()[-1]
+    passed, total = re.search(r"(\d+)/(\d+) passed", last).groups()
+    assert passed == total and int(total) > 0, last
+
+
+# The console tests must not depend on the real date (#566: a fixed test "now" aged out of the page's
+# 30-day "Later" keep on 2026-10-26 and two checks failed on every CI leg). tests/console2_clock_shift.mjs
+# moves the real clock by AGENTTALK_TEST_CLOCK_OFFSET_MS; the harness gives the page its own clock, so
+# nothing may change. The cheap scripts run a year and more forward and back; the two slow ones run in the
+# direction that failed for them (stream forward, data back, where its stored visit time is read).
+_CLOCK_DAYS = 400
+_CLOCK_CHEAP = [
+    "console2_model.test.mjs", "console2_view.test.mjs", "console2_render.test.mjs",
+    "console2_needs_you.test.mjs", "console2_board_model.test.mjs", "console2_board_app.test.mjs",
+    "console2_browser_check_wait.test.mjs", "console2_clock.test.mjs",
+]
+_CLOCK_CASES = (
+    [(script, days) for script in _CLOCK_CHEAP for days in (_CLOCK_DAYS, -_CLOCK_DAYS)]
+    + [("console2_stream.test.mjs", _CLOCK_DAYS), ("console2_data.test.mjs", -_CLOCK_DAYS)]
+)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+@pytest.mark.parametrize("script,days", _CLOCK_CASES, ids=[f"{s}@{d:+d}d" for s, d in _CLOCK_CASES])
+def test_console2_node_tests_ignore_the_real_clock(script: str, days: int) -> None:
+    tests_dir = REPO_ROOT / "tests"
+    r = subprocess.run(
+        ["node", "--import", (tests_dir / "console2_clock_shift.mjs").as_uri(), str(tests_dir / script)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=REPO_ROOT,
+        env={**os.environ, "TZ": "UTC", "AGENTTALK_TEST_CLOCK_OFFSET_MS": str(days * 86400 * 1000)},
     )
     assert r.returncode == 0, r.stdout + r.stderr
     last = r.stdout.strip().splitlines()[-1]

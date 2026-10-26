@@ -197,8 +197,8 @@ test('hostile or junk stored state is ignored, never trusted', async () => {
   const junk = [
     'not json', '[]', '"x"', 'null', '{"deferred":[1,2],"snoozed":"x"}',
     '{"deferred":{"proj-a":{"e1":"soon","__proto__":1}},"snoozed":{"proj-a":{"e1":null}}}',
-    '{"deferred":{"proj-a":{"e1":' + (Date.now() - 400 * 86400e3) + '}}}',      // older than 30 days
-    '{"deferred":{"__proto__":{"e1":' + Date.now() + '}}}',
+    '{"deferred":{"proj-a":{"e1":' + (NOW - 400 * 86400e3) + '}}}',      // older than 30 days
+    '{"deferred":{"__proto__":{"e1":' + NOW + '}}}',
   ];
   for (const raw of junk) {
     const { dom } = await boot(server(one), { storage: { [LATER]: raw } });
@@ -877,7 +877,7 @@ test('#298 scope cut: previous-format storage (a plain master-style stuck: entry
   down.health.reason_code = 'worktree_branch_already_checked_out';
   // Exactly what master's deferCard(team, id) writes: a bare team -> id -> timestamp map, no
   // stuckOrigin, no extra keys - as if saved by a build before this card existed as its own entry.
-  const legacy = JSON.stringify({ deferred: { 'proj-a': { ['stuck:' + name]: Date.now() } }, snoozed: {} });
+  const legacy = JSON.stringify({ deferred: { 'proj-a': { ['stuck:' + name]: NOW } }, snoozed: {} });
 
   // 'alpha' is never client-derived stuck, so master's own cleanup (pruneRecovered, unchanged
   // here) is free to retire this legacy entry on its own ordinary terms - that is fine either
