@@ -281,6 +281,8 @@ The devkit is one set of skills for how to do the work itself. Each line names w
 
 Every change that ships is read by someone who did not build it, and every fix is read again.
 
+The contributor-facing version of this cycle, next to the pull-request steps (who acts, what proof each step leaves, what makes it stale), is [the pull-request checklist](https://github.com/zoolok17/agenttalk/blob/master/CONTRIBUTING.md#the-pull-request-checklist). This section is the maintainers' detail; change the two together.
+
 ```mermaid
 flowchart TD
     B["Build (stage build)"] --> R["Cold read (stage read)"]
@@ -310,20 +312,22 @@ flowchart TD
 
    Repeat steps 3 and 4 until GO.
 5. **Sweep.** For a wider final pass, for example over a whole release or a set of documents, the lead sends a `sweep` task. Its verdicts are the same.
-6. **Last round.** The lead may say a fix round is the last one. A blocker found after it goes to the operator to decide, rather than into another round.
+6. **Final read.** The lead may say a read is the final one, and says so on the pull request. After it, only a serious finding blocks: a wrong result, lost data, a security problem, or a requirement the change was meant to meet and does not. A blocker found after it goes to the operator to decide, rather than into another round. Every other finding becomes a follow-up issue, linked from the pull request. A requirement that is not met is never turned into a follow-up.
+7. **A read supplied by the second team** (the second team of agents on another machine, with its own lead; it is in the checklist) counts as the cold read or the delta read when it meets the same bar: it names the exact commit, its reader did not write the change, and it is from another vendor than the author when one is available. The lead records on the pull request that it was accepted, and does not send a duplicate read task automatically. The lead sends one when the supplied read does not meet the bar, or when a later push changes what it covered.
 
 A GO counts only for the commit it names: a GO on an earlier commit does not cover a later one.
 
 ### 4.3 The merge gate
 
-This is the rule as the team practises it now. An ordinary change merges only when all of these hold:
+This is the rule as the team practises it now; [the pull-request checklist](https://github.com/zoolok17/agenttalk/blob/master/CONTRIBUTING.md#the-pull-request-checklist) shows the same path to contributors, with what GitHub enforces and what only the team does. An ordinary change merges only when all of these hold:
 
 1. **One recorded GO for the exact head commit,** from a reviewer who did not build it, and from another vendor when one is available. "Recorded" means a typed reply whose verdict is GO and that finishes the review: a task reply with `status=done`, or an approved review result. A reply with `status=accepted` and a GO verdict leaves the review task open and does not count. Earlier GOs and prose do not count.
 2. **Every automated P0, P1 and P2 comment triaged.** This includes the code host's automated comments on changed lines. Each one has a disposition: fixed, already closed, or the premise is wrong (with the reason, from the code). The other review comments are read and answered.
-3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, that result is for the older merge and does not count: run CI again against the current target (for example by updating the branch) before merging.
+3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, that result is for the older merge and does not count: run CI again against the current target (for example by updating the branch) before merging. This is the one rule. Its only exception: the lead writes on the pull request, before merging, why the change cannot interact with what moved (the files it touches, compared with the files that changed on the target branch). GitHub does not enforce this; its "branch must be up to date" setting is off on purpose.
    - **The full gate:** the test workflow runs the dev gate, agenttalk's own test run (`agenttalk dev-gate`), on Linux, macOS and Windows with Python 3.10 to 3.13: twelve legs and one aggregate. A single green leg is not a pass; only the full aggregate is.
    - **The lighter path:** a change runs only the documentation checks instead when every file it touches is a page under `docs/` or the README, changelog or security page, and no test names that file. README.md and CHANGELOG.md are named by tests, so a change to either runs the full gate.
    - **Also:** the security checks (CodeQL and the client-reference check) and the network-deny checks run as well.
+   - **A pull request from a fork:** the client-reference check cannot run there (the fork's run gets no secrets). It prints HOLD and ends with a failure, so GitHub shows it red; that means "did not run", not a finding and not a pass. The lead runs the check on the pull request's added text, writes the result and the commit it covered on the pull request, and merges with the administrator bypass only after every other point here holds. A maintainer's own run cannot turn the red mark green.
 4. **The request is still current:** `agenttalk check --for <lead> --to-request <id> --epoch --gates` exits 0.
 
 **Two other cases:**
@@ -334,9 +338,10 @@ The older rule in the agents' manual, two distinct reviewers both re-approving t
 
 Then the lead:
 
-5. **Merges** the pull request as a merge commit or a fast-forward, never a squash. The command that later frees the finished checkout (`agenttalk janitor --release`, step 7) proves the merge by commit ancestry, and refuses a squash-merged branch.
+5. **Merges** the pull request as a merge commit or a fast-forward, never a squash. GitHub also allows squash and rebase merges; the team does not use them. The administrator bypass is how the lead's own change merges (an author cannot approve their own pull request); it carries out the merge once the points above hold and never replaces one of them. The command that later frees the finished checkout (`agenttalk janitor --release`, step 7) proves the merge by commit ancestry, and refuses a squash-merged branch.
 6. **Records the merge,** if the project uses the work board: `agenttalk board verify-merges`. It refuses until the project's configuration names its repository as a `work_repos` entry.
 7. **Releases the finished checkout,** when its author has finished with it (see [4.9](#49-scratch-hygiene)).
+8. **Tells the other open pull requests** that master moved, with a comment on each saying what changed on it. The later sender rebases and runs the checks again, unless the lead has recorded why the change cannot interact. A second-team author is told through its lead.
 
 ### 4.4 The release ritual
 
