@@ -1,5 +1,6 @@
 // Fixtures for the console v2 model and render tests: small builders for the shapes
-// /api/state, /api/attention and /api/lead-chat return, plus a fixed "now".
+// /api/state, /api/attention and /api/lead-chat return, plus a fixed "now". The harness gives the page this
+// "now" as its clock (see pageDate in console2_harness.mjs), so no test depends on the real date.
 export const NOW = Date.UTC(2026, 8, 26, 12, 0, 0);
 
 // ISO time `seconds` before NOW.

@@ -1113,6 +1113,19 @@ def test_cli_onboard_limit_and_grouping(tmp_path: Path,
 PAST = "2000-01-01T00:00:00Z"
 FUTURE_REVIEW = "2099-01-01T00:00:00Z"
 FUTURE_EXPIRES = "2100-01-01T00:00:00Z"
+# The lesson helpers and the legacy fixture hold fixed dates (a review date, an expiry date) that the
+# product compares with its notion of "now". Every test here gets that "now" from this controlled
+# clock, so none depends on the real date: it sits after the fixtures' review dates and before their
+# expiry dates, and the distant FUTURE_* dates above stay distant whatever the real date is.
+LESSONS_NOW = "2026-07-20T00:00:00Z"
+
+
+@pytest.fixture(autouse=True)
+def lessons_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = kn._coerce_now
+    monkeypatch.setattr(kn, "_coerce_now", lambda now=None: real(LESSONS_NOW if now is None else now))
+
+
 REAL_LEGACY_LESSONS = (
     Path(__file__).parent / "fixtures" / "knowledge" / "legacy-process-lessons.jsonl"
 )
