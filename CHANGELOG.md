@@ -49,6 +49,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (put the note in the file)", and send nothing. This also covers both options given but empty
   (`-m "" --file ""`). Using only one of them works as before.
 
+- **The user manual and the README now add builders with the role `developer` (#562).** Their
+  examples used `implementer`, a custom role name that the console has no built-in picture for.
+  `developer` is a role name it knows.
+
+  What you will notice: before this, a builder added by copying `implementer` from the manual's
+  `roster add` example or the README's `roster set-role` example got no picture for its role: the
+  older console showed none, and the newer console chose one from the agent's name. Now both
+  examples use `developer`, so a builder added by copying them gets the built-in developer picture
+  in both consoles.
+
 ## [0.104.0] - 2026-10-22
 
 A team can now share what it learned with another team: one team exports some of its own checked lessons as a pack file, and another team loads that pack from a folder it checked out itself. Nothing is downloaded or sent anywhere by agenttalk. Pack lessons can also carry the date they were last confirmed, so old advice no longer looks new. The release also adds two roadmap sections on research into AI that improves itself (documentation only).
