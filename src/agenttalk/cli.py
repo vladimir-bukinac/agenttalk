@@ -118,7 +118,13 @@ def _note_inherited_root(args: argparse.Namespace, store: Store, command: str) -
             f"AGENTTALK_ROOT); for a throwaway store to try commands in: agenttalk scratch store\n")
 
 
+def _validate_body_sources(args: argparse.Namespace) -> None:
+    if getattr(args, "message", None) is not None and getattr(args, "file", None) is not None:
+        raise ValueError("use either -m or --file, not both (put the note in the file)")
+
+
 def _read_body(args: argparse.Namespace) -> str:
+    _validate_body_sources(args)
     # `is not None` (not truthiness): an explicit `-m ""` is a deliberate
     # empty body, so it must short-circuit here rather than fall through to
     # --file / the stdin sniff (which could hang on an open pipe). Whether an
@@ -2317,6 +2323,7 @@ def cmd_rescind(args: argparse.Namespace) -> int:
     # Reason is OPTIONAL: read it only when explicitly provided (-m/--file).
     # No implicit stdin fallback — a bare `rescind` must not block on (or
     # sniff) stdin the way body-required commands may.
+    _validate_body_sources(args)
     reason = ""
     if getattr(args, "message", None) or getattr(args, "file", None):
         reason = _read_body(args)
@@ -11302,6 +11309,7 @@ def cmd_reply(args: argparse.Namespace) -> int:
     # empty-body check entirely in that case.
     body = ""
     if not dry:
+        _validate_body_sources(args)
         if na and not (getattr(args, "message", None) or getattr(args, "file", None)):
             # NA is the one reply whose body may default — and it must
             # never fall into the implicit stdin sniff (the 0.14.0
@@ -11741,7 +11749,7 @@ def cmd_release(args: argparse.Namespace) -> int:
             "stands no one down.\n")
         return 2
     reason = (args.message if args.message is not None else None)
-    if reason is None and args.file:
+    if reason is not None or args.file:
         reason = _read_body(args)
     if not (reason and reason.strip()):
         sys.stderr.write(
