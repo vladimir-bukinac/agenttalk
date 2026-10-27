@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test files, and bridge pytest-xdist 3.8's `_nodeid` group suffixes to pytest
   9.2's structured `_id` before sending collection results to the scheduler.
 
+- Contributors now have separate Bash and PowerShell instructions for running tests outside a trial store, avoiding unrelated nested-store refusals; use the test-shell recipe in `CONTRIBUTING.md` (#561).
+
 - **The README's links to the documentation pages now work in the source package and on the PyPI
   page (#557).** The README is the first page a new user reads. It linked to the pages in the `docs/`
   folder by their place among the project's files. That works in a copy of the whole project, but the
