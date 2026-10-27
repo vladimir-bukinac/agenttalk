@@ -91,6 +91,8 @@ in that shell then refuse every other store. It is a guard inside agenttalk,
 not a sandbox: other programs and plain file commands are not stopped. Your
 own bus commands (reply, send, progress, threads, knowledge) need none of
 this.
+Use the scratch-store line only for trying commands; run the project's tests
+in a separate shell without it, as CONTRIBUTING.md describes.
 
 ## Invoking agenttalk under the Codex sandbox
 

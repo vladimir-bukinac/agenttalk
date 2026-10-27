@@ -207,6 +207,8 @@ on the live bus unless you point it somewhere else. Three things help:
   name. `--shell bash` or
   `--shell powershell` prints only that line, for example for
   `eval "$(agenttalk scratch store --shell bash)"`.
+  Use the scratch-store line only for trying commands; run the project's tests
+  in a separate shell without it, as CONTRIBUTING.md describes.
 - **`init` does not re-init an inherited store.** When the shell only
   inherited a store through `AGENTTALK_ROOT`, `agenttalk init` refuses and
   changes nothing, even when that store has lost its settings file: it could

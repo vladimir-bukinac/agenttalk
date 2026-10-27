@@ -77,9 +77,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The instructions now explain how to run the project's tests in a separate shell (#561).**
 
-  What you will notice: before this, the instructions did not explain how to keep the tests separate
-  from trying commands. Now `CONTRIBUTING.md`, both listen skills and the roles page tell you to run
-  the tests in a separate shell. The checks that protect message stores work as before.
+  What you will notice: before this, `CONTRIBUTING.md` said to close the trial shell first, but did
+  not give the commands for running tests in a clean shell. Now it gives those commands, and the
+  listen and lead skills, manuals, roles page and lead setup brief point you to them. The checks
+  that protect message stores work as before.
 
   What you need to do: run the tests in a separate shell, clear `AGENTTALK_*` and `PYTHONPATH`, and put
   pytest's temporary folder outside any agenttalk store. `CONTRIBUTING.md` gives the Bash and

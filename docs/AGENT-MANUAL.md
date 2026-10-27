@@ -113,6 +113,9 @@ This applies to WRAPPED agents. An interactive human-facing lead (Claude *or* Co
 ### Trying commands without touching the live store
 Your shell inherits the live store through `AGENTTALK_ROOT`, so `init`, `roster` or `supervise` run as a test act on the live bus. Run `agenttalk scratch store` first and put the line it prints before your commands, in the same shell call: it clears the inherited agenttalk settings, and agenttalk's own commands in that shell refuse every other store (a guard inside agenttalk, not a sandbox: other programs are not stopped). `init` refuses a store the shell only inherited, and roster changes other than `add` name the store before they change it. Your own bus commands need none of this.
 
+Use the scratch-store line only for trying commands; run the project's tests
+in a separate shell without it, as CONTRIBUTING.md describes.
+
 ### Store hygiene
 `prune --invalid` quarantines invalid message files into `.agenttalk/quarantine/` (recoverable, never deletes valid files); use `--dry-run` first. `compact` archives a safe prefix of old messages; `doctor` runs health checks (init state, skill freshness, codex-config, heartbeats, knowledge/dead-letter integrity).
 

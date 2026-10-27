@@ -109,7 +109,7 @@ not a sandbox: other programs and plain file commands are not stopped. Your
 own bus commands (reply, send, progress, threads, knowledge) need none of
 this.
 Use the scratch-store line only for trying commands; run the project's tests
-in a separate shell without it.
+in a separate shell without it, as CONTRIBUTING.md describes.
 
 ## Self-join: claim a UNIQUE name
 
