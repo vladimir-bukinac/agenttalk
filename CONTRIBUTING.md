@@ -112,15 +112,15 @@ The lead. A pull request that changes a rule this list summarises (sections 4.2 
   5. Close that shell before you run the tests or any normal team command. The settings from step 3 last until the shell closes, and they make agenttalk refuse every other store.
 - Run the project's tests in a separate shell without the scratch-store line. From the top of your clone, clear `AGENTTALK_*` and `PYTHONPATH`, then use your clone's Python. Put `--basetemp` (pytest's temporary folder) in your scratch area **outside every agenttalk store**, including the trial store. Clearing the settings alone does not help if that folder is still inside a store: `init` refuses to create another store beneath it. pytest installs its own store fence around its temporary folder.
 
-  These examples assume your clone's Python is in `.venv`. Replace the scratch path with an unused folder in your approved scratch area before running them; pytest empties that folder. Replace the test file with the tests that cover your change.
+  These examples assume your clone's Python is in `.venv`. Replace the scratch path with an unused scratch folder you can use, outside any agenttalk store, before running them; pytest empties that folder. Replace the test file with the tests that cover your change.
 
-  Bash (Linux or macOS):
+  Bash (Linux or macOS; open Bash first, even if your usual shell is zsh):
 
   ```bash
   test_scratch=/absolute/path/to/scratch/pytest-agenttalk
   for setting in ${!AGENTTALK_@}; do unset "$setting"; done
   unset PYTHONPATH
-  .venv/bin/python -m pytest tests/test_store_fence.py -p no:cacheprovider --basetemp "$test_scratch"
+  .venv/bin/python -m pytest tests/test_pytest_shell_recipe.py -p no:cacheprovider --basetemp "$test_scratch"
   ```
 
   PowerShell (Windows):
@@ -129,7 +129,7 @@ The lead. A pull request that changes a rule this list summarises (sections 4.2 
   $testScratch = 'C:\path\to\scratch\pytest-agenttalk'
   Get-ChildItem Env:AGENTTALK_* | Remove-Item
   Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
-  & .\.venv\Scripts\python.exe -m pytest tests/test_store_fence.py -p no:cacheprovider --basetemp $testScratch
+  & .\.venv\Scripts\python.exe -m pytest tests/test_pytest_shell_recipe.py -p no:cacheprovider --basetemp $testScratch
   ```
 
   `tests/test_docs_plain_voice.py` reads only `README.md` and `docs/AGENTTALK-NEW-USER-MANUAL.md`, so it says nothing about other pages. For a different document, search `tests/` for its file name to find a test that reads it; if there is none, CI's documentation checks are the check.

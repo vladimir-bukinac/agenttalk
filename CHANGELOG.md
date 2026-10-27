@@ -28,8 +28,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   test files, and bridge pytest-xdist 3.8's `_nodeid` group suffixes to pytest
   9.2's structured `_id` before sending collection results to the scheduler.
 
-- Contributors now have separate Bash and PowerShell instructions for running tests outside a trial store, avoiding unrelated nested-store refusals; use the test-shell recipe in `CONTRIBUTING.md` (#561).
-
 - **The README's links to the documentation pages now work in the source package and on the PyPI
   page (#557).** The README is the first page a new user reads. It linked to the pages in the `docs/`
   folder by their place among the project's files. That works in a copy of the whole project, but the
@@ -76,6 +74,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   older console showed none, and the newer console chose one from the agent's name. Now both
   examples use `developer`, so a builder added by copying them gets the built-in developer picture
   in both consoles.
+
+- **The instructions now explain how to run the project's tests in a separate shell (#561).**
+
+  What you will notice: before this, the instructions did not explain how to keep the tests separate
+  from trying commands. Now `CONTRIBUTING.md`, both listen skills and the roles page tell you to run
+  the tests in a separate shell. The checks that protect message stores work as before.
+
+  What you need to do: run the tests in a separate shell, clear `AGENTTALK_*` and `PYTHONPATH`, and put
+  pytest's temporary folder outside any agenttalk store. `CONTRIBUTING.md` gives the Bash and
+  PowerShell commands.
 
 ## [0.104.0] - 2026-10-22
 
