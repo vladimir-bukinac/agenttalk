@@ -40,6 +40,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeping any `#anchor`. The check is
   `tests/test_sdist_docs.py::test_the_links_in_the_readme_and_the_contributing_guide_find_their_files`.
 
+- **Message commands no longer drop the `--file` text when `-m` is also given (#523).** A lead who put
+  a short note in `-m` next to a long brief in `--file` expected both to arrive. Only the note was sent,
+  and the command still reported success, so the agent started work from a one-line note.
+
+  What you will notice: before this, `send`, `task`, `reply` and the other commands that take a message
+  body sent only the `-m` text. Now they stop with exit code 2 and "use either -m or --file, not both
+  (put the note in the file)", and send nothing. This also covers both options given but empty
+  (`-m "" --file ""`). Using only one of them works as before.
+
 ## [0.104.0] - 2026-10-22
 
 A team can now share what it learned with another team: one team exports some of its own checked lessons as a pack file, and another team loads that pack from a folder it checked out itself. Nothing is downloaded or sent anywhere by agenttalk. Pack lessons can also carry the date they were last confirmed, so old advice no longer looks new. The release also adds two roadmap sections on research into AI that improves itself (documentation only).
