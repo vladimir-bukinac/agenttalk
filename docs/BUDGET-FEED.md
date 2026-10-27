@@ -73,7 +73,7 @@ status snapshot supplies individual reservation amounts, not that total.
 This feed does not calculate a separate total or expose those individual records.
 
 The committed figure has the same definition as
-[the gateway report](QWEN-OVH-TRIAL.md#the-ledger-report-report-version-1).
+[the gateway report](https://github.com/zoolok17/agenttalk/blob/master/docs/QWEN-OVH-TRIAL.md#the-ledger-report-report-version-1).
 An unresolved reservation without a recorded charge is not committed money;
 an uncertain attempt with an already recorded charge is included. The answer
 contains no agent names, message or request identifiers, credentials, token

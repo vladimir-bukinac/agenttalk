@@ -1181,7 +1181,7 @@ to another folder. The export never changes or deletes that file.
 
 The pack is a list of candidates, not a finished product. Read every line before you share it, and
 take out anything confidential: client names, client systems and paths, secrets, another team's
-product details (see [playbook rule L5](playbook/learning.md)).
+product details (see [playbook rule L5](https://github.com/zoolok17/agenttalk/blob/master/docs/playbook/learning.md)).
 
 To load a pack from a folder (the receiving team):
 
