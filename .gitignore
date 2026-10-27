@@ -57,6 +57,8 @@ htmlcov/
 /dogfood-test-plan.html
 /docs/*.zip
 /docs/agenttalk-*.md
+# ...except the field notes: git tracks them and the sdist include list ships them.
+!/docs/agenttalk-delivery-os-field-notes.md
 /docs/audit-wrapped-*.md
 /docs/full-codebase-review-*.md
 /docs/skill_proposals.md

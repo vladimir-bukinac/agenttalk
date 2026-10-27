@@ -10,6 +10,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The README's links to the documentation pages now work in the source package and on the PyPI
+  page (#557).** The README is the first page a new user reads. It linked to the pages in the `docs/`
+  folder by their place among the project's files. That works in a copy of the whole project, but the
+  source package (the archive of the source files that each release publishes, also called the sdist)
+  contains only some of those pages. PyPI shows the README as the project's page, and there a link by
+  place does not open at all.
+
+  What you will notice: before this, 8 of the pages the README links to, such as the backup guide and
+  the lead setup brief, were missing from the source package, so their links led nowhere, and on the
+  PyPI page none of the README's documentation links opened. Now each of the README's 28 links to a
+  documentation page is a full web address on GitHub, so it opens wherever you read the README. Three
+  pages that ship in the source package had the same problem (the budget feed page, the design page
+  and the user manual each linked one page that does not ship), and their links are web addresses now
+  too. The web addresses show the latest version of each page, not the version you installed. The
+  README's links to the changelog, the security policy and the contributing guide stay as they were:
+  those files ship in the source package, but on the PyPI page these three links still do not open.
+  A test now fails if the README links a documentation page by its place again, or links any file
+  that the source package does not contain.
+  The source package now also contains the field notes page ("from a message bus to a delivery OS"):
+  the package's file list named it, but a pattern in the project's list of ignored files left it out.
+
+  What you need to do: nothing.
+
+  Technical details: `README.md` (28 links), `docs/BUDGET-FEED.md`, `docs/DESIGN.md` and
+  `docs/USER-MANUAL.md` (one link each) now use `https://github.com/zoolok17/agenttalk/blob/master/docs/...`,
+  keeping any `#anchor`. The check is
+  `tests/test_sdist_docs.py::test_the_links_in_the_readme_and_the_contributing_guide_find_their_files`.
+
 ## [0.104.0] - 2026-10-22
 
 A team can now share what it learned with another team: one team exports some of its own checked lessons as a pack file, and another team loads that pack from a folder it checked out itself. Nothing is downloaded or sent anywhere by agenttalk. Pack lessons can also carry the date they were last confirmed, so old advice no longer looks new. The release also adds two roadmap sections on research into AI that improves itself (documentation only).
