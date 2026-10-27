@@ -281,6 +281,8 @@ The devkit is one set of skills for how to do the work itself. Each line names w
 
 Every change that ships is read by someone who did not build it, and every fix is read again.
 
+The contributor-facing version of this cycle, next to the pull-request steps (who acts, what proof each step leaves, what makes it stale), is [the pull-request checklist](https://github.com/zoolok17/agenttalk/blob/master/CONTRIBUTING.md#the-pull-request-checklist). This section is the maintainers' detail; change the two together.
+
 ```mermaid
 flowchart TD
     B["Build (stage build)"] --> R["Cold read (stage read)"]
@@ -294,7 +296,7 @@ flowchart TD
 ```
 
 1. **Build.** The developer builds in its own worktree, runs the relevant tests, pushes, and replies `done` with `work_head`.
-2. **Cold read.** The lead sends a `read` task, for the exact `work_head`, to a reviewer who did not build or design the change. Give it the commit and the scope, not the builder's reasoning or the verdict you expect. The reviewer:
+2. **Cold read.** Before the read starts, the lead posts "hold, review coming" on the pull request, so the author does not push meanwhile; the verdict comment ends the hold. The lead sends a `read` task, for the exact `work_head`, to a reviewer who did not build or design the change. Give it the commit and the scope, not the builder's reasoning or the verdict you expect. The reviewer:
    - reproduces each blocking finding;
    - files findings by severity;
    - replies GO, FIX or HOLD.
@@ -310,20 +312,22 @@ flowchart TD
 
    Repeat steps 3 and 4 until GO.
 5. **Sweep.** For a wider final pass, for example over a whole release or a set of documents, the lead sends a `sweep` task. Its verdicts are the same.
-6. **Last round.** The lead may say a fix round is the last one. A blocker found after it goes to the operator to decide, rather than into another round.
+6. **Final read.** The lead may say that an existing read is the final one, in a comment on the pull request; that labels the read and needs no extra approval and no extra read. The late-findings rule applies, in the same words as [the checklist](https://github.com/zoolok17/agenttalk/blob/master/CONTRIBUTING.md#the-pull-request-checklist): before the final read, every P0, P1 and P2 finding (ours or the automated reviewer's) is fixed, already closed or disproved, in writing. After a read is named final, only a P0 or P1 blocks; a P2 or P3 gets a written disposition (fixed, disproved, or moved to a linked follow-up issue with a reason). A finding of any tag always blocks if it shows that a stated requirement is not met, or if it is a safety or privacy problem. A blocker found after the final read goes to the operator to decide, rather than into another round. After the final read the author pushes only for a P0 or P1, or because the lead asks.
+7. **A read supplied by the second team** (the second team of agents on another machine, with its own lead; it is in the checklist) counts as the cold read or the delta read only when it meets the same eligibility as step 2: its reader is not the change's author, designer or builder, it is from another vendor than the author when one is available, and it names the exact commit. The lead records the accepted outside GO as typed evidence (a recorded GO as defined in [4.3](#43-the-merge-gate), naming the outside reader and the commit) and says so on the pull request. The contributor needs no private tools and no extra review, and the lead does not send a duplicate read task automatically. The lead sends one when the supplied read does not meet the bar, or when a later push changes what it covered.
 
-A GO counts only for the commit it names: a GO on an earlier commit does not cover a later one.
+A GO counts only for the commit it names: a GO on an earlier commit does not cover a later one. The one exception, a push that only brings the target branch in, is defined in [4.3](#43-the-merge-gate), step 1.
 
 ### 4.3 The merge gate
 
-This is the rule as the team practises it now. An ordinary change merges only when all of these hold:
+This is the rule as the team practises it now; [the pull-request checklist](https://github.com/zoolok17/agenttalk/blob/master/CONTRIBUTING.md#the-pull-request-checklist) shows the same path to contributors, with what GitHub enforces and what only the team does. An ordinary change merges only when all of these hold:
 
-1. **One recorded GO for the exact head commit,** from a reviewer who did not build it, and from another vendor when one is available. "Recorded" means a typed reply whose verdict is GO and that finishes the review: a task reply with `status=done`, or an approved review result. A reply with `status=accepted` and a GO verdict leaves the review task open and does not count. Earlier GOs and prose do not count.
-2. **Every automated P0, P1 and P2 comment triaged.** This includes the code host's automated comments on changed lines. Each one has a disposition: fixed, already closed, or the premise is wrong (with the reason, from the code). The other review comments are read and answered.
-3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, that result is for the older merge and does not count: run CI again against the current target (for example by updating the branch) before merging.
+1. **One recorded GO for the exact head commit,** from a reviewer who did not build it, and from another vendor when one is available. "Recorded" means a typed reply whose verdict is GO and that finishes the review: a task reply with `status=done`, or an approved review result. A reply with `status=accepted` and a GO verdict leaves the review task open and does not count. Earlier GOs and prose do not count. The one exception: after a push that only brings the target branch into the pull request, an earlier GO stands only if the lead records that the pull request's own changed lines are byte-identical before and after, for example by comparing `git patch-id --verbatim` of both diffs, each against its merge base, or by a byte comparison of the changed lines. Plain `git patch-id` ignores whitespace, and whitespace can change what code does, so it is not proof. Any difference, or any doubt, means the change is read again. GitHub's own approval is renewed as the ruleset requires.
+2. **Every automated P0, P1 and P2 comment has a disposition, by the late-findings rule.** This includes the code host's automated comments on changed lines. Before the final read, each one is fixed, already closed, or the premise is wrong (with the reason, from the code), in writing. After a read is named final (see [4.2](#42-the-review-cycle), step 6), only a P0 or P1 blocks: a P2 or P3 gets a written disposition (fixed, disproved, or moved to a linked follow-up issue with a reason), and a finding of any tag that shows a stated requirement is not met, or a safety or privacy problem, always blocks. The other review comments are read and answered.
+3. **CI green for that head.** On a pull request, CI tests a temporary merge of the head into the target branch, not the head commit by itself, so a green run shows that this merge passes. If the target branch has moved since the run, that result is for the older merge and does not count: run CI again against the current target (for example by updating the branch) before merging. This is the one rule. Its only exception: the lead writes on the pull request, before merging, why the change cannot interact with what moved (the files it touches, compared with the files that changed on the target branch). A push that only brings the target branch in is a new head, so CI runs on it with no exception; whether the earlier GO stands is a separate question, answered in step 1. GitHub does not enforce this; its "branch must be up to date" setting is off on purpose.
    - **The full gate:** the test workflow runs the dev gate, agenttalk's own test run (`agenttalk dev-gate`), on Linux, macOS and Windows with Python 3.10 to 3.13: twelve legs and one aggregate. A single green leg is not a pass; only the full aggregate is.
    - **The lighter path:** a change runs only the documentation checks instead when every file it touches is a page under `docs/` or the README, changelog or security page, and no test names that file. README.md and CHANGELOG.md are named by tests, so a change to either runs the full gate.
    - **Also:** the security checks (CodeQL and the client-reference check) and the network-deny checks run as well.
+   - **A pull request from a fork:** the client-reference check cannot run there (the fork's run gets no secrets). It prints HOLD and ends with a failure, so GitHub shows it red; that means "did not run", not a finding and not a pass. The route: (a) the lead runs both private client-reference checks: the diff check runs on the contributor's change (given the base and head commit IDs), and the full-tree check runs on the proposed merge of that change with the current master, using the checking script and the list of terms as they are in that merge, the same version the hosted job checks; the lead takes the merge from GitHub's own merge ref for the pull request (`refs/pull/<number>/merge`) or makes it locally from the head and the current master; the lead records on the pull request the base and head commit IDs, the commit ID of the merge that was scanned, and both results; both must be clean, and any finding or a check that cannot run stops the merge; if master moves before the merge, the full-tree check runs again on the new proposed merge, as the rerun rule says; (b) the lead posts the GitHub approval on the contributor's last push; (c) only then may the lead merge through the administrator bypass, and only because the hosted check cannot run on a fork. A maintainer's own run cannot turn the red mark green, and the bypass never replaces one of the points above.
 4. **The request is still current:** `agenttalk check --for <lead> --to-request <id> --epoch --gates` exits 0.
 
 **Two other cases:**
@@ -334,9 +338,10 @@ The older rule in the agents' manual, two distinct reviewers both re-approving t
 
 Then the lead:
 
-5. **Merges** the pull request as a merge commit or a fast-forward, never a squash. The command that later frees the finished checkout (`agenttalk janitor --release`, step 7) proves the merge by commit ancestry, and refuses a squash-merged branch.
+5. **Merges** the pull request as a merge commit. GitHub allows only merge commits on this repository (the repository settings have squash and rebase merges off, and the master ruleset's allowed merge method is merge only), so a squash or a rebase merge cannot be used. The administrator bypass is how the lead's own change merges (an author cannot approve their own pull request); it carries out the merge once the points above hold and never replaces one of them. The command that later frees the finished checkout (`agenttalk janitor --release`, step 7) proves the merge by commit ancestry, and refuses a squash-merged branch.
 6. **Records the merge,** if the project uses the work board: `agenttalk board verify-merges`. It refuses until the project's configuration names its repository as a `work_repos` entry.
 7. **Releases the finished checkout,** when its author has finished with it (see [4.9](#49-scratch-hygiene)).
+8. **Tells the other open pull requests** that master moved, with one comment on each saying what changed on it, which other pull requests touch the same files, and the merge order as one line, posted again whenever the order changes. The later sender rebases and runs the checks again, unless the lead has recorded why the change cannot interact. A second-team author is told through its lead.
 
 ### 4.4 The release ritual
 
@@ -348,7 +353,7 @@ A release is its own small change, not a side effect of a green gate.
    - updates the roadmap's baseline;
    - turns the changelog's "Unreleased" heading into the new version and date, with a plain-words summary.
 2. **Open a pull request,** and pass the merge gate ([4.3](#43-the-merge-gate)) on that exact commit.
-3. **Merge it, then tag the new head of the main branch** `v<version>` and push the tag. That head is the merge commit or, after a fast-forward, the release commit itself.
+3. **Merge it, then tag the new head of the main branch** `v<version>` and push the tag. That head is the merge commit.
 4. **Publish the GitHub release** for the tag, and watch its CI to green before calling the release done.
 5. **Build the new pinned runtime** and switch the seats onto it. The operations guide covers this.
 
