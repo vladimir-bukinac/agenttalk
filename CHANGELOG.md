@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeping any `#anchor`. The check is
   `tests/test_sdist_docs.py::test_the_links_in_the_readme_and_the_contributing_guide_find_their_files`.
 
-- **Message commands no longer drop the `--file` text when `-m` is also given (#560).** A lead who put
+- **Message commands no longer drop the `--file` text when `-m` is also given (#523).** A lead who put
   a short note in `-m` next to a long brief in `--file` expected both to arrive. Only the note was sent,
   and the command still reported success, so the agent started work from a one-line note.
 
