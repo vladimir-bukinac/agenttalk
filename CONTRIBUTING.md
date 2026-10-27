@@ -67,7 +67,7 @@ If master has moved since the last full run on this head, run the checks again b
 
 #### A pull request from a fork
 The client-reference check needs a secret that a fork's run never receives, so it prints HOLD and ends with a failure. GitHub shows a failure, not "hold", and no maintainer run can change that mark; Dependabot's pull requests end the same way. The route is:
-1. The lead runs the private client-reference check on the final diff and records the base and head commit IDs on the pull request. The result must be clean: any finding, or a check that cannot run, stops the merge.
+1. The lead runs both private client-reference checks on the contributor's final head: the diff check (given the base and head commit IDs) and the full-tree check of that head's checkout. The hosted job runs both, so a diff check alone is not enough: a change can leave its own added lines clean while text already in an unchanged file now fails. The lead records the base and head commit IDs and both results on the pull request. Both must be clean: any finding, or a check that cannot run, stops the merge.
 2. The lead posts the GitHub approval on the contributor's last push.
 3. Only then may the lead merge through the administrator bypass, and only because the hosted check cannot run on a fork. The bypass never replaces a row of the table.
 
