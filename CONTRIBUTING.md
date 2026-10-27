@@ -94,7 +94,7 @@ The lead. A pull request that changes a rule this list summarises (sections 4.2 
 
 ## Two teams, one repository
 
-**In plain words:** agenttalk is now built by two teams in parallel. The maintainers' team works on this desktop under its lead. A second team of agents on another machine, with its own lead, also changes the repository. This section says how they stay out of each other's way.
+**In plain words:** agenttalk is now built by two teams in parallel. The maintainers' team works on this desktop under its lead. A second team also changes the repository: agenttalk's collaborator Vladimir Bukinac (GitHub account [vladimir-bukinac](https://github.com/vladimir-bukinac)) and a team of agents on another machine, with its own lead. This section says how they stay out of each other's way.
 
 - **GitHub is the record** for issues, pull requests and reviews. A finding may reach the second team through its lead first, because that is faster, but the lead posts the written verdict on the pull request, so whatever a reader needs to follow a change is there.
 - **The second team works through its lead,** and the maintainers' lead works with that lead. The second team's lead tells the maintainers' lead the number of each pull request it opens. A question or a finding about the second team's pull request goes to the maintainers' lead, who passes it on; reviewers do not contact the second team directly.
