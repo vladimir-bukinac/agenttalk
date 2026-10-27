@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   keeping any `#anchor`. The check is
   `tests/test_sdist_docs.py::test_the_links_in_the_readme_and_the_contributing_guide_find_their_files`.
 
-- **Message commands no longer drop the `--file` text when `-m` is also given (#523).** A lead who put
+- **Message commands no longer drop the `--file` text when `-m` is also given (#560).** A lead who put
   a short note in `-m` next to a long brief in `--file` expected both to arrive. Only the note was sent,
   and the command still reported success, so the agent started work from a one-line note.
 
@@ -50,13 +50,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`-m "" --file ""`). Using only one of them works as before.
 
 - **The user manual and the README now add builders with the role `developer` (#562).** Their
-  examples suggested `implementer`, a custom role without a built-in picture, and the console only
-  has pictures for its own role names, such as `developer`.
+  examples used `implementer`, a custom role name that the console has no built-in picture for.
+  `developer` is a role name it knows.
 
-  What you will notice: before this, a builder added by copying the role `implementer` from the
-  manual's `roster add` example or the README's `roster set-role` example showed in the console
-  without a picture. Now both examples use `developer`, so a builder added by copying them gets
-  the developer picture.
+  What you will notice: before this, a builder added by copying `implementer` from the manual's
+  `roster add` example or the README's `roster set-role` example got no picture for its role: the
+  older console showed none, and the newer console chose one from the agent's name. Now both
+  examples use `developer`, so a builder added by copying them gets the built-in developer picture
+  in both consoles.
 
 ## [0.104.0] - 2026-10-22
 
