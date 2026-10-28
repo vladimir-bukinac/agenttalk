@@ -456,10 +456,10 @@ lessons before work). State these yourself as well:
   that git cannot read. `Add-Content -Encoding ascii` is safe in every PowerShell.
 - **The safety choice goes in this file too.** Ask your human the question in step 10 now,
   so the answer can be written here.
-- **Tests use throwaway stores.** `agenttalk scratch store` makes one inside the seat's
-  scratch folder and prints a line that points the shell at it. The commands in that
-  shell then refuse every other store. It protects the live store from a test, but it
-  is not a sandbox for other programs.
+- **Trying commands by hand needs a throwaway store.** `agenttalk scratch store` makes
+  one inside the seat's scratch folder and prints a line that points the shell at it.
+  The commands in that shell then refuse every other store. It protects the live store
+  during a hand trial, but it is not a sandbox for other programs.
   Use the scratch-store line only for trying commands; run the project's tests
   in a separate shell without it, as CONTRIBUTING.md describes.
 - **Merges, releases, deletes and anything that spends money** are done by you, and only
