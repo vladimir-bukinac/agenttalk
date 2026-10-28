@@ -258,7 +258,8 @@ def test_staged_identity_checks_each_observation(tmp_path, monkeypatch, phase, f
         opened.append(fd)
         return fd
     monkeypatch.setattr(os, "open", open_file)
-    monkeypatch.setattr(os, "fstat", lambda fd: changed(original_stat(fd)) if phase == "opened" else original_stat(fd))
+    monkeypatch.setattr(os, "fstat", lambda fd: changed(original_stat(fd))
+                        if phase == "opened" and fd in opened else original_stat(fd))
     monkeypatch.setattr(Path, "lstat", lambda p, *a, **k: changed(original_lstat(p, *a, **k))
                         if phase == "after" and opened and p == path else original_lstat(p, *a, **k))
     with pytest.raises(A.StagedInputChangedError):
@@ -284,7 +285,8 @@ def test_mid_open_unsafe_swap_is_not_retryable(tmp_path, monkeypatch, phase, fau
         opened.append(fd)
         return fd
     monkeypatch.setattr(os, "open", open_file)
-    monkeypatch.setattr(os, "fstat", lambda fd: changed(original_stat(fd)) if phase == "opened" else original_stat(fd))
+    monkeypatch.setattr(os, "fstat", lambda fd: changed(original_stat(fd))
+                        if phase == "opened" and fd in opened else original_stat(fd))
     monkeypatch.setattr(Path, "lstat", lambda p, *a, **k: changed(original_lstat(p, *a, **k))
                         if phase == "after" and opened and p == path else original_lstat(p, *a, **k))
     pin = {"id": "pin", "path": path.name, "size": 9, "sha256": A._hash(b"synthetic")}
