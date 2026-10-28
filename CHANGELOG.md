@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Development checks work with pytest 9.2.0.** Updating the test runner caused
+  five checks to fail and stopped related tests from staying on one worker.
+
+  What you will notice: before this, the newer runner rejected incomplete fake
+  file information, and tests that needed to run together could be split across
+  workers. Now the file-information fakes affect only the files under test, and
+  the test setup passes group names to the newer runner correctly. The checks
+  still reject changed or unsafe input files and verify that grouped tests run
+  together. Both pytest 9.1.1 and 9.2.0 remain supported.
+
+  What you need to do: nothing. No test-tool version cap is added.
+
+  Technical details: restrict the acceptance-policy `os.fstat` patches to opened
+  test files, and bridge pytest-xdist 3.8's `_nodeid` group suffixes to pytest
+  9.2's structured `_id` before sending collection results to the scheduler.
+
 - **The README's links to the documentation pages now work in the source package and on the PyPI
   page (#557).** The README is the first page a new user reads. It linked to the pages in the `docs/`
   folder by their place among the project's files. That works in a copy of the whole project, but the

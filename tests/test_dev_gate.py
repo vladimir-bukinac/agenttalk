@@ -587,7 +587,19 @@ def test_run_pytest_mode_adds_posix_parallel_args_only_when_the_env_var_is_set(
     assert argv[argv.index("--dist") + 1] == "loadgroup"
 
 
-def test_xdist_grouping_is_active_under_the_gates_real_pytest_invocation(tmp_path: Path) -> None:
+@pytest.mark.parametrize("node_ids", [
+    (
+        "tests/test_dev_gate.py::test_manifest_declares_real_ci_matrix_separately_from_local_interpreters",
+        "tests/test_dev_gate.py::test_committed_pytest_timeout_has_wheel_leg_headroom",
+    ),
+    (
+        "tests/test_acceptance_policy.py::test_staged_identity_checks_each_observation[opened-st_dev]",
+        "tests/test_acceptance_policy.py::test_staged_identity_checks_each_observation[opened-st_ino]",
+    ),
+], ids=["plain", "parametrized"])
+def test_xdist_grouping_is_active_under_the_gates_real_pytest_invocation(
+    tmp_path: Path, node_ids: tuple[str, ...],
+) -> None:
     """#250 fix round 1 (codex cold read dev-5, reproduced directly): the
     dev gate disables plugin autoload and loads xdist explicitly via
     `-p xdist.plugin` - that registers under the name "xdist.plugin", not
@@ -609,10 +621,6 @@ def test_xdist_grouping_is_active_under_the_gates_real_pytest_invocation(tmp_pat
     schedule individually, with no @-suffix, and were free to land on
     either worker."""
     env = {**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", "PYTHONPATH": str(Path.cwd() / "src")}
-    node_ids = (
-        "tests/test_dev_gate.py::test_manifest_declares_real_ci_matrix_separately_from_local_interpreters",
-        "tests/test_dev_gate.py::test_committed_pytest_timeout_has_wheel_leg_headroom",
-    )
     completed = subprocess.run(
         [
             sys.executable, "-m", "pytest",
@@ -638,7 +646,7 @@ def test_xdist_grouping_is_active_under_the_gates_real_pytest_invocation(tmp_pat
     for line in report_lines:
         worker = line.split("]", 1)[0].removeprefix("[")
         workers.add(worker)
-        assert "@" in line and "test_dev_gate.py" in line.split("@", 1)[1], (
+        assert f"@{node_ids[0].split('::', 1)[0]}" in line.replace("\\", "/"), (
             f"missing the per-file xdist_group suffix in the reported test id: {line!r}"
         )
     assert len(workers) == 1, f"the two tests landed on DIFFERENT workers: {report_lines}"

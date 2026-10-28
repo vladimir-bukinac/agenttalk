@@ -701,3 +701,15 @@ def pytest_collection_modifyitems(config, items) -> None:
         for item in items:
             group = _xdist_group_for(item) or item.location[0]
             item.add_marker(pytest.mark.xdist_group(name=group))
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_finish(session) -> None:
+    # xdist 3.8 writes group suffixes to _nodeid; pytest 9.2 reads _id instead.
+    # Copy them before xdist sends the collected IDs to its scheduler. Otherwise
+    # tests sharing a resource can run on different workers despite their markers.
+    if getattr(session.config.option, "loadgroup", False):
+        for item in session.items:
+            grouped = getattr(item, "_nodeid", item.nodeid)
+            if hasattr(item, "_id") and grouped != item.nodeid:
+                item._id = type(item.id).parse(grouped)
