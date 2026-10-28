@@ -981,6 +981,8 @@ Append new decisions here (dated). Keep each short: decision, why, alternatives.
 
 ## 6. How we work (process)
 
+**Out of date (noted 2026-10-28).** The first three points below describe the process as it was in July 2026: two reviewers, a local lead gate on Python 3.10 and 3.14, fast-forward merges and an assurance ledger entry for every release. They no longer apply. The rules in force are [the pull-request checklist](../CONTRIBUTING.md#the-pull-request-checklist) and [the review cycle, merge gate and release ritual](ROLES-SKILLS-PROCEDURES.md#42-the-review-cycle) (sections 4.2 to 4.4); section 1 of [ASSURANCE.md](ASSURANCE.md) sums them up.
+
 - **Per-phase cadence:** architect designs → lead gates the design → builder
   implements in an **isolated git worktree** → cross-review (≥2 distinct
   reviewers) → lead gate → fast-forward merge → release.
