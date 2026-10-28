@@ -42,6 +42,8 @@ flowchart LR
 - **Only a marked release stands a seat down.** A seat stops listening only on a `release` or `end` message that carries the operator's authority mark. Idle means keep listening.
 - **Inside a wrapped turn, leave the inbox alone.** A seat run by the wrapper (`agenttalk wrap --loop`) never runs `sync`, `threads`, `drain`, `recv`, `wait` or `ack`; the wrapper owns them.
 - **Trying commands needs a throwaway store.** A seat's shell points at the live store. Run `agenttalk scratch store --for <agent>` first and put the line it prints before the commands you are trying.
+  Use the scratch-store line only for trying commands; run the project's tests
+  in a separate shell without it, as CONTRIBUTING.md describes.
 
 ## 2. Roles
 

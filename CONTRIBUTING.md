@@ -110,7 +110,29 @@ The lead. A pull request that changes a rule this list summarises (sections 4.2 
   3. Run `python -m agenttalk scratch store --for <your agent name> --shell bash` (or `--shell powershell`), then run the one line it prints. It points agenttalk at a throwaway store, so your trial does not write to the team's live store.
   4. Run your trial commands.
   5. Close that shell before you run the tests or any normal team command. The settings from step 3 last until the shell closes, and they make agenttalk refuse every other store.
-- Run the tests that cover what you changed: `python -m pytest tests/<the file>`. `tests/test_docs_plain_voice.py` reads only `README.md` and `docs/AGENTTALK-NEW-USER-MANUAL.md`, so it says nothing about other pages. For a different document, search `tests/` for its file name to find a test that reads it; if there is none, CI's documentation checks are the check.
+- Run the project's tests in a separate shell without the scratch-store line. From the top of your clone, clear `AGENTTALK_*` and `PYTHONPATH`, then use your clone's Python. Put `--basetemp` (pytest's temporary folder) in your scratch area **outside every agenttalk store**, including the trial store. Clearing the settings alone does not help if that folder is still inside a store: `init` refuses to create another store beneath it. pytest installs its own store fence around its temporary folder.
+
+  These examples assume your clone's Python is in `.venv`. Replace the scratch path with an unused scratch folder you can use, outside any agenttalk store, before running them; pytest empties that folder. Replace the test file with the tests that cover your change.
+
+  Bash (Linux or macOS; open Bash first, even if your usual shell is zsh):
+
+  ```bash
+  test_scratch=/absolute/path/to/scratch/pytest-agenttalk
+  for setting in ${!AGENTTALK_@}; do unset "$setting"; done
+  unset PYTHONPATH
+  .venv/bin/python -m pytest tests/test_pytest_shell_recipe.py -p no:cacheprovider --basetemp "$test_scratch"
+  ```
+
+  PowerShell (Windows):
+
+  ```powershell
+  $testScratch = 'C:\path\to\scratch\pytest-agenttalk'
+  Get-ChildItem Env:AGENTTALK_* | Remove-Item
+  Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+  & .\.venv\Scripts\python.exe -m pytest tests/test_pytest_shell_recipe.py -p no:cacheprovider --basetemp $testScratch
+  ```
+
+  `tests/test_docs_plain_voice.py` reads only `README.md` and `docs/AGENTTALK-NEW-USER-MANUAL.md`, so it says nothing about other pages. For a different document, search `tests/` for its file name to find a test that reads it; if there is none, CI's documentation checks are the check.
 - The full gate is `agenttalk dev-gate`. It needs CPython 3.10 and 3.14, `gitleaks` on your PATH and the packages in `dev-gate-requirements.txt`, so most contributors will let CI run it. [docs/DEV-GATE.md](https://github.com/zoolok17/agenttalk/blob/master/docs/DEV-GATE.md) lists the prerequisites if you want it locally.
 - Keep a pull request to one subject. Add a line to the `Unreleased` section of `CHANGELOG.md` for a change that a user will notice, and only add lines: do not edit older entries.
 - Write for a reader who does not program. The documents here use plain words first, and the technical detail last.
