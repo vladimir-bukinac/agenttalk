@@ -1,39 +1,26 @@
 # agenttalk — Release Assurance & Security Posture
 
-**Purpose.** Every agenttalk release is attested here as **GOOD** (correct + tested),
-**ROBUST** (fail-safe + adversarially probed), and **SECURE** (authority-bounded +
-scanned), with the *evidence* that earns each label. This is a living document: the
-release ritual appends a ledger entry per release (see **Standing commitment**).
+**In plain words:** this page holds three things. Section 1 sums up how a change earns the right to merge and ship, and points at the pages whose rules govern; it adds no rule of its own. Section 2 describes the security posture of the code base, from a full scan in July 2026. Sections 3 and 4 are the release-by-release record the team kept until July 2026; they stay as history.
 
 Pairs with: `CHANGELOG.md` (what shipped) · `docs/DESIGN.md` (why / architecture) ·
 `docs/ROADMAP.md` (where it's going) · `docs/ISSUES.md` (open items + accepted known-limitations) ·
-`docs/audit-2026-06-28.md` (a full historical audit).
+`docs/audit-2026-06-28.md` (a full historical audit) · `docs/SECURE-CODING.md` (how code is written securely).
 
 ---
 
-## 1. How a release earns GOOD / ROBUST / SECURE
+## 1. How a change earns GOOD / ROBUST / SECURE
 
-Every release passes the same pipeline before it ships:
+**In plain words:** large work is challenged and designed before it is built. Each change is built in its own copy of the repository, written to the [secure-coding standard](https://github.com/zoolok17/agenttalk/blob/master/docs/SECURE-CODING.md), and read by someone who did not write it. It is fixed and read again until that reader says GO, and the lead merges it only when the automated checks pass on that exact version. This section only sums up. Where it differs from the rules it points at, those rules govern: [the pull-request checklist](../CONTRIBUTING.md#the-pull-request-checklist), [the review cycle](ROLES-SKILLS-PROCEDURES.md#42-the-review-cycle) and [the merge gate](ROLES-SKILLS-PROCEDURES.md#43-the-merge-gate), and the definition-of-done skill that the operator adopted on 2026-10-18.
 
-1. **Design-first.** Non-trivial or authority-sensitive work is designed before it is
-   built. **Authority-/security-critical designs get an adversarial design gate** — a
-   panel of independent agents that try to break the design and produce a
-   PASS / PASS-WITH-CONDITIONS / REVISE verdict with concrete build conditions.
-2. **Build in isolation.** Implemented in a dedicated git worktree off `master`, never
-   directly on the mainline.
-3. **Independent review on the final SHA.** At least **two independent reviewers**
-   review the *exact* SHA that will ship (the "both-reviewers-on-the-final-SHA"
-   discipline). Authority-sensitive changes additionally get **fresh adversarial
-   passes** that attempt concrete exploits (double-answer, identity spoof, race,
-   bypass). Reproduced evidence beats belief; any real blocker is folded and
-   re-reviewed on the new SHA.
-4. **Lead gate (hard, pre-merge).** `ruff` + `bandit` + `node --check` (frontend) +
-   `git diff --check` + the **full pytest suite on Python 3.10 AND 3.14** — all green
-   before fast-forward merge. The dev host lacks 3.14, so the lead runs it explicitly.
-5. **CI matrix.** GitHub Actions runs the suite across **Python 3.10–3.13 on Windows,
-   macOS, and Ubuntu**, a separate **security** workflow, and a **wheel-build /
-   packaging** gate. A release ships only on green; a flake is re-run and confirmed
-   (never merged red).
+1. **Challenge and design first.** Major work is challenged before it starts ([the challenge](ROLES-SKILLS-PROCEDURES.md#45-the-challenge)). Non-trivial work is designed, and the design is read by another seat, before it is built.
+2. **Build in isolation, and write securely.** Each change is built in its own worktree off `master`. Code follows the secure-coding standard: a short security note before writing, protections chosen while writing, and at handoff each choice pointed at the code and at a check that ran. The builder hands over with a done record (the `definition-of-done` skill).
+3. **One independent reader on the exact head.** A reader who is not the author, designer or builder, from another AI vendor when one is available, reads the exact commit and replies GO, FIX or HOLD. On FIX there is a fix round, and each fix is read again. The lead may name an existing read the final one; after that only a P0 or P1 blocks. The comments of the code host's automated reviewer are answered under the same late-findings rule.
+4. **CI is the gate.** The `tests` workflow runs the development gate on Linux, macOS and Windows with Python 3.10 to 3.13, with the security scanners (ruff's `S` rules, bandit, semgrep, gitleaks, pip-audit and zizmor) on the leg that runs the static checks; only the aggregate result counts. The `security` workflow runs CodeQL (`security-extended`) and the client-reference check, and `comprehension-network-deny` runs as well. A documentation-only change that no test reads takes a lighter path. If master moves, the checks run again before the merge, unless the lead records on the pull request why the change cannot interact with what moved. Nobody has to run the full test suite locally; [DEV-GATE.md](DEV-GATE.md) says how to, for those who want to.
+5. **The lead merges, with a merge commit.** GitHub allows only merge commits on this repository. A release is its own small change through the same gate ([the release ritual](ROLES-SKILLS-PROCEDURES.md#44-the-release-ritual)).
+
+**No self-waiver.** `agenttalk gate waive --operator <name>` records the operator's name as free text that nothing authenticates, so it is not operator authority. The lead does not waive an open P0 or P1 finding alone: the finding is fixed and read again, or the operator decides it through the authenticated operator path (the escalation inbox, where the actor is derived on the server side, never taken from the caller). A blocker found after the final read goes to the operator.
+
+**Retired on 2026-10-28.** Until then this section also asked for: at least two independent reviewers on the final commit; a review tier for every change, with a design panel of at least three reviewers from two model families for authority- or security-sensitive work; a lead gate of a local full test run on Python 3.10 and 3.14 with ruff, bandit, `node --check` and `git diff --check`; fast-forward merges; a risk record per release; a docs-testing pass that held a merge on its own (the documentation profile of the definition-of-done skill and the independent reader now cover documentation); and a per-release entry in section 3. The operator's definition of done (2026-10-18) and CONTRIBUTING.md replaced those rules, and the lead recorded the decision in work order tk-6f367777d3cc. The retired text is in the git history of this file, up to commit `eebe3460`.
 
 **Invariants enforced across releases**
 - **Fail-closed authority.** The supervised executor (`supervise --drain-intents`) is
@@ -48,94 +35,6 @@ Every release passes the same pipeline before it ships:
   treated as untrusted data (escaped on render, never executed).
 - **Documented threat-model non-goals** (see §2) — we state what we do *not* defend
   against, rather than implying we do.
-
-### 1a. Review tiers — keyed to the surface, not the self-described change
-
-The tier sets ONLY the **pre-build adversarial DESIGN gate**. For **every** tier, these
-remain mandatory and unchanged: build-in-isolation, **≥2 independent final-SHA
-reviewers**, the lead gate (ruff + bandit + node --check + git diff --check + full pytest
-on 3.10 AND 3.14), the security + packaging gates, and the CI matrix. Final-SHA reviewers
-additionally revalidate the tier/risk-drift record and can force an upward gate.
-**Tier 1 never means "skip review."**
-
-**Classification is by SEMANTIC EFFECT, not provenance.** "docs-only / test-only /
-comment / mechanical refactor" are provenance labels, not risk levels. Path/file-type
-rules are a **floor, never a ceiling. Uncertainty rounds UP.**
-
-**Tier the UNION of semantic effects from the release base to the exact candidate ship
-SHA** — not per-commit/lane/filename/claimed-intent. Every matching dimension applies;
-the **highest wins.** Record a pre-build tier, then run a **final risk-drift check against
-the ship SHA**; upward drift triggers the missing design gate before merge; no downgrade
-without independent ratification. (D-11 all-matching analogue.)
-
-**Surface → tier table:**
-- **Tier 3 (adversarial cross-family DESIGN panel):** the diff touches ANY of — authority
-  / permission / approval / gate; trust / security; provenance / integrity (knowledge,
-  lessons, signing, generated-artifact markers); concurrency / locks / ordering;
-  **fail-open/fail-closed error semantics, durability / atomicity / recovery,
-  persistent-state contracts, or external side-effect boundaries** (NOT every routine file
-  read or try/except); process launch / kill / supervisor / wrap; bus message schema;
-  ledger / spend; or **normative** policy / runbooks / operational skills.
-- **Tier 2 (design-first note + standard review):** other product code; OR a public
-  contract (CLI flag, JSON schema, config key, packaging input); OR **removes/weakens an
-  existing test assertion** or changes CI / scanners / goldens / fixtures / snapshots /
-  harnesses / skips.
-- **Tier 1 (no design gate — NARROW ALLOWLIST only):** ONLY non-normative prose / typo /
-  format / comment changes AND **additive** tests that do not alter fixtures, goldens,
-  snapshots, harnesses, CI, skips, expected contracts, packaging inputs, generated
-  artifacts, or operational skills. Anything else is ≥Tier 2.
-
-**Anti-self-serve:** the change owner proposes tier + risk inventory; an **independent**
-reviewer/lead **ratifies** it. When owner == lead, one independent cross-family
-tier-ratification is mandatory **even for Tier 1** (a short classification, not a full
-panel).
-
-**Tier-3 design panel:** a **hard floor of 3 eligible independent reviewers** (≥2 model
-families; distinct predeclared lenses; NO designer / builder / lead counted; a prior
-design consultant is not independent for the lens they shaped; ephemeral evidence-only
-reviews may add counters but do NOT satisfy the minimum — DESIGN D-9). **Scale above 3 for
-larger scope/novelty/blast-radius; never below 3.** Line count is not a risk proxy — a
-one-line fail-open/permission/lock-order change can be system-wide — so control the cost of
-a small Tier-3 change by making each review SHORT and focused, never by dropping
-independent lenses. Panel composition (who was asked + their lens) is **recorded in the
-release ledger.** A design-panel reviewer MAY also serve as one of the ≥2 final-SHA
-reviewers for the same change (distinct phases), not double-counted within a phase.
-
-**Verdict handling:** the lead synthesizes but **cannot erase an open REVISE/REJECT or a
-P0/P1.** Every finding gets a disposition: fold + re-review on the new SHA, OR — for an
-open REVISE/P0/P1 — a genuine operator decision captured through the **authenticated
-operator path** (the server-derived operator-answer / escalation inbox, where the actor is
-derived server-side, never caller-asserted), recorded with the finding IDs + scope.
-**Neither lead-authored prose, a role label, nor a caller-asserted `agenttalk gate waive
---operator <name>` is sufficient authority** — `gate waive`'s operator field is currently
-unauthenticated free text, so it MUST NOT be treated as operator authority until it is
-hardened to consume + validate a typed operator-answer reference (tracked follow-up).
-**Until that hardening lands, a lead may not self-waive an open REVISE/P0/P1** — the only
-dispositions are fold + re-review or an authenticated operator decision. PASS-WITH-
-CONDITIONS may carry assigned testable build gates, not unresolved design questions.
-**REJECT** = directionally unacceptable / new proposal required; **REVISE** = bounded
-amendment.
-
-**Risk record (mechanically reproducible, in the release ledger):** `release base` = an
-exact recorded SHA (normally the previous shipped tag; any deviation carries a rationale).
-The record contains: base SHA, design/candidate ref, semantic dimensions matched, proposed
-tier, ratifier identity + verdict, panel members + lenses, final ship SHA, and final drift
-result. Prose alone does not satisfy it.
-
-**Docs-testing pass — trigger + evidence + block:** runs when a release changes docs OR
-any **user/operator-facing contract, workflow, config default, JSON/CLI output,
-packaging/install behavior, or remediation path** (a stale-doc risk can exist with no
-command change). When triggered it requires BOTH evidence producers — `test-docs`
-(executes the doc examples; a Windows/PowerShell example CI cannot run is recorded
-*referenced-not-executed*, never counted green) AND an independent `review-docs` accuracy
-review — and a **`test-docs` failure, or an unresolved accuracy/contract finding that
-yields `review-docs status=rejected`, HOLDs the merge** (an approved review with a recorded
-nit does not block). Record an explicit N/A reason ONLY when no trigger exists.
-
-**One authoritative source:** this §1 is canonical. `docs/DESIGN.md` references it (one-line
-pointer). The lead skills carry a **mandatory operational STEP** that reads this §1 and
-records the risk-record fields above as a checklist — referencing the table, never copying
-it (copies drift — cf. v0.75.2).
 
 ---
 
@@ -173,7 +72,7 @@ lead). Re-run on demand and refreshed as the codebase changes.
 
 ## 3. Per-release assurance ledger
 
-All entries below shipped through the §1 pipeline. **CI (tests + security) is green for
+All entries below shipped through the pipeline that §1 described until 2026-10-28 (see "Retired on 2026-10-28" there). **CI (tests + security) is green for
 every release listed** — with one honest exception: v0.64.0's `security` leg went red on a
 gitleaks false-positive (a redaction-test's synthetic secret, not a real leak or code defect),
 corrected in v0.64.1; and v0.69.1's `tests` leg went red on an environment-fragile `doctor` test
@@ -1289,15 +1188,6 @@ Shipped through the same review + gate + CI discipline. Their evidence lives in
 
 ---
 
-## 4. Standing commitment
+## 4. Standing commitment (retired)
 
-**Every release appends its own ledger entry to §3 as part of the release ritual**, and
-refreshes §2 if the scan surface changed. Ship sequence:
-
-> bump `__init__`+`pyproject` → `CHANGELOG.md` → **`docs/ASSURANCE.md` ledger entry** →
-> `README` pins → tag → push → **CI green** → GitHub release.
-
-An entry is only valid if it records: the reviewer verdicts (on the final SHA), the
-lead-gate result (pytest on 3.10 **and** 3.14, ruff/bandit/node/diff), the CI matrix
-status, any adversarial-pass outcome, and any new known-limitation. If a release cannot
-truthfully claim GOOD/ROBUST/SECURE with that evidence, it does not ship.
+Until July 2026 every release added its own entry to §3, and an entry was valid only with the reviewer verdicts on the final commit, the lead gate's result (pytest on 3.10 and 3.14, ruff, bandit, `node --check`, `git diff --check`), the CI status, any adversarial pass and any new known limitation. That step is no longer part of the release ritual ([ROLES-SKILLS-PROCEDURES.md, 4.4](ROLES-SKILLS-PROCEDURES.md#44-the-release-ritual)): the last entry is for v0.79.1, and v0.80.0 (31 July 2026) was the first release without one. Sections 2 and 3 stay as a record.
