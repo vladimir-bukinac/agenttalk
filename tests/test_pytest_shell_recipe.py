@@ -34,24 +34,19 @@ def test_init_for_tests_uses_a_folder_outside_the_trial_store(tmp_path, capsys):
     assert Path(fence) in separate.parents
 
 
-@pytest.mark.parametrize("relative, advice", [
-    ("CONTRIBUTING.md",
-     "Run the project's tests in a separate shell without the scratch-store line."),
-    ("src/agenttalk/skills/claude/agenttalk.listen.md",
-     TEST_SHELL_ADVICE),
-    ("src/agenttalk/skills/codex/agenttalk-listen/SKILL.md",
-     TEST_SHELL_ADVICE),
-    ("docs/ROLES-SKILLS-PROCEDURES.md",
-     TEST_SHELL_ADVICE),
-    ("src/agenttalk/skills/claude/agenttalk.lead.md",
-     TEST_SHELL_ADVICE),
-    ("src/agenttalk/skills/codex/agenttalk-lead/SKILL.md",
-     TEST_SHELL_ADVICE),
-    ("docs/AGENT-MANUAL.md",
-     TEST_SHELL_ADVICE),
-    ("docs/AGENTTALK-NEW-USER-MANUAL.md",
-     TEST_SHELL_ADVICE),
-])
+@pytest.mark.parametrize(
+    "relative, advice",
+    [
+        ("CONTRIBUTING.md", "Run the project's tests in a separate shell without the scratch-store line."),
+        ("src/agenttalk/skills/claude/agenttalk.listen.md", TEST_SHELL_ADVICE),
+        ("src/agenttalk/skills/codex/agenttalk-listen/SKILL.md", TEST_SHELL_ADVICE),
+        ("docs/ROLES-SKILLS-PROCEDURES.md", TEST_SHELL_ADVICE),
+        ("src/agenttalk/skills/claude/agenttalk.lead.md", TEST_SHELL_ADVICE),
+        ("src/agenttalk/skills/codex/agenttalk-lead/SKILL.md", TEST_SHELL_ADVICE),
+        ("docs/AGENT-MANUAL.md", TEST_SHELL_ADVICE),
+        ("docs/AGENTTALK-NEW-USER-MANUAL.md", TEST_SHELL_ADVICE),
+    ],
+)
 def test_test_shell_advice_is_where_contributors_and_seats_learn_the_recipe(relative, advice):
     repo = Path(__file__).resolve().parents[1]
     text = " ".join((repo / relative).read_text(encoding="utf-8").split())
