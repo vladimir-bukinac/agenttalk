@@ -15,12 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Development checks work with pytest 9.2.0.** Updating the test runner caused
   five checks to fail and stopped related tests from staying on one worker.
 
-  What you will notice: before this, the newer runner rejected incomplete fake
-  file information, and tests that needed to run together could be split across
-  workers. Now the file-information fakes affect only the files under test, and
-  the test setup passes group names to the newer runner correctly. The checks
-  still reject changed or unsafe input files and verify that grouped tests run
-  together. Both pytest 9.1.1 and 9.2.0 remain supported.
+  What you will notice: before this, the newer test runner needed a piece of file
+  information that our test stand-ins did not supply, and tests that needed to run
+  together could be split across workers. Now the file-information fakes affect
+  only the files under test, and the test setup passes group names to the newer
+  runner correctly. The checks still reject changed or unsafe input files and
+  verify that grouped tests run together. Both pytest 9.1.1 and 9.2.0 remain supported.
 
   What you need to do: nothing. No test-tool version cap is added.
 

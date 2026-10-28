@@ -708,6 +708,7 @@ def pytest_collection_finish(session) -> None:
     # xdist 3.8 writes group suffixes to _nodeid; pytest 9.2 reads _id instead.
     # Copy them before xdist sends the collected IDs to its scheduler. Otherwise
     # tests sharing a resource can run on different workers despite their markers.
+    # Remove this hook when pytest-xdist supports pytest 9.2 itself.
     if getattr(session.config.option, "loadgroup", False):
         for item in session.items:
             grouped = getattr(item, "_nodeid", item.nodeid)
