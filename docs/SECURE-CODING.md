@@ -184,8 +184,8 @@ So, where someone else can write to the folder, open the file without waiting (a
 **S7. Safe by default, and refuse when unsure.** Anything that writes, deletes, spends or reaches out stays off until someone turns it on, and listens only on the local machine unless configured otherwise. When a check cannot decide, refuse and say why; never swallow an error to carry on. An error shown to a remote reader leaves out internal paths and details.
 *Usual check:* the refusal when the check's input is missing, damaged or unreadable.
 
-**S8. Limit what one input can cost.** Limit size, count, nesting depth, time and memory for anything from outside, and put a time limit on every call to another process or over the network. A parser's own limit is not enough: the same deep value can be accepted by one version of a language and refused by another, so set the limit yourself.
-*Usual check:* a test just over each limit, including a value nested deeper than the limit (section 5).
+**S8. Limit what one input can cost.** Limit size, count, nesting depth, time and memory for anything from outside, and put a time limit on every call to another process or over the network. A refusal gives back what it opened (a file, a connection), or repeated refusals use them up. A parser's own limit is not enough: the same deep value can be accepted by one version of a language and refused by another, so set the limit yourself.
+*Usual check:* a test just over each limit, including a value nested deeper than the limit, and a refusal repeated many times that leaves nothing open (section 5).
 
 **S9. Never load outside data in a format that can run code.** Use JSON or another plain format. Do not use `pickle`, `marshal`, `yaml.load` without the safe loader, or Java's built-in object serialization (`ObjectInputStream`) on outside data.
 *Usual check:* the scanners stay green; a test with a damaged file gets a plain refusal.
@@ -234,8 +234,9 @@ def read_report(folder: Path, name: str, limit: int = 1_000_000) -> bytes:
         raise ValueError("the name must point to a file inside the reports folder")
     # S3 + S8: open without waiting, because a named pipe would hold the open until someone writes to it.
     # Windows has no such flag, and its named pipes do not live in ordinary folders, so there it is left out.
-    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-    with open(os.open(target, flags), "rb") as handle:
+    # open() owns what the opener returns, so it also closes it when it refuses, for example a folder.
+    no_wait = getattr(os, "O_NONBLOCK", 0)
+    with open(target, "rb", opener=lambda path, flags: os.open(path, flags | no_wait)) as handle:
         info = os.fstat(handle.fileno())
         # S3: only now, on the opened file, check that it is a plain file with a single name. A hard link is a
         # second name for a file that may live outside the folder, and no path check can see it.
@@ -343,6 +344,20 @@ def test_a_named_pipe_is_refused_at_once(tmp_path):
             read_report(reports, "pipe")
     finally:
         signal.alarm(0)
+
+
+FD_FOLDER = next((d for d in ("/proc/self/fd", "/dev/fd") if os.path.isdir(d)), None)
+
+
+@pytest.mark.skipif(FD_FOLDER is None, reason="this system cannot list its open descriptors")
+def test_refusing_a_folder_many_times_leaves_nothing_open(tmp_path):
+    reports = tmp_path / "reports"
+    (reports / "folder").mkdir(parents=True)
+    before = len(os.listdir(FD_FOLDER))
+    for _ in range(100):
+        with pytest.raises(OSError):
+            read_report(reports, "folder")
+    assert len(os.listdir(FD_FOLDER)) == before
 
 
 def test_a_report_is_read_and_an_oversized_one_refused(tmp_path):
@@ -579,5 +594,5 @@ Version 1 adds no scanner, no hosted service and no check that runs while agentt
 ## 10. Owner, versions and review
 
 - **Owner:** the lead. A change to the steps or the principles needs the same review as any other change, and makes a new version.
-- **Versions:** version 1, 2026-10-28. A task names the version it works under (for example `secure-coding@1`), and work already started keeps that version when a new one appears.
+- **Versions:** version 1, 2026-10-28. A task names the version it works under (for example `secure-coding@1`), and work already started keeps that version when a new one appears. Changes made before the standard's first merge stay version 1, and the pilot uses the text as merged.
 - **Review:** on 28 April 2027, or when NIST finalises its new SSDF version (1.2 is a draft today), whichever comes first, as decided on 2026-10-29. A review also comes earlier when OWASP publishes the next Proactive Controls, MITRE publishes a new CWE Top 25, a review finds a class of mistake the principles miss, or the facts behind section 9.7 change.

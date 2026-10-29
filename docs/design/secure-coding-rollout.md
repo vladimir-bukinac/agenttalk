@@ -33,7 +33,7 @@ The standard adds no approval at any step. The rule conflict that the challenge 
 
 **One source, a general part any project can use, and agenttalk's own part.** The standard has two parts. Part 1, between two marker lines, holds the general rules: the three steps, the ten principles (S1 to S10), agent-written code and the examples. It names no project, path or tool of agenttalk's, so it follows the playbook rule that skills and shared texts stay universal (`docs/playbook/build-and-test.md`, B10). Part 2 holds what is agenttalk's own: its trust boundaries, its rules under the principles, where the lines go here, the existing checks and the framework map. The skills carry only part 1. agenttalk's builders get part 2 through their brief (the lead's row below), because a builder who sees only part 1 misses rules such as agent-name validation and the no-runtime-dependency rule.
 
-**A pinned version.** A task names the version it works under (`secure-coding@1`), the way it already names its definition-of-done profile. A later version then never changes what work already started owes. This follows the team's lesson that obligations belong on the work's own dispatch record (`design.pin-obligations-on-the-immutable-work-record`).
+**A pinned version.** A task names the version it works under (`secure-coding@1`), the way it already names its definition-of-done profile. A later version then never changes what work already started owes. The pilot is pinned to version 1 as merged: changes made before the standard's first merge stay version 1. This follows the team's lesson that obligations belong on the work's own dispatch record (`design.pin-obligations-on-the-immutable-work-record`).
 
 | Entry point | File | Who uses it | Proposed change |
 |---|---|---|---|
