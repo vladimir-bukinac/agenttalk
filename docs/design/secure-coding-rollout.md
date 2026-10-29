@@ -1,10 +1,10 @@
 # Design: rolling out the secure-coding standard
 
-Status: proposed. Written on 2026-10-28 for work order tk-6f367777d3cc, after the challenge ch-651fb888 returned RESHAPE and the lead accepted it. Revised in fix round tk-4f0f5ca4e611 after the read tk-1297b29787e4, and in fix round tk-deae55f9bdd9 after the final read tk-d62bcfb4bff4 (requirements R1 to R5) and a read by the second team's reviewers (2026-10-29). Nothing here is built: no skill, template or workflow changes until the operator says OK and a reader from another AI vendor has read this branch. Where this page describes agenttalk today, it matches master `12418bb6`. Owner: the lead.
+Status: proposed. Written on 2026-10-28 for work order tk-6f367777d3cc, after the challenge ch-651fb888 returned RESHAPE and the lead accepted it. Revised in fix round tk-4f0f5ca4e611 after the read tk-1297b29787e4; in fix round tk-deae55f9bdd9 after the final read tk-d62bcfb4bff4 (requirements R1 to R5) and a read by the second team's reviewers (2026-10-29); and in fix round tk-9830ec5cc9c4 after the delta read tk-b1d90a6c8abc. Nothing here is built: no skill, template or workflow changes until the operator says OK and a reader from another AI vendor has read this branch. Where this page describes agenttalk today, it matches master `12418bb6`. Owner: the lead.
 
 ## In plain words
 
-[The secure-coding standard](../SECURE-CODING.md) asks a builder to write a short security note before coding, choose protections while coding, and show at handoff which code and which executed checks carry each choice. This page plans how the standard would reach everyone who writes or reads code: which skills, briefs and contributor pages would point to it, and how someone working from a fork, without our tools, sees it. It also plans a small pilot that can fail: one real Python change, and one fresh task that nobody has seen, built both with and without the standard by the same model, so that any difference, gained or lost, can be put down to the standard. It decides the order of the work, the bar the pilot must pass and what happens when the standard makes no difference; it leaves open the questions in section 7.
+[The secure-coding standard](../SECURE-CODING.md) asks a builder to write a short security note before coding, choose protections while coding, and show at handoff which code and which executed checks carry each choice. This page plans how the standard would reach everyone who writes or reads code: which skills, briefs and contributor pages would point to it, and how someone working from a fork, without our tools, sees it. It also plans a small pilot that can fail: one real Python change, and one fresh task that nobody has seen, built both with and without the standard by the same model, so that a difference, gained or lost, gives a tentative sign of what the standard does. It decides the order of the work, the bar the pilot must pass and what happens when the pilot finds no gain; it leaves open the questions in section 7.
 
 ## Contents
 
@@ -29,7 +29,7 @@ The standard adds no approval at any step. The rule conflict that the challenge 
 
 ## 2. Where the standard would be loaded
 
-**Every route that writes code loads the rules first.** The standard applies to every change to code, tests included, and to text that agents act on, such as skills and runbooks (its section 1). So every skill whose output is such a change points to the rules in its *first* step, before anything is written; a pointer only at handoff, or only in a lead's brief, is too late for a skill that is used on its own. Skills that only read, plan or describe get no pointer.
+**Every route that writes code loads the rules first.** The standard applies to every change to code, tests included, and to text that agents act on, such as skills and runbooks (its section 1). So every skill whose output is such a change points to the rules in its *first* step, before anything is written; a pointer only at handoff, or only in a lead's brief, is too late for a skill that is used on its own. Skills that only read or plan get no pointer. A skill that writes documentation gets a conditional one: when the text it writes directs what an agent does or may do (a skill, a runbook, an agent brief), its first step points to the rules, whoever started it; when the text only describes, nothing changes.
 
 **One source, a general part any project can use, and agenttalk's own part.** The standard has two parts. Part 1, between two marker lines, holds the general rules: the three steps, the ten principles (S1 to S10), agent-written code and the examples. It names no project, path or tool of agenttalk's, so it follows the playbook rule that skills and shared texts stay universal (`docs/playbook/build-and-test.md`, B10). Part 2 holds what is agenttalk's own: its trust boundaries, its rules under the principles, where the lines go here, the existing checks and the framework map. The skills carry only part 1. agenttalk's builders get part 2 through their brief (the lead's row below), because a builder who sees only part 1 misses rules such as agent-name validation and the no-runtime-dependency rule.
 
@@ -43,14 +43,21 @@ The standard adds no approval at any step. The rule conflict that the challenge 
 | fix-ci | `src/agenttalk/skills/devkit/fix-ci/SKILL.md` | builders of fixes for red checks | first step: the note, for every fix that changes code or tests, not only workflows. A fix that changes a workflow, a scanner setting or a dependency also checks S7 and S10. |
 | test-coverage, tester-qa, test-security, test-integration, test-performance | each skill's `SKILL.md` | whoever writes tests, test harnesses or benchmarks | first step: the note. For most tests it is one line, `no trust boundary`; a test or fixture that starts processes, writes outside its own temporary folder, uses the network or handles a secret names that boundary. test-security also names the principle (`S<n>`) in its abuse-case evidence, so that handoff lines can cite those checks. |
 | test-docs | `src/agenttalk/skills/devkit/test-docs/SKILL.md` | whoever checks documentation by running it | the same first-step pointer, used only when it adds check code to the repository. |
+| write-docs | `src/agenttalk/skills/devkit/write-docs/SKILL.md` | whoever writes or changes a page, including skills, runbooks and briefs that agents follow | a conditional item in its first step (CLASSIFY): when the page directs what an agent does or may do, write the security note before writing the page (standard section 1). The pointer sits in the skill itself, so it works without a lead's brief. A page that only describes needs nothing. |
 | definition-of-done | `src/agenttalk/skills/devkit/definition-of-done/SKILL.md` | everyone at handoff | one sentence under "Where the record goes": the security lines go in `evidence`, the commands in `tests_executed`, the open lines in `residual_risk`. No new field and no new profile row. |
 | review-code | `src/agenttalk/skills/devkit/review-code/SKILL.md` and `references/security.md` | every reader | the security pass also checks the builder's lines (the list "What the reader checks" in step 3), and findings name the principle they break. The existing OWASP-based checklist stays as it is. |
-| The lead's skill, and with it agenttalk's own part | `src/agenttalk/skills/claude/agenttalk.lead.md` and `src/agenttalk/skills/codex/agenttalk-lead/` | the lead, for every agenttalk builder | a build, fix or test brief names `secure-coding@1` next to the done profile, and tells the builder to read both parts before coding: part 1 for the rules, part 2 (`docs/SECURE-CODING.md`, sections 7 and 8) for agenttalk's own boundaries and rules. A read brief asks the reader to check the security lines against both parts. A brief to a seat that has no skills carries both texts. Before adoption, two cases are checked: an installed skill used on its own (it brings part 1; the brief must bring part 2), and a seat on the paid gateway (its brief must bring both). |
+| The lead's skill, and with it agenttalk's own part | `src/agenttalk/skills/claude/agenttalk.lead.md` and `src/agenttalk/skills/codex/agenttalk-lead/` | the lead, for every agenttalk builder | a build, fix or test brief names `secure-coding@1` next to the done profile, and tells the builder to read both parts before coding: part 1 for the rules, part 2 (`docs/SECURE-CODING.md`, sections 7 and 8) for agenttalk's own boundaries and rules. A read brief asks the reader to check the security lines against both parts. A brief to a seat that has no skills carries both texts. Before adoption, the routes listed under "Checked before adoption" below are checked. |
 | The procedures | `docs/ROLES-SKILLS-PROCEDURES.md`, sections 4.1 and 4.2 | the team | one sentence each: the brief pins the version and points at both parts; the reader checks the lines. |
 | The contributor guide | `CONTRIBUTING.md`, "Before you send a pull request" and "Proposing a change" | outside contributors | one bullet each: for a change to code or tests, read the standard's section "If you are sending one pull request" (linked by its web address), put the three-line note in the issue, and add the security lines under "How you checked it". |
 | The pull request template | `.github/pull_request_template.md` | everyone who opens a pull request | widen the existing prompt "How you checked it" with "(for code: the security lines, see SECURE-CODING.md)". It stays four prompts. |
 
-**Left out on purpose:** the review lenses other than `review-code` (`review-failure-injection` already covers what S7 and S8 ask), `qa-strategy` (it plans and writes no code; its risk list can feed a builder's note), `assurance-scan` (it runs the existing scanners), and the README. The documentation skills get no pointer, because text that only describes needs no note; a change to a skill, a runbook or a brief for agents does need one, whichever skill writes it, and the lead's brief for such a change names the standard.
+**Left out on purpose:** the review lenses other than `review-code` (`review-failure-injection` already covers what S7 and S8 ask), `qa-strategy` (it plans and writes no code; its risk list can feed a builder's note), `assurance-scan` (it runs the existing scanners), `write-for-humans` (release notes, pull request descriptions and status reports direct no agent), `review-docs` (it reads), and the README.
+
+**Checked before adoption, route by route.** The adoption change shows, for each route, that the rules arrive before anything is written:
+
+- **An installed skill used on its own:** it brings part 1; the brief must bring part 2.
+- **A seat on the paid gateway:** its brief must bring both parts.
+- **One standalone runbook edit:** an agent that uses `write-docs` alone, with no lead's brief, to change `docs/ops/scratch-hygiene.md` (a runbook that agents follow) reaches the security note in its first step.
 
 **A known gap:** seats on the paid gateway do not see the shipped skills (issue #468). Until that is fixed they get both parts only through the text of their brief, as the lead's row says.
 
@@ -58,7 +65,7 @@ The standard adds no approval at any step. The rule conflict that the challenge 
 
 - **What they read:** the standard's short section "If you are sending one pull request", reached from `CONTRIBUTING.md` (by its web address) and the pull request template. It holds the two complete examples (with and without outside input) and says what they run. Both are public on GitHub. They need no bus, no agenttalk installation beyond the development install they already make, no private tool and no extra approval.
 - **What they write:** the three-line note in the issue they open for a larger change (or in a draft pull request), and the security lines under "How you checked it". A change with no outside input needs one line.
-- **What they run, and what CI runs:** they run the tests their lines name, with pytest, which the development install already provides. CI runs the full development gate, the scanners and CodeQL on the pull request; the maintainers run the client-reference check that a fork cannot run.
+- **What they run, and what CI runs:** they run the tests their lines name, with pytest, which the development install already provides. CI picks the checks for the pull request: the full development gate with the scanners, or the lighter documentation path, as `CONTRIBUTING.md` ("Which checks a change gets") explains; CodeQL runs on every pull request. The maintainers run the client-reference check that a fork cannot run.
 - **Who checks it:** the maintainers' reader who reads every pull request. If the lines are missing, the reader asks for them, as for any missing "How you checked it"; it is not a new refusal.
 - **What does not change for them:** the client-reference check and its fork route. The standard does not depend on the team's private knowledge store.
 
@@ -100,7 +107,7 @@ Four differences are on purpose:
 - **Author:** seconds spent on the note step, and seconds spent on the build step; the number of note lines, handoff lines, tests and commands.
 - **Reader:** seconds spent on the blind comparison and on checking the handoff lines; how many lines were checked, how many held, how many failed, and any boundary the note missed.
 - **Order:** whether the note step was observed before the build step, as above.
-- **Effect:** the gains and the losses the blind comparison found, each confirmed by running the check on the run's final code.
+- **Effect:** the gains and the losses the blind comparison found, each confirmed by running the check on the run's final code. A confirmed gain is reported as a tentative sign that the standard helped in this pilot, never as proof that it causes the difference.
 
 **The bar for going ahead.** All of these must hold:
 
@@ -114,13 +121,18 @@ Four differences are on purpose:
 8. No approval was added: the reader was the normal reader.
 9. The pilot stays within about four hours of seat time in total, plus the separate validation of the Java fragments; the lead stops at that limit and reports what was done. The measured cost goes to the operator, who decides whether it is acceptable.
 
-**When the standard made no difference.** If either T2 pair shows no confirmed gain, the result says so in plain words: "In this pilot, the standard did not change what was built or tested." The rollout stops there: no wiring pull request, and the team takes the smaller alternative in section 6. A gain in only one pair is reported as a weak sign, with the same stop.
+**When the pilot finds no gain.** The rollout stops if either T2 pair shows no confirmed gain, or if a loss in the run with the standard is left unresolved: no wiring pull request, and the team takes the smaller alternative in section 6. The result describes what was seen, case by case, in plain words:
+
+- **No gain and no loss in a pair:** "In this pair, the standard did not change which protections were built or tested."
+- **A loss and no gain:** "In this pair, the standard changed the result for the worse: the run with it lacked <protection>, and it gained nothing."
+- **Mixed, within a pair:** "In this pair, the run with the standard gained <protection> and lost <protection>."
+- **A gain in one pair only:** "The standard gained <protection> in one pair and nothing in the other." This is a weak sign, and it stops the rollout like no gain.
 
 **Kill signals** (the challenge's, with how each is detected). If one fires, the wiring pauses, the lead reports it, and the team falls back to the smaller alternative in section 6.
 
 | Signal | How it shows |
 |---|---|
-| Only after-the-fact attestations | a run whose note step was not observed before its build step, or a handoff line that no executed check backs. A late note counts against the pilot even when it says it is late |
+| Only after-the-fact attestations | a run whose note step was not observed before its build step, or a line that claims an executed check (`executed ... -> pass`) when no such check ran on that commit. A `checked by reading` or `does not apply` line, the forms the standard allows, does not fire this signal when the reader confirms its reason. A late note counts against the pilot even when it says it is late |
 | Private tooling needed by outsiders | a T2 run with the standard could not be finished with public text only |
 | A claim of whole-framework compliance | any text in the standard, the pilot or the wiring that says "compliant" or "certified" |
 | Approvals added without settling the rule conflict | any new sign-off, or the wiring proposed before `docs/ASSURANCE.md` section 1 is corrected |

@@ -1,18 +1,25 @@
 # Writing secure code: the agenttalk standard, version 1
 
-Status: proposed. Version 1, written on 2026-10-28 for work order tk-6f367777d3cc, after the challenge ch-651fb888 returned RESHAPE and the lead accepted it. Revised in fix round tk-4f0f5ca4e611 after the read tk-1297b29787e4, and in fix round tk-deae55f9bdd9 after a read by the second team's reviewers (2026-10-29). No skill, template or checklist loads this page yet: that waits for the operator's OK, a read from another AI vendor and a small pilot, all described in the [rollout plan](design/secure-coding-rollout.md). Owner: the lead. Next review: by 2027-04-28.
+Status: proposed. Version 1, written on 2026-10-28 for work order tk-6f367777d3cc, after the challenge ch-651fb888 returned RESHAPE and the lead accepted it. Revised in fix round tk-4f0f5ca4e611 after the read tk-1297b29787e4, in fix round tk-deae55f9bdd9 after a read by the second team's reviewers (2026-10-29), and in fix round tk-9830ec5cc9c4 after the delta read tk-b1d90a6c8abc. No skill, template or checklist loads this page yet: that waits for the operator's OK, a read from another AI vendor and a small pilot, all described in the [rollout plan](design/secure-coding-rollout.md). Owner: the lead. Next review: by 2027-04-28.
 
 ## In plain words
 
-This page says how to keep security in mind while you write code, not only when the code is tested afterwards. Before you write, you note in three lines where something from outside reaches your change, how it could be misused, and what the code must do instead. While you write, you choose protections from a short list of ten security principles, S1 to S10. When you hand the work over, you point each choice at the code and at a check that ran; the reader who already checks every change checks these claims too. If you are sending a single pull request, the next section is all you need. Part 1 holds the general rules, written so that any project could use them; part 2 says how they apply in agenttalk, what already exists, and how they map to the NIST and OWASP guidance. The standard adds no approval and no new scanner, needs no private tools, and claims to be in line with that guidance, not to comply with it.
+This page says how to keep security in mind while you write code, not only when the code is tested afterwards. Before you write, you note in three lines where something from outside reaches your change, how it could be misused, and what the code must do instead. While you write, you choose protections from a short list of ten security principles, S1 to S10. When you hand the work over, you point each choice at the code and at a check that ran; the reader who already checks every change checks these claims too. If you are sending a single pull request, the next section is the short route through the same rules. Part 1 holds the general rules, written so that any project could use them; part 2 says how they apply in agenttalk, what already exists, and how they map to the NIST and OWASP guidance. The standard adds no approval and no new scanner, needs no private tools, and claims to be in line with that guidance, not to comply with it.
 
 ## If you are sending one pull request
 
-You need three things from this page, and nothing private.
+This section is the short route through the same rules. It needs nothing private.
 
-1. **Decide whether your change touches outside input.** Outside input is anything your code did not make itself: a message, a file someone else can write, a command-line argument or setting, a web request, an AI tool's answer. Section 1 has the full list.
-2. **Write the security lines under "How you checked it" in your pull request description.** With no outside input, that is one line. With outside input, it is a three-line note and one line for each protection, naming the test that shows it.
-3. **Run the tests your lines name,** with `python -m pytest <your test file>` from the top of your clone, as the [contributing guide](../CONTRIBUTING.md#before-you-send-a-pull-request) describes. That is all you run yourself. CI runs the rest on your pull request: the full development gate on Linux, macOS and Windows, the security scanners (ruff's `S` rules, bandit, semgrep, gitleaks, pip-audit and zizmor) and CodeQL. The maintainers run the client-reference check that a fork cannot run. You need none of these tools installed.
+1. **Before you write any code, decide whether your change touches outside input.** Outside input is anything your code did not make itself: a message, a file someone else can write, a command-line argument or setting, a web request, an AI tool's answer. Section 1 has the full list.
+2. **No outside input: one line, and you are done with this page.** Write it before you start, in the issue or a draft pull request, and copy it under "How you checked it" in your pull request description. The first example below shows it.
+3. **Outside input: write the three-line note first,** before any code, in the issue or a draft pull request: where the outside input reaches your change, how it could be misused, and what the code must do instead (step 1 in section 2).
+4. **Pick the rules your change brings into play** from the ten in section 3 (S1 to S10, one paragraph each), and build each protection with a test that fails without it.
+5. **Under "How you checked it", write one line for each rule you picked,** in one of four forms (step 3 in section 2):
+   - `executed <command> -> pass`: the test that shows the protection;
+   - `checked by reading - <reason>`: only for the few promises that section 3 marks as checked by reading;
+   - `does not apply - <reason>`: the rule has nothing to protect here;
+   - `open - <reason>, <owner>`: anything not settled yet, such as who may see the data.
+6. **Run the tests your lines name,** with `python -m pytest <your test file>` from the top of your clone, as the [contributing guide](../CONTRIBUTING.md#before-you-send-a-pull-request) describes. That is all you run yourself. CI picks the checks for your pull request: the full set, or the lighter documentation path, as [the contributing guide explains](../CONTRIBUTING.md#which-checks-a-change-gets). The full set includes the development gate on Linux, macOS and Windows and the security scanners (ruff's `S` rules, bandit, semgrep, gitleaks, pip-audit and zizmor); CodeQL runs on every pull request. The maintainers run the client-reference check that a fork cannot run. You need none of these tools installed.
 
 **A complete example with no outside input** (a change that renames an internal helper and updates its tests):
 
@@ -23,13 +30,14 @@ security-note: no trust boundary - renames an internal function; no input, file,
 **A complete example with outside input** (the `read_report` function of section 5, used by a page that takes the report's name from a web request):
 
 ```text
-security-note: issue #<n>, comment of <date and time>, before the first code commit
+security-note: issue #<n>, comment of <date and time>, written before any code
   boundary: a report name from a web request reaches a file read
   misuse: a name with "..", an absolute path or a link reads a file outside the reports folder
   safe behaviour: refuse a name that leads outside the folder, and a file that has a second name, with a plain error
 security S3: executed python -m pytest tests/test_reports.py -> pass on <commit> (names with "..", an absolute path, an empty name, a hard link and a symbolic link to an outside file, each refused; the symbolic-link case is skipped where the system does not allow creating one)
 security S8: executed the same run -> pass (a report over the size limit refused)
 security S5: does not apply - the name is never shown back; the error text is fixed
+security S4: open - who may read which report is not decided yet; owner: <who decides>
 ```
 
 The reader who reads your pull request asks for anything that is missing.
@@ -425,7 +433,7 @@ Version 1 adds no scanner, no hosted service and no check that runs while agentt
 
 | What | Where it runs | What it finds or does | SSDF practice |
 |---|---|---|---|
-| ruff's `S` rules | the development gate, on the CI leg that runs the static checks (Linux, Python 3.12), on every pull request that takes the full path, and weekly | Python patterns known to be unsafe (the rules come from bandit), in `src/` and `tests/`. `pyproject.toml` turns off S101, S603 and S607 everywhere, and also S105 and S106 in tests, so calls to `subprocess` are not flagged by ruff | PW.5, PW.7 |
+| ruff's `S` rules | the development gate, on the CI leg that runs the static checks (Linux, Python 3.12), on every pull request that takes the full path, and weekly | Python patterns known to be unsafe (the rules come from bandit), in `src/` and `tests/`. `pyproject.toml` turns off S101, S603 and S607 everywhere, and also S105 and S106 in tests. With S603 and S607 off, ruff does not report a `subprocess` call that passes a list of arguments; S602 still reports one with `shell=True` | PW.5, PW.7 |
 | bandit | the same | Python security patterns in `src/` (the shipped skills are left out) | PW.7 |
 | semgrep | the same, with the `p/python` and `p/security-audit` rule sets and three project rules in `.semgrep/agenttalk.yml` | unsafe patterns, and pattern checks for three agenttalk rules: agent names are validated before they become file names, messages are written only through the store, and a message body never reaches code execution. A pattern check finds the forms it knows; it does not prove the rule holds everywhere | PW.5, PW.7 |
 | gitleaks | the development gate, over the full history, and on the documentation-only path | credentials committed by mistake | PW.7, PS.1 |
