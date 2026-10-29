@@ -1,6 +1,6 @@
 # Design: rolling out the secure-coding standard
 
-Status: proposed. Written on 2026-10-28 for work order tk-6f367777d3cc, after the challenge ch-651fb888 returned RESHAPE and the lead accepted it. Revised in fix round tk-4f0f5ca4e611 after the read tk-1297b29787e4; in fix round tk-deae55f9bdd9 after the final read tk-d62bcfb4bff4 (requirements R1 to R5) and a read by the second team's reviewers (2026-10-29); and in fix round tk-9830ec5cc9c4 after the delta read tk-b1d90a6c8abc. Nothing here is built: no skill, template or workflow changes until the operator says OK and a reader from another AI vendor has read this branch. Where this page describes agenttalk today, it matches master `12418bb6`. Owner: the lead.
+Status: accepted for the pilot. Written on 2026-10-28 for work order tk-6f367777d3cc, after the challenge ch-651fb888 returned RESHAPE and the lead accepted it. Revised in fix round tk-4f0f5ca4e611 after the read tk-1297b29787e4; in fix round tk-deae55f9bdd9 after the final read tk-d62bcfb4bff4 (requirements R1 to R5) and a read by the second team's reviewers (2026-10-29); and in fix round tk-9830ec5cc9c4 after the delta read tk-b1d90a6c8abc. The operator accepted the standard and this plan for the pilot on 2026-10-29. Nothing here is built yet: the pilot runs first, and no skill, template or workflow changes unless it shows a difference. Where this page describes agenttalk today, it matches master `12418bb6`. Owner: the lead.
 
 ## In plain words
 
@@ -20,7 +20,7 @@ Status: proposed. Written on 2026-10-28 for work order tk-6f367777d3cc, after th
 ## 1. Order of work
 
 1. **This branch** (`docs/secure-coding-standard`): the standard (`docs/SECURE-CODING.md`), the corrected section 1 of `docs/ASSURANCE.md`, and this plan. A reader from another AI vendor reads it.
-2. **The operator's OK** on the standard and on this plan.
+2. **The operator's OK** on the standard and on this plan: given on 2026-10-29, for the pilot.
 3. **The pilot** (section 5). Its authors get the standard from this branch, not from a skill, so the pilot needs no skill change.
 4. **One pull request that wires the standard in** (section 2), only if the pilot meets its bar and no kill signal fired. It goes through the normal review cycle. If the pilot shows no difference, there is no such pull request: the team takes the smaller alternative in section 6 instead.
 5. **Review** of the standard by 2027-04-28, or earlier on the triggers in its section 10.
@@ -121,7 +121,7 @@ Four differences are on purpose:
 8. No approval was added: the reader was the normal reader.
 9. The pilot stays within about four hours of seat time in total, plus the separate validation of the Java fragments; the lead stops at that limit and reports what was done. The measured cost goes to the operator, who decides whether it is acceptable.
 
-**When the pilot finds no gain.** The rollout stops if either T2 pair shows no confirmed gain, or if a loss in the run with the standard is left unresolved: no wiring pull request, and the team takes the smaller alternative in section 6. The result describes what was seen, case by case, in plain words:
+**When the pilot finds no gain.** The rollout stops if either T2 pair shows no confirmed gain, or if a loss in the run with the standard is left unresolved: no wiring pull request, and the team takes the smaller alternative in section 6. Every gain and every loss is reported, including a loss that is later explained and resolved. The result describes what was seen, case by case, in plain words:
 
 - **No gain and no loss in a pair:** "In this pair, the standard did not change which protections were built or tested."
 - **A loss and no gain:** "In this pair, the standard changed the result for the worse: the run with it lacked <protection>, and it gained nothing."
@@ -152,8 +152,8 @@ Four differences are on purpose:
 
 1. **The shipped copy:** keep the page as the source with part 1 copied into the skills and checked by tests (recommended), or make the skill reference the source and have the page include it by a link?
 2. **Tests-only changes:** should they need the note? The standard says yes; usually it is the one line "no trust boundary".
-3. **The review date:** is 2027-04-28 right, or should the review wait for SSDF 1.2 to be final?
-4. **The Cyber Resilience Act:** the team reads it as not applying today, on the facts it knows (see the standard's section 9.7). The operator must confirm those facts (no paid support, no money made from agenttalk through other services, no company supporting it as a steward) and decides.
+3. **The review date:** decided on 2026-10-29: 28 April 2027, or when NIST finalises its new SSDF version, whichever comes first.
+4. **The Cyber Resilience Act:** decided on 2026-10-29: the maintainer confirmed the facts behind the team's reading (no paid support, no money made from agenttalk through other services, no company backing it as a steward); see the standard's section 9.7.
 5. **T1:** issue #427 (recommended) or #571?
 6. **T2:** which fresh task, and which JDK. The lead chooses both when the pilot starts.
 7. **Gateway seats:** wait for issue #468, or add both parts to their brief text meanwhile?
