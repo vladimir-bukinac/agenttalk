@@ -32,9 +32,9 @@ security-note: no trust boundary - renames an internal function; no input, file,
 ```text
 security-note: issue #<n>, comment of <date and time>, written before any code
   boundary: a report name from a web request reaches a file read
-  misuse: a name with "..", an absolute path or a link reads a file outside the reports folder
-  safe behaviour: refuse a name that leads outside the folder, and a file that has a second name, with a plain error
-security S3: executed python -m pytest tests/test_reports.py -> pass on <commit> (names with "..", an absolute path, an empty name, a hard link and a symbolic link to an outside file, each refused; the symbolic-link case is skipped where the system does not allow creating one)
+  misuse: a name with "..", an absolute path or a link reads a file outside the reports folder, or a named pipe holds the request
+  safe behaviour: refuse a name that leads outside the folder, and anything that is not a plain file with a single name, at once and with a plain error
+security S3: executed python -m pytest tests/test_reports.py -> pass on <commit> (names with "..", an absolute path, an empty name, a hard link and a symbolic link to an outside file, each refused, and a named pipe refused at once; the symbolic-link and named-pipe cases are skipped where the system cannot create them)
 security S8: executed the same run -> pass (a report over the size limit refused)
 security S5: does not apply - the name is never shown back; the error text is fixed
 security S4: open - who may read which report is not decided yet; owner: <who decides>
@@ -140,9 +140,9 @@ The reader records what they checked as `security S<n>: checked <how>` in their 
 ```text
 security-note: issue #<n>, comment of <date and time>, before the first code commit <commit>
   boundary: a report name from a web request reaches a file read
-  misuse: a name with "..", an absolute path or a link reads a file outside the reports folder
-  safe behaviour: refuse a name that leads outside the folder, and a file that has a second name, with a plain error
-security S3: executed python -m pytest tests/test_reports.py -> pass on <commit> (names with "..", an absolute path, an empty name, a hard link and a symbolic link to an outside file, each refused; the symbolic-link case is skipped where the system does not allow creating one)
+  misuse: a name with "..", an absolute path or a link reads a file outside the reports folder, or a named pipe holds the request
+  safe behaviour: refuse a name that leads outside the folder, and anything that is not a plain file with a single name, at once and with a plain error
+security S3: executed python -m pytest tests/test_reports.py -> pass on <commit> (names with "..", an absolute path, an empty name, a hard link and a symbolic link to an outside file, each refused, and a named pipe refused at once; the symbolic-link and named-pipe cases are skipped where the system cannot create them)
 security S8: executed the same run -> pass (a report over the size limit refused)
 security S5: does not apply - the name is never shown back; the error text is fixed
 security S4: open - who may read which report is decided in issue #<m>, owner: <seat>
@@ -166,8 +166,8 @@ Each principle says what to do, then the check that usually shows it. They are n
 - **Who can make one.** On Linux, macOS and Windows (NTFS) alike, ordinary users can create hard links to files, but not to folders, on the same drive or file system. Whether a user may link a file they do not own depends on the system and its settings. On Linux, the `fs.protected_hardlinks` setting, when on, allows it only for files the user owns or can both read and write.
 - **What a check on the opened file can promise.** When the file has exactly one name (a link count of 1), no other name for it exists at that moment. When it has more, another name exists somewhere, and nothing tells you where.
 
-So, where someone else can write to the folder, refuse a file with more than one name, checked on the opened file rather than on the path. If your own program makes second names inside the folder, count those names instead of refusing them. If someone else can change the folder while your code runs, the gap between the check and the open is a further risk that a path check alone cannot close.
-*Usual check:* names with `..`, an absolute path, a hard link and a symbolic link to an outside file, each refused (section 5). Skip the symbolic-link case on a system that does not let the test create one.
+So, where someone else can write to the folder, open the file without waiting (a named pipe can otherwise hold the open until someone writes to it), then check on the opened file, not on the path, that it is a plain file with exactly one name. If your own program makes second names inside the folder, count those names instead of refusing them. If someone else can change the folder while your code runs, the gap between the check and the open is a further risk that a path check alone cannot close.
+*Usual check:* names with `..`, an absolute path, a hard link and a symbolic link to an outside file, each refused, and a named pipe refused at once without waiting (section 5). Skip the symbolic-link and named-pipe cases on a system that cannot create them.
 
 **S4. Check who may act or see, where it happens.** Every request that changes something, and every request that reads, lists or exports data that not everyone may see, checks that the actor may do it, at the place where it happens. It takes the actor's identity from the trusted side (the server, the team's own list of members), never from what the caller says about itself.
 *Usual check:* a request for data that belongs to someone else, and the same change asked for by an actor who may not make it, each refused, with nothing shown and nothing changed.
@@ -232,10 +232,13 @@ def read_report(folder: Path, name: str, limit: int = 1_000_000) -> bytes:
     target = (root / name).resolve()
     if target == root or not target.is_relative_to(root):
         raise ValueError("the name must point to a file inside the reports folder")
-    with open(target, "rb") as handle:
+    # S3 + S8: open without waiting, because a named pipe would hold the open until someone writes to it.
+    # Windows has no such flag, and its named pipes do not live in ordinary folders, so there it is left out.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+    with open(os.open(target, flags), "rb") as handle:
         info = os.fstat(handle.fileno())
-        # S3: a hard link is a second name for a file that may live outside the folder, and no
-        # path check can see it, so refuse a file with more than one name, checked on the open file.
+        # S3: only now, on the opened file, check that it is a plain file with a single name. A hard link is a
+        # second name for a file that may live outside the folder, and no path check can see it.
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
             raise ValueError("the report must be a plain file with a single name")
         # S8: read at most one byte more than the limit, never the whole file.
@@ -291,6 +294,7 @@ The checks that go with them (pytest). Each one fails if its protection is remov
 ```python
 import hmac
 import os
+import signal
 
 import pytest
 
@@ -326,6 +330,19 @@ def test_a_symbolic_link_to_a_file_outside_is_refused(tmp_path):
         pytest.skip("this system does not let the test create symbolic links")
     with pytest.raises(ValueError):
         read_report(reports, "alias.txt")
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="this system has no named pipes")
+def test_a_named_pipe_is_refused_at_once(tmp_path):
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    os.mkfifo(reports / "pipe")
+    signal.alarm(5)  # if the open waits for a writer, the alarm stops the test run after 5 seconds
+    try:
+        with pytest.raises(ValueError):
+            read_report(reports, "pipe")
+    finally:
+        signal.alarm(0)
 
 
 def test_a_report_is_read_and_an_oversized_one_refused(tmp_path):
@@ -386,6 +403,12 @@ if (target.equals(root) || !target.startsWith(root)) {
     throw new IllegalArgumentException("the name must point to a file inside the reports folder");
 }
 // If the folder can hold links, check target.toRealPath() the same way before opening the file.
+// S3 + S8: Java's standard API reads a file's type from its path, not from an open file, so check before opening
+// that it is a plain file: opening a named pipe can wait until someone writes to it. A swap between the check and
+// the open stays possible (see S3).
+if (!Files.isRegularFile(target, LinkOption.NOFOLLOW_LINKS)) {
+    throw new IllegalArgumentException("the report must be a plain file");
+}
 // S3: no path check sees a hard link. Java's standard file attributes do not include the link count,
 // so where others can write to the folder, keep the reports in a folder only the program can write to,
 // or read a system-specific attribute (on Linux and macOS, "unix:nlink").
