@@ -348,3 +348,76 @@ Stop the experiment if either mode can claim GO alone, retry provenance becomes
 ambiguous, a check/deadline weakens, or queue/setup overhead erases the gain.
 Cutover needs its own reviewed change. There is no user-facing changelog entry
 for this measurement-only stage.
+
+## Windows worker preparation experiment
+
+Contributors preparing the Windows worker audit use a separate entry point and
+`dev-gate-experiment.json`. The ordinary gate, its Windows serial rule, and the
+source/wheel trial above stay unchanged. Experiment evidence has type
+`agenttalk-windows-workers-preparation-v1` and always has `authoritative: false`;
+neither the gate nor the trial accepts it as voting evidence.
+
+This first step defines the contract and the adapter interfaces. Production
+execution refuses to start until the real P7 frozen installer and P3 journal
+adapter are connected. The tests supply fake installers and fixture inventories;
+the command line has no option to select them. No probe job or acceptance run is
+enabled by this change.
+
+The installed entry point requires an explicit checkout, even under isolated
+Python. To inspect the available options after installing the candidate:
+
+```powershell
+python -I -m agenttalk.dev_gate_experiment accept --help
+```
+
+Once the dependencies exist, an acceptance invocation has this shape (replace
+each angle-bracket value with a real path or frozen input):
+
+```text
+python -I -m agenttalk.dev_gate_experiment accept --checkout <checkout> --arm serial --leg windows/3.12 --modes source,wheel --record <frozen.json> --output <fresh-output>
+```
+
+Probe invocations use the separate `run` subcommand and `--probe p8|p9|p10|p11`
+instead of `accept` and `--arm`. The closed contract maps each probe to reserved
+plugin arguments; those plugins belong to later probe work. Acceptance rejects
+probe plugins or observer files, and missing plugin inventories fail closed.
+The POSIX parallel setting must be absent, including an empty inherited value.
+
+The frozen JSON input contains `commit`, `contract_sha256`, and `environments`.
+Each environment is keyed by Python minor, such as `3.12`, and contains its
+`freeze_sha256`. The contract digest uses UTF-8 canonical JSON with sorted keys
+and fixed separators, so checkout line endings do not change it. Before stage 1,
+freeze all four minors' environment plans and the evidence method. The installed
+candidate must be non-editable, have a VCS commit matching the clean checkout,
+and expose its version and dist-info RECORD fingerprint. A tested wheel's
+installation is a separate installer proof.
+
+The allowed differences are D1 (frozen installs for host, build, runtime and
+wheel-test roles), D2 (held gateway ports are an error), D3 (passive journals),
+and D4 (the parallel arguments, only in the parallel arm). Test paths, ordered
+checks, time limits, and other command arguments must agree with the gate.
+Windows pytest calls retain the manifest's 9,000-second limit. Comparison folds
+Windows environment-variable names and replaces each call's own run-root prefix;
+it does not erase other differences. A bounded fixture run checks runtime skips
+and setup/cleanup separately from collection identities and marks.
+Credentialed proxy URLs are refused because exact environment evidence must not
+disclose their credentials; the refusal does not echo the supplied URL.
+
+P7 implements `Installer.prepare(request, mode, workdir)` and `finish(prepared)`.
+Preparation returns a `PreparedEnvironment`: interpreter, committed source and
+import roots, installed-set proof (`freeze_sha256`, empty `probe_files`, and
+`gateway_policy: error`), ordered setup steps, and passing records for the mode's
+non-pytest checks. P3 supplies `Recorder.inventory(journal_dir)`, returning
+`complete: true` and a nonempty `plugins` list only after every process's inventory
+is present. Its adapter maps the documented journal fields; it cannot invent
+missing observations. The real dependency factory is the only production path.
+Wheel preparation also requires a `wheel_sha256` in the installed-set proof,
+separate from the installed entry point's RECORD hash.
+
+Output must be fresh, outside the checkout and every message store. Like the
+ordinary gate, output retains pytest's temporary folder, exports and logs; it
+also retains `experiment.json` and journals. The record states that no basetemp
+removal took place. Missing input files, dirty or changed candidates,
+different contract hashes, incomplete proofs, and extra command arguments refuse
+the run. The local tests cover these boundaries; the full two-worker local run
+and the later hosted probes are separate evidence.
