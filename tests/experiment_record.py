@@ -148,7 +148,8 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   Kinds: journal-not-plain (not a plain file with one name, a link or a reparse point, or changed
                   while it was opened), folder-not-plain (the record folder itself is a link or a reparse point),
                   folder-changed (the folder is not the one that was checked, or a journal lies outside it: the
-                  journal is not used),
+                  journal is not used), folder-not-held (the record folder could not be opened and held, for
+                  example on a share that refuses it: nothing is read, there is no fallback to path checks),
                   input-too-large (more journals or bytes than the limits below: none is parsed),
                   journal-too-large, bad-encoding (a complete line that is not UTF-8),
                   torn-last-line (a last line with no end: its writer died; every complete line before it is kept),
@@ -218,22 +219,27 @@ of journal bytes together, checked before any is parsed (MAX_JOURNALS, MAX_TOTAL
 one journal.  More is refused with input-too-large, not read; parsed records take several times their bytes in
 memory, which is why the total is bounded.
 
-The folder protection.  The record folder is verified once (`lstat`: a plain folder, not a link or a reparse
-point) and its identity is kept for every journal open.  On POSIX the folder is opened once and every journal is
-opened relative to the folder's own descriptor, so no path is resolved again.  On Windows the open handle's final
-path (GetFinalPathNameByHandleW) must be the journal's name inside the folder's real path.  Everywhere, after each
-open the folder path must still have the same device, inode and mode and not be a link or a reparse point.  Any
-mismatch is refused as folder-changed and nothing from that journal is used.  What cannot be closed: a folder
-that was already a different real directory before the first check (there is no earlier baseline), a journal
-changed while it is read, and a link in a parent folder of the path (only the folder itself is checked for being
-a link; the files still stay inside the folder that was opened).  Whoever can do that can write the evidence
-anyway.
+The folder protection.  The record folder is opened ONCE and that held object is the baseline: its device, file
+id and mode, and on Windows its own final path (GetFinalPathNameByHandleW of the handle, never a second lookup
+of the path), so its identity is kept for every journal open.  On Windows the handle is opened as the reparse
+point itself (a junction or link is refused) and without delete sharing, so the operating system refuses to
+rename or replace the folder while it is held; each journal's final path must be its name inside the held
+folder's final path.  On POSIX the journals are listed and opened relative to the folder's own descriptor
+(`O_NOFOLLOW`), so no path is resolved again.  Everywhere, after each open the folder path must still have the
+same device, file id and mode and not be a link or a reparse point.  Any mismatch is refused as folder-changed
+and nothing from that journal is used; a folder that cannot be opened and held is folder-not-held, never
+a silent fallback to path checks.  What cannot be closed: a folder that was already a different real directory
+when it was first opened (there is no earlier baseline), a journal changed while it is read, a filesystem that
+ignores sharing modes (the final-path and path rechecks then remain), and, on Windows, the list of names,
+which comes from the path (a name that is not in the held folder is refused when opened).  Whoever can do
+that can write the evidence anyway.
 """
 
 from __future__ import annotations
 
 import bisect
 import contextvars
+import fnmatch
 import functools
 import hashlib
 import json
@@ -900,16 +906,35 @@ def _identity(info: Any) -> tuple[Any, ...]:
     return tuple(getattr(info, key, None) for key in ("st_dev", "st_ino", "st_mode"))
 
 
+def _kernel32() -> Any:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    kernel.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    kernel.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+    return kernel
+
+
 def _final_path(fd: int) -> str:
     """The real path of the file an open descriptor refers to, as Windows reports it for the handle
     (GetFinalPathNameByHandleW: every link and junction on the way resolved), without the long-path prefix."""
     import ctypes
     import msvcrt
-    from ctypes import wintypes
 
-    get = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
-    get.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
-    get.restype = wintypes.DWORD
+    get = _kernel32().GetFinalPathNameByHandleW
     handle = msvcrt.get_osfhandle(fd)
     size = 1024
     while True:
@@ -926,24 +951,58 @@ def _final_path(fd: int) -> str:
     return final[4:] if final.startswith("\\\\?\\") else final
 
 
+def _hold_directory(path: Path) -> int:
+    """Open `path` ONCE as a directory and return a descriptor that keeps that very directory.
+
+    Windows: CreateFileW for listing and reading attributes, shared for reading and writing but NOT for deleting, so
+    the folder cannot be renamed or replaced while the handle is held; opened as the reparse point itself (a junction
+    or link is not followed), and wrapped into a descriptor so `os.fstat` describes it.  POSIX: `O_DIRECTORY` and
+    `O_NOFOLLOW`.  Any failure is an OSError: there is no fallback to checks on the path."""
+    if sys.platform != "win32":
+        if not _HAS_DIR_FD:
+            raise OSError("this system cannot open files relative to a directory descriptor")
+        return os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    import ctypes
+    import msvcrt
+
+    kernel = _kernel32()
+    # FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES; FILE_SHARE_READ | FILE_SHARE_WRITE; OPEN_EXISTING;
+    # FILE_FLAG_BACKUP_SEMANTICS (a directory can be opened) | FILE_FLAG_OPEN_REPARSE_POINT (do not follow a link)
+    handle = kernel.CreateFileW(os.fspath(path), 0x1 | 0x80, 0x1 | 0x2, None, 3, 0x02000000 | 0x00200000, None)
+    if handle is None or handle == ctypes.c_void_p(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        return msvcrt.open_osfhandle(handle, os.O_RDONLY)
+    except BaseException:
+        kernel.CloseHandle(handle)
+        raise
+
+
+class _NotPlain(Exception):
+    """The held object is not a plain folder (a link or a reparse point, or not a directory)."""
+
+
 class _Folder:
-    """The record folder, verified once; its identity is kept for every journal open (see "Limits of the reducer").
+    """The record folder, opened ONCE; that held object is the baseline for everything read from it.
 
-    `verify` takes `lstat` of the folder (a plain folder, not a link or a reparse point) and remembers its device,
-    inode and mode and its real path. Where the system allows it (POSIX) the folder is also opened once, and every
-    journal is opened relative to that descriptor, so no path is resolved again. After each open `unchanged` looks at
-    the folder path again, and `holds` asks (Windows) whether the open handle really is that name inside the folder."""
+    `verify` checks the path with `lstat`, opens the folder once (`_hold_directory`) and takes the baseline from the
+    HELD object: its device, file id and mode (`os.fstat`) and, on Windows, its own final path.  The handle stays
+    open until `close` (Windows: without delete sharing, so the folder cannot be renamed or replaced meanwhile).
+    On POSIX the journals are listed and opened relative to the held descriptor, so no path is resolved again.
+    After each open `unchanged` looks at the folder path once more, and `holds` asks (Windows) whether the open
+    file's own final path is that name inside the held folder."""
 
-    def __init__(self, path: Path, info: Any) -> None:
+    def __init__(self, path: Path, info: Any, fd: int) -> None:
         self.path = path
-        self.identity = _identity(info)
-        self.real = os.path.realpath(path)
-        self.fd: int | None = None
-        if _HAS_DIR_FD:
-            self.fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
-            if _identity(os.fstat(self.fd))[:2] != self.identity[:2]:
-                self.close()
-                raise OSError("the record folder is not the one that was checked")
+        self.fd: int | None = fd
+        self.dir_fd: int | None = fd if _HAS_DIR_FD else None  # POSIX: names are resolved against this descriptor
+        held = os.fstat(fd)
+        if not stat.S_ISDIR(held.st_mode) or _is_reparse_point(held):
+            raise _NotPlain
+        self.identity = _identity(held)
+        if self.identity[:2] != _identity(info)[:2]:
+            raise OSError("the record folder is not the one that was checked")
+        self.real = _final_path(fd) if sys.platform == "win32" else ""  # the handle's own path, not a second lookup
 
     @classmethod
     def verify(cls, path: Path, problems: _Problems) -> _Folder | None:
@@ -951,17 +1010,26 @@ class _Folder:
             info = os.lstat(path)
         except OSError:
             return None  # nothing there: nothing to read
+        plain = "the record folder must be a plain folder, not a link or a reparse point"
         if not stat.S_ISDIR(info.st_mode) or _is_reparse_point(info):
-            problems.add("folder-not-plain", "the record folder must be a plain folder, not a link or a reparse point")
+            problems.add("folder-not-plain", plain)
             return None
         try:
-            return cls(path, info)
+            fd = _hold_directory(path)
         except OSError as error:
-            problems.add("folder-changed", f"the record folder could not be held: {error}")
+            problems.add("folder-not-held", f"the record folder could not be opened and held: {error}")
             return None
+        try:
+            return cls(path, info, fd)
+        except _NotPlain:
+            problems.add("folder-not-plain", plain)
+        except OSError as error:
+            problems.add("folder-changed", f"the record folder is not the one that was checked: {error}")
+        os.close(fd)
+        return None
 
     def unchanged(self) -> bool:
-        """The folder path still names the same plain folder."""
+        """The folder path still names the held folder: the same device, file id and mode, and not a link."""
         try:
             now = os.lstat(self.path)
         except OSError:
@@ -969,9 +1037,9 @@ class _Folder:
         return stat.S_ISDIR(now.st_mode) and not _is_reparse_point(now) and _identity(now) == self.identity
 
     def holds(self, fd: int, name: str) -> bool:
-        """The open file `fd` is `name` inside this folder, by the handle's own path (Windows); true where the file was
-        opened relative to the folder's descriptor, which cannot lead anywhere else."""
-        if self.fd is not None or sys.platform != "win32":
+        """The open file `fd` is `name` inside the held folder, by the handle's own path (Windows); true where the file
+        was opened relative to the folder's descriptor, which cannot lead anywhere else."""
+        if self.dir_fd is not None or sys.platform != "win32":
             return True
         try:
             final = _final_path(fd)
@@ -981,8 +1049,8 @@ class _Folder:
 
     def close(self) -> None:
         if self.fd is not None:
-            os.close(self.fd)
-            self.fd = None
+            fd, self.fd, self.dir_fd = self.fd, None, None
+            os.close(fd)
 
 
 def _is_reparse_point(info: Any) -> bool:
@@ -1010,17 +1078,17 @@ def _read_journal_in(folder: _Folder, path: Path, problems: _Problems) -> list[d
     no_wait = getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     plain = "the journal must be a plain file with a single name, not a link or a reparse point"
     # With a held folder descriptor the journal is named relative to it and no path is resolved again.
-    target = path.name if folder.fd is not None else path
+    target = path.name if folder.dir_fd is not None else path
     try:
-        before = os.lstat(target, dir_fd=folder.fd)  # the entry itself, not what it points to
+        before = os.lstat(target, dir_fd=folder.dir_fd)  # the entry itself, not what it points to
         if not stat.S_ISREG(before.st_mode) or _is_reparse_point(before):
             problems.add("journal-not-plain", plain, file=path.name)
             return None
-        with open(target, "rb", opener=lambda p, flags: os.open(p, flags | no_wait, dir_fd=folder.fd)) as handle:
+        with open(target, "rb", opener=lambda p, flags: os.open(p, flags | no_wait, dir_fd=folder.dir_fd)) as handle:
             info = os.fstat(handle.fileno())
             # Windows has no O_NOFOLLOW, so the open may have followed a link: the opened file must be the very file
             # the path names (device, inode and mode), and the path must still be a plain file after the open.
-            after = os.lstat(target, dir_fd=folder.fd)
+            after = os.lstat(target, dir_fd=folder.dir_fd)
             # The folder itself must be the one that was verified, and the open file must lie in it.
             if not (folder.unchanged() and folder.holds(handle.fileno(), path.name)):
                 problems.add(
@@ -1224,13 +1292,22 @@ def _journal_paths(folder: Path, problems: _Problems) -> tuple[_Folder | None, l
     anchor = _Folder.verify(folder, problems)
     if anchor is None:
         return None, []
-    paths = sorted(folder.glob("journal-*.jsonl"))
     total = 0
-    for path in paths:
-        try:
-            total += path.stat().st_size
-        except OSError:
-            pass  # reported when the journal is opened
+    if anchor.dir_fd is not None:  # POSIX: the inventory comes from the held directory itself
+        names = sorted(n for n in os.listdir(anchor.dir_fd) if fnmatch.fnmatchcase(n, "journal-*.jsonl"))
+        paths = [folder / name for name in names]
+        for name in names:
+            try:
+                total += os.stat(name, dir_fd=anchor.dir_fd, follow_symlinks=False).st_size
+            except OSError:
+                pass  # reported when the journal is opened
+    else:  # Windows: the names come from the path; every open is checked against the held handle
+        paths = sorted(folder.glob("journal-*.jsonl"))
+        for path in paths:
+            try:
+                total += path.stat().st_size
+            except OSError:
+                pass
     if len(paths) > MAX_JOURNALS or total > MAX_TOTAL_JOURNAL_BYTES:
         problems.add(
             "input-too-large",

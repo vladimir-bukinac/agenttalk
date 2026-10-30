@@ -2835,8 +2835,12 @@ def test_the_docstring_states_the_round_9_limits(er):
 
 def _swap_in_a_link(record, outside, saved):
     """Replace the folder `record` by a link to `outside`, keeping the original as `saved` (a junction on Windows, a
-    symbolic link elsewhere); skip, with the folder put back, where the system cannot make one."""
-    record.rename(saved)
+    symbolic link elsewhere); skip, with the folder put back, where the system cannot make one.  Returns False when
+    the system refuses to move the folder (Windows does, while the reducer holds it): the swap did not happen."""
+    try:
+        record.rename(saved)
+    except OSError:
+        return False
     if sys.platform == "win32":
         made = subprocess.run(["cmd", "/c", "mklink", "/J", str(record), str(outside)], capture_output=True, text=True)
         refused = made.returncode != 0
@@ -2849,6 +2853,7 @@ def _swap_in_a_link(record, outside, saved):
     if refused:
         saved.rename(record)
         pytest.skip("this system cannot create a folder link here")
+    return True
 
 
 def _race_folders(tmp_path):
@@ -2880,18 +2885,20 @@ def test_a_folder_swapped_for_a_link_after_enumeration_is_refused_and_nothing_is
 
     def after_enumeration(path, problems):
         if not swapped:
-            _swap_in_a_link(record, outside, saved)
-            swapped.append(True)
+            swapped.append(_swap_in_a_link(record, outside, saved))
         return original(path, problems)
 
     monkeypatch.setattr(er, "_read_journal", after_enumeration)
 
-    summary = er.reduce_journals(record, ["t.py::outside"])
+    summary = er.reduce_journals(record, ["t.py::safe"])
 
-    assert swapped
-    assert "folder-changed" in kinds(summary["problems"]), summary["problems"]
-    assert summary["items"] == {}, "something was read through the swapped folder"
-    assert summary["accepted"] is False
+    assert len(swapped) == 1
+    assert "t.py::outside" not in summary["items"], "something was read through the swapped folder"
+    if swapped[0]:  # the swap happened (POSIX): it is seen
+        assert "folder-changed" in kinds(summary["problems"]), summary["problems"]
+        assert summary["items"] == {} and summary["accepted"] is False
+    else:  # Windows: the held folder cannot be moved at all, and the read goes on in the real folder
+        assert list(summary["items"]) == ["t.py::safe"] and summary["accepted"] is True, summary
 
 
 def test_a_folder_whose_identity_changes_while_a_journal_is_opened_is_refused_on_every_system(
@@ -2954,8 +2961,7 @@ def test_on_posix_the_journals_are_opened_through_the_folder_descriptor_held_fro
 
     def after_enumeration(path, problems):
         if not swapped:
-            _swap_in_a_link(record, outside, saved)
-            swapped.append(True)
+            swapped.append(_swap_in_a_link(record, outside, saved))
         return original(path, problems)
 
     monkeypatch.setattr(er, "_read_journal", after_enumeration)
@@ -2963,7 +2969,7 @@ def test_on_posix_the_journals_are_opened_through_the_folder_descriptor_held_fro
 
     summary = er.reduce_journals(record, ["t.py::safe"])
 
-    assert swapped and list(summary["items"]) == ["t.py::safe"], summary
+    assert swapped == [True] and list(summary["items"]) == ["t.py::safe"], summary
 
 
 def test_a_journal_can_still_be_read_on_its_own(er, tmp_path):
@@ -2982,5 +2988,231 @@ def test_the_docstring_states_what_the_folder_protection_covers_and_what_it_does
         "relative to the folder's own descriptor",
         "final path",
         "cannot be closed",
+    ):
+        assert text in flat, text
+
+
+# --- fix round 11: one held folder handle is the baseline ------------------------------------------------------
+
+
+def _ready_junction(work, outside):
+    """A link to `outside` that can be renamed into the record folder's place, or a skip where none can be made."""
+    ready = work / "ready-link"
+    if sys.platform == "win32":
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(ready), str(outside)], capture_output=True, text=True)
+        refused = made.returncode != 0
+    else:
+        try:
+            ready.symlink_to(outside, target_is_directory=True)
+            refused = False
+        except (OSError, NotImplementedError):
+            refused = True
+    if refused:
+        pytest.skip("this system cannot create a folder link here")
+    return ready
+
+
+def test_codex_revs_anchor_race_a_swap_and_restore_never_reads_the_outside_journal(er, tmp_path, monkeypatch):
+    # codex-rev's round-10 P1, with real junctions: (1) a link is swapped in while the real path is looked up and the
+    # original is put back; (2) after the listing the outside journal is opened through the link; (3) the original is
+    # put back for the folder's recheck. Both path checks then passed: accepted=true, item t.py::outside.
+    record, saved, outside = _race_folders(tmp_path)
+    ready = _ready_junction(record.parent, outside)
+    real_realpath, real_read, real_lstat = os.path.realpath, er._read_journal, os.lstat
+    state = {"active": False, "blocked": 0}
+
+    def to_outside():
+        try:
+            record.rename(saved)
+        except OSError:
+            state["blocked"] += 1
+            return False
+        ready.rename(record)
+        return True
+
+    def to_original():
+        record.rename(ready)
+        saved.rename(record)
+
+    def at_realpath(path, *args, **kwargs):
+        if Path(path) == record and not state.get("looked"):
+            state["looked"] = True
+            swapped = to_outside()
+            try:
+                return real_realpath(path, *args, **kwargs)
+            finally:
+                if swapped:
+                    to_original()
+        return real_realpath(path, *args, **kwargs)
+
+    def after_listing(path, problems):
+        state["active"] = to_outside()
+        return real_read(path, problems)
+
+    def at_lstat(path, *args, **kwargs):
+        if state["active"] and Path(path) == record:
+            to_original()
+            state["active"] = False
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "realpath", at_realpath)
+    monkeypatch.setattr(er, "_read_journal", after_listing)
+    monkeypatch.setattr(os, "lstat", at_lstat)
+    try:
+        summary = er.reduce_journals(record, ["t.py::safe"])
+    finally:
+        monkeypatch.undo()
+        if state["active"]:
+            to_original()
+
+    assert "t.py::outside" not in summary["items"], summary["items"]
+    if state["blocked"]:  # Windows: the held folder cannot be renamed, so there is nothing to restore
+        assert list(summary["items"]) == ["t.py::safe"] and summary["accepted"] is True, summary
+    else:  # the swap happened: it is seen, or the read stayed in the held folder
+        assert summary["accepted"] is False or list(summary["items"]) == ["t.py::safe"], summary
+
+
+def test_a_link_swapped_in_between_the_check_and_the_open_is_refused_at_the_open(er, tmp_path, monkeypatch):
+    # the baseline is the object that is opened: if the path names a link at that moment, nothing is read
+    record, saved, outside = _race_folders(tmp_path)
+    ready = _ready_junction(record.parent, outside)
+    real_hold = er._hold_directory
+    seen = []
+
+    def swap_then_open(path):
+        record.rename(saved)
+        ready.rename(record)
+        seen.append(True)
+        return real_hold(path)
+
+    monkeypatch.setattr(er, "_hold_directory", swap_then_open)
+
+    summary = er.reduce_journals(record, ["t.py::safe"])
+    record.rename(ready)  # put the original back (the reducer has let go of the folder by now)
+    saved.rename(record)
+
+    assert seen
+    assert kinds(summary["problems"]) & {"folder-not-plain", "folder-not-held", "folder-changed"}, summary["problems"]
+    assert summary["items"] == {} and summary["accepted"] is False
+
+
+def test_the_baseline_comes_from_the_held_folder_not_from_a_second_lookup_of_the_path(er, tmp_path, monkeypatch):
+    # codex-rev's step 1 as a patch that runs everywhere: a second lookup of the path (the real path) is made to
+    # name another folder. The baseline comes from the held object, so the answer must not depend on it.
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    real_realpath = os.path.realpath
+
+    def lying(path, *args, **kwargs):
+        if Path(path) == folder:
+            return str(tmp_path / "somewhere-else")
+        return real_realpath(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "realpath", lying)
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True and list(summary["items"]) == ["t.py::a"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the sharing mode of the held handle is a Windows check")
+def test_on_windows_the_held_folder_cannot_be_renamed_while_it_is_held_and_can_be_afterwards(er, tmp_path, monkeypatch):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    real_read = er._read_journal
+    outcome = []
+
+    def try_to_move(path, problems):
+        try:
+            folder.rename(tmp_path / "moved")
+            outcome.append("moved")
+            (tmp_path / "moved").rename(folder)
+        except OSError:
+            outcome.append("refused")
+        return real_read(path, problems)
+
+    monkeypatch.setattr(er, "_read_journal", try_to_move)
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert outcome == ["refused"], "the folder was moved while the reducer held it"
+    assert summary["accepted"] is True
+    folder.rename(tmp_path / "moved-after")  # the handle is closed again when the reduce ends
+    assert (tmp_path / "moved-after").is_dir()
+
+
+def test_a_folder_that_cannot_be_opened_and_held_is_refused_with_a_name_and_nothing_is_read(er, tmp_path, monkeypatch):
+    # e.g. a share that refuses the open: never a silent fall back to the path checks
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+
+    def refuse(path):
+        raise OSError(5, "Access is denied")
+
+    monkeypatch.setattr(er, "_hold_directory", refuse)
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert "folder-not-held" in kinds(summary["problems"]), summary["problems"]
+    assert summary["items"] == {} and summary["accepted"] is False
+    assert er._read_journal(folder / "journal-serial-11-1000.jsonl", er._Problems()) is None
+
+
+def test_the_held_folder_is_released_after_every_outcome(er, tmp_path, monkeypatch):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    held = []
+    real_hold = er._hold_directory
+
+    def remember(path):
+        fd = real_hold(path)
+        held.append(fd)
+        return fd
+
+    monkeypatch.setattr(er, "_hold_directory", remember)
+    er.reduce_journals(folder, ["t.py::a"])  # a good run
+    monkeypatch.setattr(er, "MAX_JOURNALS", 0)
+    er.reduce_journals(folder, ["t.py::a"])  # refused as too large
+    monkeypatch.undo()
+    monkeypatch.setattr(er, "_hold_directory", remember)
+    monkeypatch.setattr(er._Folder, "unchanged", lambda self: False)
+    er.reduce_journals(folder, ["t.py::a"])  # every journal refused
+    er._read_journal(folder / "journal-serial-11-1000.jsonl", er._Problems())  # a single journal read
+
+    assert len(held) == 4
+    for fd in held:
+        with pytest.raises(OSError):
+            os.fstat(fd)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="listing through the held descriptor is the POSIX way")
+def test_on_posix_the_listing_comes_from_the_held_directory_not_from_the_path(er, tmp_path, monkeypatch):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+
+    def no_path_listing(self, pattern):
+        raise AssertionError("the journals were listed through the path")
+
+    monkeypatch.setattr(Path, "glob", no_path_listing)
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert summary["accepted"] is True and list(summary["items"]) == ["t.py::a"]
+
+
+def test_the_docstring_states_the_single_baseline_and_the_refusal_to_fall_back(er):
+    flat = " ".join(er.__doc__.split())
+    for text in (
+        "folder-not-held",
+        "is opened ONCE and that held object is the baseline",
+        "without delete sharing",
+        "never a second lookup of the path",
+        "never a silent fallback to path checks",
     ):
         assert text in flat, text
