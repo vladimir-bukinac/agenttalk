@@ -9,6 +9,7 @@ inside it.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import os
@@ -25,8 +26,23 @@ TESTS_DIR = Path(__file__).resolve().parent
 SRC_DIR = TESTS_DIR.parent / "src"
 HANDOFF_NAME = "AGENTTALK_EXPERIMENT_RECORD_HANDOFF"
 
-CONFTEST = """
+
+def gate_repair_source():
+    """The gate's grouped-ID repair hook, copied exactly as `tests/conftest.py` has it (decorator included), or ""
+    if the gate no longer has it. pytest 9.2 reads `_id` where xdist 3.8 writes `_nodeid`, so an inner run on 9.2
+    has no `@group` suffix in its raw ids without the repair; on 9.1 the repair changes nothing."""
+    source = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
+    for node in ast.parse(source).body:
+        if isinstance(node, ast.FunctionDef) and node.name == "pytest_collection_finish":
+            first = min([decorator.lineno for decorator in node.decorator_list] + [node.lineno])
+            return "\n".join(source.splitlines()[first - 1 : node.end_lineno])
+    return ""
+
+
+CONFTEST = (
+    """
 import experiment_record
+import pytest
 
 
 def pytest_addoption(parser):
@@ -35,7 +51,12 @@ def pytest_addoption(parser):
 
 def pytest_configure(config):
     experiment_record.configure(config)
+
+
 """
+    + gate_repair_source()
+    + "\n"
+)
 
 GROUPED = """
 import pytest
@@ -94,6 +115,51 @@ def records(rec, kind):
     return [(name, r) for name, recs in read_journals(rec).items() for r in recs if r["kind"] == kind]
 
 
+def identity_fields(raw, group):
+    """The identity a recorder writes for an item: the canonical id (the raw id minus its `@group` suffix), no
+    parameter id (these hand-made ids have none) and the requested and effective group."""
+    suffixed = bool(group) and raw.endswith("@" + group)
+    return {
+        "canonical_id": raw[: -len(group) - 1] if suffixed else raw,
+        "param_id": None,
+        "requested_group": group,
+        "effective_group": group if suffixed else None,
+    }
+
+
+def item_start_fields(raw, group):
+    fields = identity_fields(raw, group)
+    return {
+        "nodeid": raw,
+        "requested_group": group,
+        "effective_group": fields["effective_group"],
+        "suffix_missing": bool(group) and fields["effective_group"] is None,
+        "canonical_id": fields["canonical_id"],
+        "param_id": None,
+    }
+
+
+def phase_fields(raw, group, when, outcome):
+    return {
+        "nodeid": raw,
+        "when": when,
+        "outcome": outcome,
+        "duration": 0.01,
+        "xfail": False,
+        "reason": None,
+        "reason_redactions": 0,
+        **identity_fields(raw, group),
+    }
+
+
+def manifest_fields(rows, source="session", source_worker=None):
+    """A collection manifest for `rows` [(raw id, group)]; the controller's (`source="node"`) has raw ids only."""
+    fields = {"source": source, "source_worker": source_worker, "count": len(rows), "raw_ids": [r for r, _ in rows]}
+    if source == "session":
+        fields["identities"] = [identity_fields(raw, group) for raw, group in rows]
+    return fields
+
+
 def write_journal(
     rec,
     role,
@@ -106,26 +172,37 @@ def write_journal(
     plugins=("xdist.plugin",),
     nested_token=None,
     loadgroup=True,
+    phases=None,
+    collected=None,
+    unfinished=(),
+    manifest=True,
 ):
-    """A hand-made, well-formed journal, for the reducer tests."""
+    """A hand-made, well-formed journal, for the reducer tests.
+
+    Every started item gets the three passed phases unless `phases` says otherwise ({raw id: [(when, outcome), ...]},
+    or False for none at all); a serial, worker or nested journal gets a collection manifest of `collected` (default:
+    the started items); `unfinished` is [(raw id, group, [(when, outcome), ...])]: started, some phases, no end."""
     start = {"started_ms": 1000, "loadgroup": loadgroup, "nested_token": nested_token}
     if plugins is not None:
         start["plugins"] = list(plugins)
     events = [("process-start", start)]
+    if manifest and role in ("serial", "worker", "nested"):
+        rows = list(starts) if collected is None else list(collected)
+        events.append(("collection-manifest", manifest_fields(rows)))
     for raw, group in starts:
-        suffixed = bool(group) and raw.endswith("@" + group)
-        events.append(
-            (
-                "item-start",
-                {
-                    "nodeid": raw,
-                    "requested_group": group,
-                    "effective_group": group if suffixed else None,
-                    "suffix_missing": bool(group) and not suffixed,
-                },
-            )
-        )
+        events.append(("item-start", item_start_fields(raw, group)))
+        sequence = [("setup", "passed"), ("call", "passed"), ("teardown", "passed")]
+        if phases is False:
+            sequence = []
+        elif phases is not None and raw in phases:
+            sequence = phases[raw]
+        for when, outcome in sequence:
+            events.append(("phase", phase_fields(raw, group, when, outcome)))
         events.append(("item-end", {"nodeid": raw}))
+    for raw, group, seen in unfinished:
+        events.append(("item-start", item_start_fields(raw, group)))
+        for when, outcome in seen:
+            events.append(("phase", phase_fields(raw, group, when, outcome)))
     events.extend(extra)
     if trailer:
         events.append(("trailer", {"complete": True, "records": len(events), "exitstatus": 0}))
@@ -134,7 +211,7 @@ def write_journal(
         lines.append(
             json.dumps(
                 {
-                    "v": 1,
+                    "v": 2,
                     "seq": seq,
                     "kind": kind,
                     "role": role,
@@ -565,7 +642,7 @@ def test_every_process_records_the_plugins_it_loaded_and_a_missing_field_is_flag
 
 # --- D08: nested pytest runs ---------------------------------------------------------------------------------------
 
-NESTED_CONFTEST = CONFTEST.replace("\n", "\\n")
+NESTED_CONFTEST = json.dumps(CONFTEST)[1:-1]  # the text of a double-quoted Python string literal
 
 NESTED_PARENT = """
 import os
@@ -1805,3 +1882,506 @@ def test_a_lone_piece_needs_eight_characters_and_must_be_a_start_or_an_end(
         recorder.close()
     assert (fields["error_text"] == given) is unchanged, fields["error_text"]
     assert fields["error_redactions"] == (0 if unchanged else 1)
+
+
+# --- fix round 6: R1 collection manifest, R2 identity on every phase, R3 missing outcomes -----------------------
+
+MIXED = """
+import pytest
+
+
+@pytest.mark.xdist_group("g1")
+@pytest.mark.parametrize("value", ["a@b]", "plain"])
+def test_param(value):
+    assert value
+
+
+def test_ordinary():
+    pass
+
+
+@pytest.mark.skip(reason="not today")
+def test_skipped():
+    pass
+
+
+@pytest.mark.xfail(reason="known")
+def test_xfailed():
+    assert False
+"""
+
+IDENTITY = {
+    # canonical id: (parameter id, requested group, effective group in the parallel run)
+    "test_mixed.py::test_param[a@b]]": ("a@b]", "g1", "g1"),
+    "test_mixed.py::test_param[plain]": ("plain", "g1", "g1"),
+    "test_mixed.py::test_ordinary": (None, None, None),
+    "test_mixed.py::test_skipped": (None, None, None),
+    "test_mixed.py::test_xfailed": (None, None, None),
+}
+
+
+def manifest_records(rec, role):
+    return [(n, r) for n, r in records(rec, "collection-manifest") if n.startswith(f"journal-{role}-")]
+
+
+def test_a_serial_run_writes_the_ordered_collection_manifest(project, er, tmp_path):
+    # R1: the ordered collected identities are in the journal, not only a count and a hash.
+    project.makepyfile(test_mixed=MIXED)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec).assert_outcomes(passed=3, skipped=1, xfailed=1)
+
+    ((_, manifest),) = records(rec, "collection-manifest")
+    assert (manifest["source"], manifest["source_worker"], manifest["count"]) == ("session", None, 5)
+    assert manifest["raw_ids"] == expected  # the same ids in the same order as the serial collection
+    by_raw = dict(zip(manifest["raw_ids"], manifest["identities"], strict=True))
+    for canonical, (param, group, _effective) in IDENTITY.items():
+        assert by_raw[canonical] == {
+            "canonical_id": canonical,
+            "param_id": param,
+            "requested_group": group,
+            "effective_group": None,  # a serial run adds no `@group` suffix
+        }
+    summary = er.reduce_journals(rec, expected)
+    assert summary["accepted"], summary["problems"]
+    assert summary["collection"] == {"collected": 5, "never_started": [], "nodes": {}}
+
+
+def test_the_controller_writes_a_manifest_for_each_worker_that_equals_the_workers_own(project, er, tmp_path):
+    # R1: "a collection manifest written by the controller".
+    project.makepyfile(test_mixed=MIXED)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec).assert_outcomes(passed=3, skipped=1, xfailed=1)
+
+    nodes = {r["source_worker"]: r for _, r in manifest_records(rec, "controller")}
+    own = {r["worker"]: r for _, r in manifest_records(rec, "worker")}
+    assert sorted(nodes) == ["gw0", "gw1"] == sorted(own)
+    for worker, record in nodes.items():
+        assert record["source"] == "node" and "identities" not in record
+        assert record["raw_ids"] == own[worker]["raw_ids"], "the controller and the worker saw different ids"
+        assert record["count"] == 5
+    raw_ids = nodes["gw0"]["raw_ids"]
+    assert [i["canonical_id"] for i in own["gw0"]["identities"]] == expected
+    assert [raw for raw in raw_ids if raw.endswith("@g1")] == [
+        "test_mixed.py::test_param[a@b]]@g1",
+        "test_mixed.py::test_param[plain]@g1",
+    ]
+    summary = er.reduce_journals(rec, expected)
+    assert summary["accepted"], summary["problems"]
+    assert summary["collection"] == {"collected": 5, "never_started": [], "nodes": {"gw0": 5, "gw1": 5}}
+
+
+def test_a_run_stopped_by_the_first_failure_shows_the_items_that_never_started(project, er, tmp_path):
+    project.makepyfile(
+        test_mod="def test_a():\n    assert False\n\n\ndef test_b():\n    pass\n\n\ndef test_c():\n    pass\n"
+    )
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec, "-x").assert_outcomes(failed=1)
+
+    for reference in (expected, None):  # the manifest alone is enough; the serial reference only adds to it
+        summary = er.reduce_journals(rec, reference)
+        assert summary["collection"]["never_started"] == expected[1:]
+        assert "never-started" in kinds(summary["problems"])
+        assert summary["accepted"] is False
+        assert list(summary["items"]) == expected[:1]
+
+
+KILLED_GROUP = """
+import os
+
+import pytest
+
+pytestmark = pytest.mark.xdist_group("g1")
+
+
+def test_before():
+    pass
+
+
+def test_dies():
+    os._exit(7)
+
+
+def test_after():
+    pass
+"""
+
+
+def test_a_killed_workers_unstarted_items_and_crashed_item_are_visible(project, er, tmp_path):
+    # R1 and R2: the group runs on one worker; it dies in the second test, so the third never starts, and the
+    # controller's crash report (no item object there) is joined to the manifest by its raw id.
+    project.makepyfile(test_mod=KILLED_GROUP)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec, "--max-worker-restart=0")
+
+    summary = er.reduce_journals(rec, expected)
+    assert summary["collection"]["never_started"] == [expected[2]]
+    assert {"never-started", "item-unfinished"} <= kinds(summary["problems"])
+    unfinished = next(p for p in summary["problems"] if p["kind"] == "item-unfinished")
+    assert unfinished["crash_recorded"] is True and unfinished["phases_seen"] == ["setup"]
+    assert "crash-unrecorded" not in kinds(summary["problems"])
+    ((_, crash),) = [(n, r) for n, r in records(rec, "phase") if r["when"] == "???"]
+    assert crash["nodeid"] == expected[1] + "@g1"
+    assert (crash["canonical_id"], crash["param_id"], crash["requested_group"], crash["effective_group"]) == (
+        None,
+        None,
+        None,
+        None,
+    )  # the controller has no item: the identity is the manifest row of the same raw id
+    assert summary["first_failure"]["resolved"] == {
+        "canonical_id": expected[1],
+        "param_id": None,
+        "requested_group": "g1",
+        "effective_group": "g1",
+    }
+    (start,) = [r for _, r in records(rec, "item-start") if r["canonical_id"] == expected[1]]
+    assert (start["nodeid"], start["param_id"], start["requested_group"], start["effective_group"]) == (
+        expected[1] + "@g1",
+        None,
+        "g1",
+        "g1",
+    )
+
+
+def test_every_phase_record_carries_the_identity_of_its_item(project, er, tmp_path):
+    # R2: ordinary, parameterized, skipped and xfail items; every phase, not only the item-start.
+    project.makepyfile(test_mixed=MIXED)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec).assert_outcomes(passed=3, skipped=1, xfailed=1)
+
+    phases = [r for n, r in records(rec, "phase") if n.startswith("journal-worker-")]
+    by_item: dict[str, list] = {}
+    for record in phases:
+        by_item.setdefault(record["canonical_id"], []).append(record)
+    assert sorted(by_item) == sorted(IDENTITY)
+    for canonical, (param, group, effective) in IDENTITY.items():
+        for record in by_item[canonical]:
+            assert (record["param_id"], record["requested_group"], record["effective_group"]) == (
+                param,
+                group,
+                effective,
+            )
+            assert record["nodeid"] == canonical + (f"@{effective}" if effective else "")
+    whens = {canonical: [r["when"] for r in rows] for canonical, rows in by_item.items()}
+    assert whens["test_mixed.py::test_skipped"] == ["setup", "teardown"]  # a setup skip has no call phase
+    assert all(w == ["setup", "call", "teardown"] for c, w in whens.items() if c != "test_mixed.py::test_skipped")
+    skipped = by_item["test_mixed.py::test_skipped"][0]
+    assert (skipped["outcome"], skipped["reason"]) == ("skipped", "Skipped: not today")
+    (xfailed,) = [r for r in by_item["test_mixed.py::test_xfailed"] if r["when"] == "call"]
+    assert (xfailed["outcome"], xfailed["xfail"], xfailed["reason"]) == ("skipped", True, "known")
+    starts = {r["canonical_id"]: r for n, r in records(rec, "item-start")}
+    assert starts["test_mixed.py::test_param[a@b]]"]["param_id"] == "a@b]"
+    assert er.reduce_journals(rec, collected_ids(project))["accepted"]
+
+
+def test_the_manifest_tells_a_controller_and_a_worker_that_disagree(er, tmp_path):
+    rows = [("t.py::a@g", "g"), ("t.py::b@g", "g")]
+    write_journal(tmp_path, "controller", 10, extra=[("collection-manifest", manifest_fields(rows[:1], "node", "gw0"))])
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=rows, collected=rows)
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert "manifest-disagreement" in kinds(summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_a_process_that_wrote_no_collection_manifest_is_not_accepted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], manifest=False)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert kinds(summary["problems"]) == {"manifest-missing"}
+    assert summary["accepted"] is False
+    assert summary["collection"]["collected"] is None
+
+
+def test_a_collection_that_differs_from_the_serial_reference_is_refused(er, tmp_path):
+    rows = [("t.py::a", None), ("t.py::b", None)]
+    write_journal(tmp_path, "serial", 11, starts=rows)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::c"])
+
+    assert "collection-mismatch" in kinds(summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_collected_items_that_were_not_started_are_listed_from_the_manifest_alone(er, tmp_path):
+    collected = [("t.py::a", None), ("t.py::b", None), ("t.py::c", None)]
+    write_journal(tmp_path, "serial", 11, starts=collected[:1], collected=collected)
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert summary["collection"]["never_started"] == ["t.py::b", "t.py::c"]
+    assert [p["nodeid"] for p in summary["problems"] if p["kind"] == "never-started"] == ["t.py::b", "t.py::c"]
+    assert summary["accepted"] is False
+
+
+# R3: every started item must have the outcomes pytest gives it.
+
+PASSED = [("setup", "passed"), ("call", "passed"), ("teardown", "passed")]
+
+
+@pytest.mark.parametrize(
+    ("phases", "problem"),
+    [
+        (PASSED, None),
+        ([("setup", "skipped"), ("teardown", "passed")], None),  # a setup skip: no call
+        ([("setup", "failed"), ("teardown", "passed")], None),  # a setup failure: no call
+        ([("setup", "passed"), ("call", "failed"), ("teardown", "passed")], None),
+        ([("setup", "passed"), ("call", "skipped"), ("teardown", "failed")], None),
+        ([], "phase-missing"),  # nothing recorded at all
+        ([("setup", "passed"), ("teardown", "passed")], "phase-missing"),  # the call after a good setup is lost
+        ([("setup", "passed"), ("call", "passed")], "phase-missing"),  # an interrupted teardown
+        ([("call", "passed"), ("teardown", "passed")], "phase-missing"),  # no setup
+        ([("setup", "skipped"), ("call", "passed"), ("teardown", "passed")], "phase-order"),  # a call after a skip
+        ([("setup", "failed"), ("call", "passed"), ("teardown", "passed")], "phase-order"),  # and after a failure
+        ([("setup", "passed"), ("call", "passed"), ("call", "passed"), ("teardown", "passed")], "phase-order"),
+        ([("teardown", "passed"), ("setup", "passed"), ("call", "passed")], "phase-order"),
+    ],
+    ids=[
+        "ordinary",
+        "setup-skip",
+        "setup-failure",
+        "call-failure",
+        "skip-then-teardown-failure",
+        "no-phase-at-all",
+        "call-lost",
+        "teardown-lost",
+        "setup-lost",
+        "call-after-skip",
+        "call-after-failure",
+        "call-twice",
+        "wrong-order",
+    ],
+)
+def test_the_phases_of_an_ended_item_are_checked_against_what_pytest_does(er, tmp_path, phases, problem):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases={"t.py::a": phases})
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    found = kinds(summary["problems"])
+    assert found == ({problem} if problem else set()), summary["problems"]
+    assert summary["accepted"] is (problem is None)
+
+
+def test_a_record_of_another_schema_version_is_refused_and_the_docstring_says_so(er, tmp_path):
+    assert er.SCHEMA_VERSION == 2 and er.HANDOFF_VERSION == 1
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)])
+    damaged(path, "item-start", v=1)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+
+    assert "bad-field" in kinds(summary["problems"]) and summary["accepted"] is False
+    flat = " ".join(er.__doc__.split())
+    for text in (
+        "schema version, 2",
+        "collection-manifest the ordered collected identities",
+        "EVERY phase carries them",
+        "joins them and shows the row as `resolved`",
+        "phase-missing (an item that ended lacks its setup",
+        "never-started (collected but never started",
+        "crash-unrecorded (an unfinished item of a worker",
+        "passes `require_phases=False`",
+    ):
+        assert text in flat, text
+
+
+def test_a_phase_that_belongs_to_no_started_item_is_reported(er, tmp_path):
+    extra = [("phase", phase_fields("t.py::ghost", None, "call", "passed"))]
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=extra)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "phase-outside-item" in kinds(summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_a_probe_run_without_test_bodies_can_ask_not_to_need_phases(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)], phases=False)
+
+    assert er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])["accepted"] is False
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"], require_phases=False)
+    assert summary["accepted"], summary["problems"]
+
+
+def test_an_unfinished_item_with_a_crash_record_says_so_and_one_without_is_a_new_problem(er, tmp_path):
+    unfinished = [("t.py::a@g", "g", [("setup", "passed")])]
+    write_journal(tmp_path, "worker", 11, worker="gw0", trailer=False, unfinished=unfinished)
+
+    lonely = er.reduce_journals(tmp_path)
+    assert {"item-unfinished", "crash-unrecorded"} <= kinds(lonely["problems"])
+
+    down = [("worker-down", {"down_worker": "gw0", "has_error": True, "error_text": "crashed"})]
+    write_journal(tmp_path, "controller", 10, extra=down)
+    recorded = er.reduce_journals(tmp_path)
+    assert "item-unfinished" in kinds(recorded["problems"])
+    assert "crash-unrecorded" not in kinds(recorded["problems"])
+    assert next(p for p in recorded["problems"] if p["kind"] == "item-unfinished")["crash_recorded"] is True
+    assert recorded["accepted"] is False
+
+
+NEGATIVE_CONFTEST = """
+import experiment_record
+
+experiment_record.Recorder.pytest_runtest_logreport = lambda self, report: None  # the phase writer is off
+
+
+def pytest_addoption(parser):
+    experiment_record.add_option(parser)
+
+
+def pytest_configure(config):
+    experiment_record.configure(config)
+"""
+
+
+def test_a_failing_test_whose_phase_lines_were_never_written_is_not_accepted(project, er, tmp_path):
+    # R3: with only the phase writer disabled, the reducer used to say complete, accepted, no problem, no failure.
+    project.makeconftest(NEGATIVE_CONFTEST)
+    project.makepyfile(test_mod="def test_fails():\n    assert False\n\n\ndef test_ok():\n    pass\n")
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec).assert_outcomes(failed=1, passed=1)
+
+    assert not list(records(rec, "phase"))
+    summary = er.reduce_journals(rec, expected)
+    assert summary["status"] == "complete" and summary["first_failure"] is None  # the symptom the maintainers saw
+    assert summary["problem_counts"]["phase-missing"] == 2
+    assert summary["accepted"] is False
+
+
+def without_phases(rec):
+    """Remove every phase line of every journal in `rec`, renumber the rest and fix the trailer's count."""
+    for path in Path(rec).glob("journal-*.jsonl"):
+        kept = [json.loads(line) for line in path.read_text(encoding="utf-8").split("\n") if line]
+        kept = [r for r in kept if r["kind"] != "phase"]
+        for number, record in enumerate(kept, 1):
+            record["seq"] = number
+            if record["kind"] == "trailer":
+                record["records"] = number - 1
+        path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in kept) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("parallel", [False, True], ids=["serial", "parallel"])
+def test_real_journals_with_every_phase_line_removed_are_refused(project, er, tmp_path, parallel):
+    project.makepyfile(test_mixed=MIXED)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+    (run_parallel if parallel else run_serial)(project, rec).assert_outcomes(passed=3, skipped=1, xfailed=1)
+    assert er.reduce_journals(rec, expected)["accepted"], "the real journals are accepted before the lines go"
+
+    without_phases(rec)
+
+    summary = er.reduce_journals(rec, expected)
+    assert summary["status"] == "complete" and "sequence-gap" not in kinds(summary["problems"])
+    assert summary["problem_counts"]["phase-missing"] == 5  # one per item
+    assert summary["accepted"] is False
+
+
+MANY_OUTCOMES = """
+import pytest
+
+
+@pytest.fixture
+def broken_setup():
+    raise RuntimeError("setup")
+
+
+@pytest.fixture
+def broken_teardown():
+    yield
+    raise RuntimeError("teardown")
+
+
+def test_fail():
+    assert False
+
+
+def test_setup_error(broken_setup):
+    pass
+
+
+def test_teardown_error(broken_teardown):
+    pass
+
+
+@pytest.mark.skipif(True, reason="never")
+def test_skip():
+    pass
+
+
+@pytest.mark.xfail(reason="x")
+def test_xfail():
+    assert False
+
+
+@pytest.mark.xfail(reason="x")
+def test_xpass():
+    pass
+
+
+def test_ok():
+    pass
+"""
+
+
+def test_every_ordinary_pytest_outcome_is_reconciled_without_a_problem(project, er, tmp_path):
+    # Guard against a check that is too strict: failures, errors in setup and teardown, skips and xfail are valid.
+    project.makepyfile(test_many=MANY_OUTCOMES)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec)
+
+    summary = er.reduce_journals(rec, expected)
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True and summary["first_failure"] is not None
+
+
+# --- the PR 588 CI addendum: pytest's own run variables are not masked -------------------------------------------
+
+RUN_VARIABLES = (
+    "PYTEST_CURRENT_TEST",
+    "PYTEST_VERSION",
+    "PYTEST_XDIST_WORKER",
+    "PYTEST_XDIST_TESTRUNUID",
+    "PYTEST_ADDOPTS",
+)
+
+
+def test_pytests_own_run_variables_are_not_masked_but_an_ordinary_value_next_to_them_is(er, tmp_path, monkeypatch):
+    # CI on Linux: PYTEST_CURRENT_TEST holds the current test's id, and `:` is the path separator there, so its
+    # part `test_mod.py` matched ordinary error text: `test_mod.py:6: AssertionError` became `<env:...>:6: ...`.
+    current = os.pathsep.join(["test_mod.py", "test_x (call)"])
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", current)
+    others = {name: f"{name.lower()}-value-1234" for name in RUN_VARIABLES if name != "PYTEST_CURRENT_TEST"}
+    for name, value in others.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setenv("P3_S_NEXT_TO_IT", "ordinary-value-9Kq2")
+    text = " | ".join(["test_mod.py:6: AssertionError", current, *others.values(), "ordinary-value-9Kq2"])
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(text)
+        reason = recorder.reason_fields(text)
+    finally:
+        recorder.close()
+    kept = text.replace("ordinary-value-9Kq2", "<env:P3_S_NEXT_TO_IT>")
+    assert fields["error_text"] == kept
+    assert fields["error_redactions"] == 1
+    assert (reason["reason"], reason["reason_redactions"]) == (kept, 1)
+    assert fields["error_digest"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_the_docstring_states_that_pytests_run_variables_are_not_masked(er):
+    flat = " ".join(er.__doc__.split())
+    assert "except the variables whose names start with `PYTEST_`" in flat
+    assert "pytest's own run variables (every `PYTEST_*`" in flat
