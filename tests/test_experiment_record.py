@@ -1354,3 +1354,111 @@ def test_the_conftest_wiring_line_is_formatted_as_ruff_wants():
     code = line.split("#", 1)[0].rstrip()
     assert code.endswith(")"), repr(line)
     assert line.index("#") - len(code) == 2, repr(line)
+
+
+# --- fix round 2: N1 shortened long values, CX3 rest (numbers outside the float range) -------------------------------
+
+LONG_SENTINELS = {
+    "P3_S_LONG32": "Q7xK2mP9vL4nR8tW3yB6cD1fG5hJ0zA9",
+    "P3_S_LONG64": "mZ8cV3bN6qW1eR4tY7uI0oP2aS5dF9gH3jK6lX1zC4vB7nM0qW8eR2tY5uI9oP3a",
+}
+
+LONG_TESTS = """
+import os
+
+
+def test_long_32():
+    assert os.environ["P3_S_LONG32"] == "short"
+
+
+def test_long_64():
+    assert os.environ["P3_S_LONG64"] == "short"
+"""
+
+
+def windows_of(value, size=8):
+    return {value[i : i + size] for i in range(len(value) - size + 1)}
+
+
+def test_a_long_value_that_pytest_shortens_does_not_reach_the_journal(project, er, tmp_path, monkeypatch):
+    # N1 (P1): pytest shows a long compared value as 'head...tail' (about 12 characters each side); neither piece is the
+    # whole value, so the first pass cannot find it. The second pass joins head and tail back to one recognised value.
+    for name, value in LONG_SENTINELS.items():
+        monkeypatch.setenv(name, value)
+    project.makepyfile(test_long=LONG_TESTS)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec)
+
+    decoded = "\n".join(
+        value for recs in read_journals(rec).values() for r in recs for value in r.values() if isinstance(value, str)
+    )
+    raw = journal_bytes(rec).decode("utf-8")
+    for name, value in LONG_SENTINELS.items():
+        leaked = [w for w in windows_of(value) if w in decoded or w in raw]
+        assert not leaked, f"{name}: pieces of the value reached the journal: {sorted(leaked)[:3]}"
+    phases = phases_of(rec)
+    assert "<env:P3_S_LONG32>" in phases[("test_long_32", "call")]["error_text"]
+    assert "<env:P3_S_LONG64>" in phases[("test_long_64", "call")]["error_text"]
+
+
+def test_a_shortened_form_is_joined_back_to_its_value_and_counted(er, tmp_path, monkeypatch):
+    value = LONG_SENTINELS["P3_S_LONG32"]
+    monkeypatch.setenv("P3_S_LONG32", value)
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(f"assert '{value[:11]}...{value[-11:]}' == 'x'")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "assert '<env:P3_S_LONG32>' == 'x'"
+    assert fields["error_redactions"] == 1
+
+
+@pytest.mark.parametrize(
+    ("text", "unchanged"),
+    [
+        ("{h3}...{t3}", True),  # pieces under 4 characters are not recognised
+        ("{h4}...{t4}", False),  # 4 and 4 are
+        ("{h4}...{o4}", True),  # a head of this value with the tail of another value
+        ("Loading...", True),  # an ellipsis in ordinary text
+        ("{h4} ... {t4}", True),  # the ellipsis must sit between the pieces
+    ],
+)
+def test_the_shortened_form_needs_both_pieces_of_one_value(er, tmp_path, monkeypatch, text, unchanged):
+    value = LONG_SENTINELS["P3_S_LONG32"]
+    other = LONG_SENTINELS["P3_S_LONG64"]
+    monkeypatch.setenv("P3_S_LONG32", value)
+    monkeypatch.setenv("P3_S_LONG64", other)
+    given = text.format(h3=value[:3], t3=value[-3:], h4=value[:4], t4=value[-4:], o4=other[-4:])
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(given)
+    finally:
+        recorder.close()
+    assert (fields["error_text"] == given) is unchanged, fields["error_text"]
+    assert fields["error_redactions"] == (0 if unchanged else 1)
+
+
+def test_a_huge_integer_as_the_time_is_a_bad_field_not_a_crash(er, tmp_path):
+    # CX3 rest: math.isfinite(10**400) raises OverflowError; the whole summary was lost.
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)])
+    damaged(path, "item-end", t_wall=10**400)
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+    assert "bad-field" in kinds(summary["problems"]) and "sequence-gap" not in kinds(summary["problems"])
+    assert summary["items"]["t.py::b"]["started"] == 1
+
+
+def test_an_integer_too_long_for_json_is_a_bad_line_not_a_crash(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    lines = path.read_bytes().split(b"\n")
+    lines.insert(2, b'{"v": 1, "seq": 3, "kind": "x", "role": "serial", "pid": 11, "t_wall": ' + b"9" * 5000 + b"}")
+    path.write_bytes(b"\n".join(lines))
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+    assert "bad-line" in kinds(summary["problems"])
+    assert summary["items"]["t.py::a"]["started"] == 1
+
+
+def test_the_docstring_states_the_limits_of_the_cleaning(er):
+    text = er.__doc__.lower()
+    assert "node ids are kept exactly as pytest makes them" in text
+    assert "recognised only by its first and last characters" in text

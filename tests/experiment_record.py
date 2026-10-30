@@ -16,8 +16,9 @@ delete it); a journal is created exclusively (never reusing or following an exis
 file; the reducer opens without waiting and checks on the opened file that it is a plain file with one name.
 S5: every record is one JSON line (`json.dumps` escapes quotes and control characters, so no text can end a line or
 forge a record); U+2028 and similar stay literal, which is why a reader splits on "\\n" only.
-S6: stored free text is cleaned of values the recorder can recognise (see "Free text and what is blanked out"); no
-secret is written by the recorder itself.  S7: every refusal says which input was bad; nothing is swallowed.
+S6: stored free text is cleaned of values the recorder can recognise (see "Free text and what is blanked out"),
+including a long value that pytest shows shortened as 'head...tail'; no secret is written by the recorder itself.
+S7: every refusal says which input was bad; nothing is swallowed.
 S8: error text is cut at 64 KiB, reasons at 4 KiB, the handoff is limited to 4 KiB and a journal read to 64 MiB; a
 refusal closes what it opened.  S9: JSON only.
 
@@ -89,11 +90,19 @@ from the original, the recorder replaces, longest first:
     `os.pathsep`-separated part of such a value, by `<env:NAME>` (blank values are skipped);
   * the home folder by `<home>`, the temp folder by `<temp>`, the record folder by `<record>` and the basetemp by
     `<basetemp>`, written with either slash and, on Windows, in any letter case.
-Each is also found with its backslashes doubled, as a traceback shows a string from the source.
-LIMITS, stated plainly: only environment values and those four folders are recognised.  Values shorter than 8
-characters, a value shown in another spelling (escaped quotes or non-ASCII characters in a Python repr), and secrets
-that come from anywhere else (a file, a prompt, a network reply), cannot be recognised and are stored as
-they are.  Handle journals like test logs.  The probe jobs run without secrets (plan section 4).
+Each is also found with its backslashes doubled, as a traceback shows a string from the source.  A second pass then
+joins a shortened form back to its value: pytest shows a long compared value as `head...tail`, and when `head` (at
+least 4 characters) ends where this text puts the `...` and starts a recognised value, and `tail` (at least 4)
+follows it and ends the same value, the whole form becomes the same `<env:NAME>`, counted in the redactions.
+LIMITS, stated plainly: only environment values and those four folders are recognised.
+  * Values shorter than 8 characters cannot be recognised and are stored as they are.
+  * A value shown in another spelling (escaped quotes or non-ASCII characters in a Python repr) is stored.
+  * A value pytest shortens is recognised only by its first and last characters; a form with a piece under 4
+    characters stays as it is.
+  * Node ids are kept exactly as pytest makes them (a value used in a parametrize id is stored), because the
+    reducer joins on them.
+  * Secrets that come from anywhere else (a file, a prompt, a network reply) cannot be recognised.
+Handle journals like test logs.  The probe jobs run without secrets (plan section 4).
 
 The reducer
 -----------
@@ -166,6 +175,8 @@ MAX_JOURNAL_BYTES = 64 * 1024 * 1024
 MAX_PROBLEMS_PER_KIND = 20
 DIGEST_ALGORITHM = "sha256"
 MIN_SECRET_LENGTH = 8
+MIN_SHORTENED_PIECE = 4
+SHORTENED_WINDOW = 256
 ROLE_NAMES = ("serial", "controller", "worker", "nested")
 
 _TOKEN = re.compile(r"[0-9a-f]{16}")
@@ -205,6 +216,48 @@ def _bounded(text: str, limit: int) -> tuple[str, bool, str, int]:
 @functools.lru_cache(maxsize=8)
 def _pattern(needles: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(n) for n in needles), re.IGNORECASE if ignorecase else 0)
+
+
+def _join_shortened(text: str, ordered: tuple[str, ...], found: dict[str, str], ignorecase: bool) -> tuple[str, int]:
+    """Replace each `head...tail` that is one recognised value shown shortened by `<label>`; return (text, count).
+
+    pytest cuts a long compared value to its first and last characters with "..." between them, so neither piece is
+    the whole value. Both pieces must be at least MIN_SHORTENED_PIECE characters, `head` must be a prefix and `tail`
+    a suffix of the same value."""
+    if "..." not in text:
+        return text, 0
+    fold = str.casefold if ignorecase else (lambda value: value)
+    pieces: list[str] = []
+    cursor = count = 0
+    position = text.find("...")
+    while position != -1:
+        left = text[max(cursor, position - SHORTENED_WINDOW) : position]
+        right = text[position + 3 : position + 3 + SHORTENED_WINDOW]
+        for needle in ordered:
+            if len(needle) < 2 * MIN_SHORTENED_PIECE:
+                continue
+            head = _longest_match(left, needle, fold, from_end=True)
+            tail = _longest_match(right, needle, fold, from_end=False) if head else 0
+            if head and tail:
+                pieces.append(text[cursor : position - head])
+                pieces.append(found[needle])
+                cursor = position + 3 + tail
+                count += 1
+                break
+        position = text.find("...", max(position + 3, cursor))
+    pieces.append(text[cursor:])
+    return "".join(pieces), count
+
+
+def _longest_match(side: str, needle: str, fold, *, from_end: bool) -> int:
+    """The longest length k (at least MIN_SHORTENED_PIECE, leaving as much for the other piece) such that the last k
+    characters of `side` (from_end) are the first k of `needle`, or the first k of `side` are the last k of `needle`;
+    0 when none."""
+    for size in range(min(len(side), len(needle) - MIN_SHORTENED_PIECE), MIN_SHORTENED_PIECE - 1, -1):
+        piece, expected = (side[-size:], needle[:size]) if from_end else (side[:size], needle[-size:])
+        if fold(piece) == fold(expected):
+            return size
+    return 0
 
 
 class Redactor:
@@ -260,7 +313,9 @@ class Redactor:
             key = match.group(0)
             return labels.get(key.casefold() if ignorecase else key, "<redacted>")
 
-        return _pattern(ordered, ignorecase).subn(label, text)
+        cleaned, count = _pattern(ordered, ignorecase).subn(label, text)
+        cleaned, joined = _join_shortened(cleaned, ordered, found, ignorecase)
+        return cleaned, count + joined
 
 
 def _requested_group(item: pytest.Item) -> str | None:
@@ -652,7 +707,12 @@ def _is_int(value: Any) -> bool:
 
 
 def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:  # an integer too large for a float is not a time
+        return False
 
 
 def _is_text(value: Any) -> bool:
