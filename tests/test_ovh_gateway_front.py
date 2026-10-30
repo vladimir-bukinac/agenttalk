@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import errno
 import gc
 import http.client
 import io
@@ -773,11 +774,104 @@ def test_a_listener_on_another_address_is_refused_and_closed(tmp_path) -> None:
     assert front._server is None
 
 
+def _bound_listener_that_cannot_say_if_it_listens(
+    monkeypatch, *, ask_error: OSError | None = None, listen_error: OSError | None = None
+):
+    """A socket bound to a loopback port that is not listening yet, as macOS shows it: asking for SO_ACCEPTCONN
+    raises `ask_error` (macOS: ENOPROTOOPT). `listen` is recorded, and raises `listen_error` if given.
+    Returns (socket, calls)."""
+    monkeypatch.setattr(socket, "SO_ACCEPTCONN", getattr(socket, "SO_ACCEPTCONN", 2), raising=False)
+    calls: list[tuple] = []
+
+    class Unreporting(HeldSocket):
+        def getsockopt(self, level, option, *args):
+            if option == socket.SO_ACCEPTCONN and ask_error is not None:
+                raise ask_error
+            return super().getsockopt(level, option, *args)
+
+        def listen(self, backlog) -> None:
+            calls.append(("listen", backlog))
+            if listen_error is not None:
+                raise listen_error
+            super().listen(backlog)
+
+    bound = Unreporting(socket.AF_INET, socket.SOCK_STREAM)
+    bound.bind(("127.0.0.1", 0))
+    return bound, calls
+
+
+def test_a_platform_that_cannot_report_listening_gets_a_listen_call_and_the_same_socket(tmp_path, monkeypatch) -> None:
+    """macOS defines SO_ACCEPTCONN but answers ENOPROTOOPT. The hand-over then makes sure the socket listens (a listen
+    on a listening BSD socket only sets the backlog) and the server uses that very socket."""
+    bound, calls = _bound_listener_that_cannot_say_if_it_listens(
+        monkeypatch, ask_error=OSError(errno.ENOPROTOOPT, "Protocol not available")
+    )
+    front = _front_on(int(bound.getsockname()[1]), tmp_path)
+
+    server = front.make_server(listener=bound)
+
+    try:
+        assert server.socket is bound
+        assert front._server is server
+        assert calls == [("listen", ThreadingHTTPServer.request_queue_size)]
+        assert server.server_address == bound.getsockname()
+        assert bound.close_count == 0
+    finally:
+        server.server_close()
+    assert bound.close_count == 1
+
+
+@pytest.mark.parametrize(
+    ("ask_error", "listen_error"),
+    [
+        (OSError(errno.EBADF, "Bad file descriptor"), None),  # any other error from the question is not hidden
+        (OSError(errno.ENOPROTOOPT, "Protocol not available"), OSError(errno.EINVAL, "Invalid argument")),
+    ],
+)
+def test_any_other_error_while_checking_that_the_listener_listens_propagates_and_closes_it(
+    tmp_path, monkeypatch, ask_error, listen_error
+) -> None:
+    bound, calls = _bound_listener_that_cannot_say_if_it_listens(
+        monkeypatch, ask_error=ask_error, listen_error=listen_error
+    )
+    front = _front_on(int(bound.getsockname()[1]), tmp_path)
+
+    with pytest.raises(OSError) as raised:
+        front.make_server(listener=bound)
+
+    assert raised.value.errno == (listen_error or ask_error).errno
+    assert bound.close_count == 1
+    assert front._server is None
+    assert calls == ([] if listen_error is None else [("listen", ThreadingHTTPServer.request_queue_size)])
+
+
+def test_a_wrong_socket_is_still_refused_before_any_listen_call_when_the_question_is_unanswerable(
+    tmp_path, monkeypatch
+) -> None:
+    bound, calls = _bound_listener_that_cannot_say_if_it_listens(
+        monkeypatch, ask_error=OSError(errno.ENOPROTOOPT, "Protocol not available")
+    )
+    front = _front_on(int(bound.getsockname()[1]) + 1, tmp_path)  # another port than the socket's
+
+    with pytest.raises(gateway.GatewayConfigError, match="address"):
+        front.make_server(listener=bound)
+
+    assert calls == []
+    assert bound.close_count == 1
+
+
 def test_a_listener_that_is_not_listening_is_refused_and_closed(tmp_path) -> None:
     if not hasattr(socket, "SO_ACCEPTCONN"):
         pytest.skip("this platform cannot ask a socket whether it is listening")
     bound = HeldSocket(socket.AF_INET, socket.SOCK_STREAM)
     bound.bind(("127.0.0.1", 0))
+    try:
+        bound.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
+    except OSError as error:
+        bound.close()
+        if error.errno == errno.ENOPROTOOPT:
+            pytest.skip("this platform defines SO_ACCEPTCONN but cannot report it (macOS)")
+        raise
     front = _front_on(int(bound.getsockname()[1]), tmp_path)
     with pytest.raises(gateway.GatewayConfigError, match="listening"):
         front.make_server(listener=bound)

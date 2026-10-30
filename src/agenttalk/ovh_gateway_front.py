@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import errno
 import http.client
 import json
 import os
@@ -611,7 +612,8 @@ class GatewayFront:
         With a `listener` (a socket the caller has already bound and is listening on, which keeps the port held
         from bind to serving), the server uses that socket and does not bind. From the moment of the call the
         server owns the listener: `server_close()` closes it, and every refusal below closes it too, so a
-        refused hand-over leaks nothing."""
+        refused hand-over leaks nothing. Where the platform cannot report whether the listener listens (macOS answers
+        ENOPROTOOPT), the hand-over calls `listen` on it instead of asking; any other error still closes it."""
         server = None
         try:
             if self._server is not None:
@@ -623,10 +625,18 @@ class GatewayFront:
                     raise GatewayConfigError("the handed listener must be a stream socket")
                 if listener.getsockname()[:2] != (self.config.public_host, self.config.public_port):
                     raise GatewayConfigError("the handed listener is not bound to the configured public address")
-                if hasattr(socket, "SO_ACCEPTCONN") and not listener.getsockopt(
-                    socket.SOL_SOCKET, socket.SO_ACCEPTCONN
-                ):
-                    raise GatewayConfigError("the handed listener is not listening")
+                if hasattr(socket, "SO_ACCEPTCONN"):
+                    try:
+                        listening = listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN)
+                    except OSError as error:
+                        if error.errno != errno.ENOPROTOOPT:
+                            raise
+                        # macOS defines the option but cannot report it. A listen() on a listening BSD socket only
+                        # sets the backlog, so the server gets a listening socket either way.
+                        listener.listen(ThreadingHTTPServer.request_queue_size)
+                    else:
+                        if not listening:
+                            raise GatewayConfigError("the handed listener is not listening")
 
             class Server(ThreadingHTTPServer):
                 allow_reuse_address = False
