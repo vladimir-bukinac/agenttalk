@@ -96,7 +96,8 @@ characters) ends where this text puts the `...` and starts a recognised value, a
 ends the same value, the whole form becomes the same `<env:NAME>`, counted in the redactions.  Whole values and
 shortened forms are both looked for in the ORIGINAL text, so a value that is the start of another cannot hide the
 other's shortened form; spans that overlap become one replacement (the label of the longest), spans that only touch stay
-two.  The search is bounded: each `...` looks only at the 256 characters around it, and only at places where a
+two.  When several values fit one form, each is matched and the masked stretch is the union of their spans.  The
+search is bounded: each `...` looks only at the 256 characters around it, and only at places where a
 recognised value begins, so a 64 KiB text full of `...` is cleaned in about a second at worst (tests allow 5).
 LIMITS, stated plainly: only environment values and those four folders are recognised.
   * Values shorter than 8 characters cannot be recognised and are stored as they are.
@@ -106,6 +107,8 @@ LIMITS, stated plainly: only environment values and those four folders are recog
   * Node ids are kept exactly as pytest makes them (a value used in a parametrize id is stored), because the
     reducer joins on them.
   * Secrets that come from anywhere else (a file, a prompt, a network reply) cannot be recognised.
+  * Several environment values crafted on purpose to overlap or compete are defended against only in the cases the
+    tests cover; this cleaning is a safety net, not a guarantee, which is why the journals are handled like test logs.
 Handle journals like test logs.  The probe jobs run without secrets (plan section 4).
 
 The reducer
@@ -255,24 +258,30 @@ def _shortened_spans(
     while position != -1:
         first = bisect.bisect_left(positions, position - SHORTENED_WINDOW)
         last = bisect.bisect_right(positions, position - MIN_SHORTENED_PIECE)
-        span = _first_shortened_span(text, position, starts[first:last], by_head, found, fold)
-        if span:
-            spans.append(span)
+        spans.extend(_shortened_spans_at(text, position, starts[first:last], by_head, found, fold))
         position = text.find("...", position + 3)
     return spans
 
 
-def _first_shortened_span(text, position, candidates, by_head, found, fold):
-    """The span for the "..." at `position` from the longest head and the longest value that fit, or None."""
+def _shortened_spans_at(text, position, candidates, by_head, found, fold):
+    """A span for every recognised value that fits the "..." at `position`, each from its longest head and its
+    longest tail. Several values can fit one form and show different lengths of the tail, so none is left out;
+    the spans are merged afterwards."""
+    spans = []
+    seen = set()
+    right = text[position + 3 : position + 3 + SHORTENED_WINDOW]
     for start, key in candidates:
         head = text[start:position]
         for needle in by_head[key]:
-            if len(head) > len(needle) - MIN_SHORTENED_PIECE or fold(head) != fold(needle[: len(head)]):
+            if needle in seen or len(head) > len(needle) - MIN_SHORTENED_PIECE:
                 continue
-            tail = _longest_tail(text[position + 3 : position + 3 + SHORTENED_WINDOW], needle, fold)
+            if fold(head) != fold(needle[: len(head)]):
+                continue
+            seen.add(needle)  # candidates run from the longest head, so this is the longest head of this value
+            tail = _longest_tail(right, needle, fold)
             if tail:
-                return start, position + 3 + tail, found[needle]
-    return None
+                spans.append((start, position + 3 + tail, found[needle]))
+    return spans
 
 
 def _longest_tail(side: str, needle: str, fold) -> int:

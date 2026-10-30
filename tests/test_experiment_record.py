@@ -1465,6 +1465,9 @@ def test_the_docstring_states_the_limits_of_the_cleaning(er):
     flat = " ".join(text.split())
     assert "both looked for in the original text" in flat
     assert "a 64 kib text full of `...` is cleaned" in flat
+    assert "the masked stretch is the union of their spans" in flat
+    assert "crafted on purpose to overlap or compete" in flat
+    assert "the probe jobs run without secrets" in flat
 
 
 # --- fix round 3: N1 values that start alike, P2 a slow second pass ----------------------------------------------
@@ -1625,3 +1628,75 @@ def test_a_long_text_full_of_ellipses_is_cleaned_within_a_small_time_limit(tmp_p
     assert set(seconds) == {"dots", "ellipses", "shortened forms", "heads without tails"}
     slow = {name: taken for name, taken in seconds.items() if taken > CLEAN_TIME_LIMIT}
     assert not slow, f"cleaning took longer than {CLEAN_TIME_LIMIT} seconds: {slow}"
+
+
+# --- fix round 4: N1 the union of every valid shortened-form match -------------------------------------------------
+
+COMPETING_HEAD = "Hq3vN8zK2mXw"
+COMPETING_TAIL = "Ry5tB7cJ9dLp"
+COMPETING_B64 = COMPETING_HEAD + "Z" * 40 + COMPETING_TAIL
+COMPETING_A200 = COMPETING_HEAD + "A" * 184 + COMPETING_TAIL[:4]
+
+COMPETING_TESTS = """
+import os
+
+import pytest
+
+
+def pieces():
+    big = os.environ["P3_S_CB64"]
+    return big[:12], big[-12:]
+
+
+def test_raise():
+    head, tail = pieces()
+    raise ValueError(f"{head}...{tail}")
+
+
+def test_skip():
+    head, tail = pieces()
+    pytest.skip(f"{head}...{tail}")
+"""
+
+
+def set_competing_values(monkeypatch):
+    """Two values that both fit `H...T` (the longer one shows only T[:4] of the tail) and a third that equals H."""
+    monkeypatch.setenv("P3_S_CB64", COMPETING_B64)
+    monkeypatch.setenv("P3_S_CA200", COMPETING_A200)
+    monkeypatch.setenv("P3_S_CHEAD", COMPETING_HEAD)
+
+
+def test_two_values_that_fit_one_shortened_form_are_masked_by_their_union(er, tmp_path, monkeypatch):
+    # N1 (P1, round 5): the first value that fitted (the longer A200) masked only T[:4] and left T[4:] of B64 stored.
+    set_competing_values(monkeypatch)
+    text = f"{COMPETING_HEAD}...{COMPETING_TAIL}"
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(text)
+        reason = recorder.reason_fields(text)
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "<env:P3_S_CB64>"
+    assert fields["error_redactions"] == 1
+    assert (reason["reason"], reason["reason_redactions"]) == ("<env:P3_S_CB64>", 1)
+    assert fields["error_digest"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert fields["error_length"] == len(text.encode("utf-8"))
+
+
+def test_the_union_of_matches_reaches_the_journal_of_a_real_run(project, er, tmp_path, monkeypatch):
+    # The same case through a real pytest child: a raised message and a skip reason, nothing of B64's tail stored.
+    set_competing_values(monkeypatch)
+    project.makepyfile(test_competing=COMPETING_TESTS)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec)
+
+    decoded = "\n".join(
+        value for recs in read_journals(rec).values() for r in recs for value in r.values() if isinstance(value, str)
+    )
+    raw = journal_bytes(rec).decode("utf-8")
+    leaked = [w for w in windows_of(COMPETING_TAIL) if w in decoded or w in raw]
+    assert not leaked, f"pieces of the longer value's tail reached the journal: {sorted(leaked)[:3]}"
+    phases = phases_of(rec)
+    assert "<env:P3_S_CB64>" in phases[("test_raise", "call")]["error_text"]
+    assert phases[("test_skip", "call")]["reason"] == "Skipped: <env:P3_S_CB64>"
