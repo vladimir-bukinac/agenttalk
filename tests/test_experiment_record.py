@@ -965,3 +965,392 @@ def test_record_folder_containment_survives_dot_segments_case_and_a_name_prefix_
     given.mkdir()
     with pytest.raises(pytest.UsageError, match="inside the basetemp"):
         er._checked_directory(explicit, str(given / "rec"), create=False, source="test")
+
+
+# --- fix round 1: CX1 redaction, CX2 torn tail, CX3 damaged fields, CX4 trailer count, CX5 spacing -----------------
+
+
+def journal_bytes(rec):
+    return b"\n".join(path.read_bytes() for path in sorted(Path(rec).glob("journal-*.jsonl")))
+
+
+def fake_home(tmp_path, monkeypatch):
+    home = str(tmp_path / "fake-home-folder-abcdef")
+    monkeypatch.setenv("USERPROFILE", home)
+    monkeypatch.setenv("HOME", home)
+    return home
+
+
+LEAKS = """
+import os
+
+import pytest
+
+
+def test_assertion():
+    assert os.environ["P3_S_ASSERT"] == "something else entirely"
+
+
+def test_raise():
+    raise RuntimeError("boom " + os.environ["P3_S_RAISE"])
+
+
+def test_skip():
+    pytest.skip("skip " + os.environ["P3_S_SKIP"])
+
+
+@pytest.mark.xfail(reason="xfail marker " + os.environ["P3_S_XFAIL"])
+def test_xfail_marker():
+    assert False
+
+
+def test_xfail_call():
+    pytest.xfail("xfail call " + os.environ["P3_S_XFAIL"])
+
+
+def test_home():
+    assert os.path.expanduser("~") == "nowhere"
+"""
+
+SENTINELS = {
+    "P3_S_ASSERT": "sentinel-assert-7Hq2",
+    "P3_S_RAISE": "sentinel-raise-9Kd4",
+    "P3_S_SKIP": "sentinel-skip-3Fw8",
+    "P3_S_XFAIL": "sentinel-xfail-6Zr1",
+    "P3_S_COLLECT": "sentinel-collect-5Tb0",
+    "P3_S_INTERNAL": "sentinel-internal-2Nx7",
+}
+
+
+def plant(monkeypatch):
+    for name, value in SENTINELS.items():
+        monkeypatch.setenv(name, value)
+
+
+def phases_of(rec):
+    return {(r["nodeid"].split("::")[-1], r["when"]): r for _, r in records(rec, "phase")}
+
+
+def test_environment_values_and_the_home_folder_never_reach_a_journal_from_failures_skips_and_xfails(
+    project, er, tmp_path, monkeypatch
+):
+    # CX1, ruling 2-4: values from the recording process's environment (8 characters or longer) and the home folder are
+    # replaced in every stored free text, whatever put them there: an assertion, a raised message, a skip reason, an
+    # xfail marker's reason, an xfail called in the body.
+    plant(monkeypatch)
+    home = fake_home(tmp_path, monkeypatch)
+    project.makepyfile(test_leaks=LEAKS.replace('"nowhere"', repr(home + "-is-not-it")))
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec)
+
+    # Search the DECODED text too: in the file JSON doubles every backslash, which hides a Windows path from a
+    # byte search.
+    raw = journal_bytes(rec)
+    decoded = "\n".join(
+        value for recs in read_journals(rec).values() for r in recs for value in r.values() if isinstance(value, str)
+    )
+    for name, value in SENTINELS.items():
+        assert value.encode() not in raw and value not in decoded, f"{name} reached the journal"
+    for form in {home, home.replace("\\", "/"), home.replace("\\", "\\\\")}:
+        assert form.encode() not in raw and form not in decoded, f"the home folder reached the journal: {form}"
+    phases = phases_of(rec)
+    assert "<env:P3_S_ASSERT>" in phases[("test_assertion", "call")]["error_text"]
+    assert phases[("test_assertion", "call")]["error_redactions"] >= 1
+    assert "<env:P3_S_RAISE>" in phases[("test_raise", "call")]["error_text"]
+    assert "<home>" in phases[("test_home", "call")]["error_text"]
+    assert "<env:P3_S_SKIP>" in phases[("test_skip", "call")]["reason"]
+    assert phases[("test_skip", "call")]["reason_redactions"] >= 1
+    assert "<env:P3_S_XFAIL>" in phases[("test_xfail_marker", "call")]["reason"]
+    assert "<env:P3_S_XFAIL>" in phases[("test_xfail_call", "call")]["reason"]
+
+
+def test_a_collection_error_text_is_cleaned(project, er, tmp_path, monkeypatch):
+    # CX1, ruling 3: collection-error text.
+    plant(monkeypatch)
+    project.makepyfile(test_bad="import os\nraise RuntimeError('import ' + os.environ['P3_S_COLLECT'])\n")
+    rec = tmp_path / "rec"
+    run_serial(project, rec)
+    ((_, record),) = records(rec, "collection-error")
+    assert "<env:P3_S_COLLECT>" in record["error_text"] and record["error_redactions"] >= 1
+    assert SENTINELS["P3_S_COLLECT"].encode() not in journal_bytes(rec)
+
+
+def test_an_internal_error_text_is_cleaned(project, er, tmp_path, monkeypatch):
+    # CX1, ruling 3: internal-error text.
+    plant(monkeypatch)
+    project.makeconftest(
+        CONFTEST
+        + """
+import os
+
+
+def pytest_runtest_logstart(nodeid, location):
+    raise RuntimeError("hook " + os.environ["P3_S_INTERNAL"])
+"""
+    )
+    project.makepyfile(test_mod="def test_a():\n    pass\n")
+    rec = tmp_path / "rec"
+    run_serial(project, rec)
+    ((_, record),) = records(rec, "internal-error")
+    assert "<env:P3_S_INTERNAL>" in record["error_text"] and record["error_redactions"] >= 1
+    assert SENTINELS["P3_S_INTERNAL"].encode() not in journal_bytes(rec)
+
+
+def _recorder(er, tmp_path):
+    config = _fake_config(tmp_path, tmp_path / "bt")
+    directory = tmp_path / "record-folder"
+    directory.mkdir()
+    return er.Recorder(config, directory, "serial", None, None, None), directory
+
+
+def test_a_worker_down_text_is_cleaned(er, tmp_path, monkeypatch):
+    # CX1, ruling 3: worker-down text (the controller's record of a crashed worker).
+    monkeypatch.setenv("P3_S_WORKER", "sentinel-worker-4Vc9")
+    recorder, directory = _recorder(er, tmp_path)
+    try:
+        node = type("Node", (), {"gateway": type("Gateway", (), {"id": "gw7"})()})()
+        recorder.pytest_testnodedown(node, "worker crashed near sentinel-worker-4Vc9")
+    finally:
+        recorder.close()
+    ((_, record),) = records(directory, "worker-down")
+    assert "<env:P3_S_WORKER>" in record["error_text"] and record["error_redactions"] == 1
+    assert b"sentinel-worker-4Vc9" not in journal_bytes(directory)
+
+
+def test_the_digest_is_over_the_original_text_and_the_stored_copy_is_cleaned(er, tmp_path, monkeypatch):
+    # CX1, ruling 1: error_digest, error_length and the algorithm come from the ORIGINAL full text; the stored copy is
+    # cleaned afterwards and error_redactions counts the replacements.
+    monkeypatch.setenv("P3_S_DIGEST", "sentinel-digest-8Lp3")
+    recorder, directory = _recorder(er, tmp_path)
+    original = "left sentinel-digest-8Lp3 and again sentinel-digest-8Lp3 é"
+    try:
+        fields = recorder.error_fields(original)
+    finally:
+        recorder.close()
+    assert fields["error_digest"] == hashlib.sha256(original.encode("utf-8")).hexdigest()
+    assert fields["error_length"] == len(original.encode("utf-8"))
+    assert fields["error_digest_algorithm"] == "sha256"
+    assert fields["error_text"] == "left <env:P3_S_DIGEST> and again <env:P3_S_DIGEST> é"
+    assert fields["error_redactions"] == 2
+
+
+def test_a_value_is_cleaned_from_eight_characters_and_not_below(er, tmp_path, monkeypatch):
+    # CX1, ruling 2 and 5: 'values shorter than 8 characters cannot be recognised'; the limit is stated, and exact.
+    monkeypatch.setenv("P3_SEVEN", "abcdefg")
+    monkeypatch.setenv("P3_EIGHT", "hijklmno")
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields("seven abcdefg eight hijklmno")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "seven abcdefg eight <env:P3_EIGHT>"
+
+
+def test_every_part_of_a_path_list_value_is_cleaned_and_a_blank_value_is_not(er, tmp_path, monkeypatch):
+    # CX1, ruling 2: 'every os.pathsep-separated part of such a value'; a value of blanks would erase every run
+    # of spaces.
+    monkeypatch.setenv("P3_LIST", f"first-part-folder{os.pathsep}second-part-folder")
+    monkeypatch.setenv("P3_BLANK", " " * 12)
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields("in second-part-folder only, with gaps            kept")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "in <env:P3_LIST> only, with gaps            kept"
+
+
+def test_the_longest_value_is_replaced_first(er, tmp_path, monkeypatch):
+    # CX1, ruling 2: 'longest first': a long value that contains a shorter one is replaced whole.
+    monkeypatch.setenv("P3_LONG", "ABCDEFGHIJKLMNOP")
+    monkeypatch.setenv("P3_SHORT_ONE", "ABCDEFGH")
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields("x ABCDEFGHIJKLMNOP y ABCDEFGH z")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "x <env:P3_LONG> y <env:P3_SHORT_ONE> z"
+
+
+def test_the_known_folders_are_named_not_shown(er, tmp_path, monkeypatch):
+    # CX1, ruling 2: home -> <home>, temp -> <temp>, the record folder -> <record>, the basetemp -> <basetemp>,
+    # in either slash direction (and without regard to case on Windows).
+    import tempfile
+
+    home = fake_home(tmp_path, monkeypatch)
+    temp = str(tmp_path / "fake-temp-folder-ghijkl")
+    monkeypatch.setattr(tempfile, "tempdir", temp)
+    recorder, directory = _recorder(er, tmp_path)
+    basetemp = str(tmp_path / "bt")
+    try:
+        text = " | ".join(
+            [
+                home + "\\a.py",
+                temp + "/b.py",
+                str(directory) + "\\c.json",
+                basetemp + "/d.txt",
+                str(directory).replace("\\", "/") + "/e",
+                repr(home)[1:-1] + "\\g.py",
+            ]
+        )
+        fields = recorder.error_fields(text)
+        shouted = recorder.error_fields(str(directory).upper() + "\\f")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == (
+        "<home>\\a.py | <temp>/b.py | <record>\\c.json | <basetemp>/d.txt | <record>/e | <home>\\g.py"
+    )
+    assert fields["error_redactions"] == 6
+    if os.name == "nt":
+        assert shouted["error_text"] == "<record>\\f"
+
+
+def test_a_value_cut_by_the_size_limit_cannot_leak_a_fragment(er, tmp_path, monkeypatch):
+    # CX1, ruling 2: 'cleaned, before it is bounded': a secret that straddles the 64 KiB cut is replaced first, so no
+    # half of it is stored.
+    monkeypatch.setenv("P3_S_EDGE", "sentinel-edge-1Qa5-extra-long-tail")
+    recorder, _ = _recorder(er, tmp_path)
+    text = "x" * (er.MAX_ERROR_TEXT - 6) + "sentinel-edge-1Qa5-extra-long-tail" + "y" * 100
+    try:
+        fields = recorder.error_fields(text)
+    finally:
+        recorder.close()
+    assert fields["error_truncated"] is True
+    assert "sentinel" not in fields["error_text"] and "Qa5" not in fields["error_text"]
+    assert fields["error_digest"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def test_a_child_killed_inside_a_multibyte_character_keeps_the_complete_lines_before_it(project, er, tmp_path):
+    # CX2: the writer dies after the first byte of a two-byte character. The earlier complete lines are durable; the
+    # reducer keeps them and reports the damaged tail, instead of dropping the whole journal.
+    project.makepyfile(
+        test_mod="""
+import os
+
+import experiment_record
+
+
+def test_dies(pytestconfig):
+    recorder = pytestconfig.pluginmanager.get_plugin(experiment_record.PLUGIN_NAME)
+    os.write(recorder._fd, bytes([0xC3]))
+    os._exit(77)
+"""
+    )
+    rec = tmp_path / "rec"
+    result = run_serial(project, rec)
+    assert result.ret == 77
+    (path,) = Path(rec).glob("journal-*.jsonl")
+    assert path.read_bytes().endswith(bytes([0xC3]))
+
+    summary = er.reduce_journals(rec)
+    (process,) = summary["processes"]
+    assert process["records"] >= 4, summary["problems"]
+    assert {"torn-last-line", "no-trailer"} <= kinds(summary["problems"])
+    assert "bad-encoding" not in kinds(summary["problems"])
+    assert summary["items"]["test_mod.py::test_dies"]["started"] == 1
+    assert summary["status"] == "incomplete" and summary["accepted"] is False
+
+
+def test_a_complete_line_that_is_not_utf_8_costs_only_that_line(er, tmp_path):
+    # CX2: bad bytes inside a COMPLETE line are reported for that line alone; the lines around it are kept.
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)])
+    lines = path.read_bytes().split(b"\n")
+    lines.insert(3, b'{"seq": 3, "kind": "x", "bad": "\xff"}')
+    path.write_bytes(b"\n".join(lines))
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+    assert "bad-encoding" in kinds(summary["problems"])
+    assert summary["items"]["t.py::a"]["started"] == 1 and summary["items"]["t.py::b"]["started"] == 1
+
+
+def damaged(path, match, **changes):
+    """Rewrite the first record whose kind is `match`: a value of None deletes the key."""
+    lines = path.read_bytes().decode("utf-8").split("\n")
+    for index, line in enumerate(lines):
+        if line and json.loads(line)["kind"] == match:
+            record = json.loads(line)
+            for key, value in changes.items():
+                if value is None:
+                    record.pop(key, None)
+                else:
+                    record[key] = value
+            lines[index] = json.dumps(record)
+            break
+    else:
+        raise AssertionError(f"no {match} record")
+    path.write_bytes("\n".join(lines).encode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    "kind, changes",
+    [
+        ("item-end", {"t_wall": {}}),
+        ("item-start", {"t_wall": "yesterday"}),
+        ("item-start", {"nodeid": None}),
+        ("item-start", {"nodeid": 7}),
+        ("item-start", {"requested_group": ["g"]}),
+        ("phase", {"outcome": ["failed"]}),
+        ("item-end", {"pid": "x"}),
+        ("process-start", {"role": 5}),
+        ("process-start", {"plugins": [1, 2]}),
+        ("process-start", {"nested_token": 12}),
+        ("trailer", {"records": "many"}),
+        ("trailer", {"records": True}),
+        ("item-end", {"pid": True}),
+        ("trailer", {"complete": "yes"}),
+        ("exit-status", {"exitstatus": "ok"}),
+        ("worker-down", {"has_error": ["boom"]}),
+        ("collection-error", {"error_text": 3}),
+        ("nested-launch", {"token": 9}),
+    ],
+    ids=lambda v: v if isinstance(v, str) else next(iter(v)),
+)
+def test_a_record_with_a_damaged_field_is_reported_and_the_rest_is_kept(er, tmp_path, kind, changes):
+    # CX3: a valid JSON line with a malformed field is a problem to report, never an exception from the reducer;
+    # the usable evidence is kept (here: the second item still joins).
+    extra = [
+        ("phase", {"nodeid": "t.py::a", "when": "call", "outcome": "passed", "duration": 0.1}),
+        ("worker-down", {"down_worker": "gw0", "has_error": True, "error_text": "x"}),
+        ("collection-error", {"nodeid": "c.py", "error_text": "boom"}),
+        ("exit-status", {"exitstatus": 1}),
+        ("nested-launch", {"token": "0123456789abcdef"}),
+    ]
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)], extra=extra)
+    damaged(path, kind, **changes)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+
+    assert "bad-field" in kinds(summary["problems"]), summary["problems"]
+    assert "sequence-gap" not in kinds(summary["problems"]), "a set-aside record must keep its place in the sequence"
+    assert summary["accepted"] is False
+    assert "t.py::b" in summary["items"] and summary["items"]["t.py::b"]["started"] == 1
+
+
+def test_a_trailer_counts_every_record_before_it_in_a_real_journal(project, er, tmp_path):
+    # CX4: `records` is how many records precede the trailer; asserted against a real written journal.
+    project.makepyfile(test_mod="def test_a():\n    pass\n\n\ndef test_b():\n    pass\n")
+    rec = tmp_path / "rec"
+    run_serial(project, rec).assert_outcomes(passed=2)
+    (recs,) = read_journals(rec).values()
+    trailer = recs[-1]
+    assert trailer["kind"] == "trailer"
+    assert trailer["records"] == len(recs) - 1
+    assert er.reduce_journals(rec)["status"] == "complete"
+
+
+def test_a_trailer_that_miscounts_is_reported(er, tmp_path):
+    # CX4: the reducer checks the count too.
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    damaged(path, "trailer", records=99)
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+    assert "trailer-count-mismatch" in kinds(summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_the_conftest_wiring_line_is_formatted_as_ruff_wants():
+    # CX5: two spaces before an inline comment, on the one line P3 adds to tests/conftest.py (the file was already
+    # unformatted elsewhere; P3 must not add to that).
+    text = (TESTS_DIR / "conftest.py").read_text(encoding="utf-8")
+    (line,) = [row for row in text.splitlines() if "experiment_record.configure(config)" in row]
+    code = line.split("#", 1)[0].rstrip()
+    assert code.endswith(")"), repr(line)
+    assert line.index("#") - len(code) == 2, repr(line)

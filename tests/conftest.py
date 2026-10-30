@@ -445,7 +445,7 @@ def _running_against_installed_wheel() -> bool:
 @pytest.hookimpl(trylast=True)   # after the tmp_path plugin, which the store fence needs
 def pytest_configure(config: pytest.Config) -> None:
     store_fence.configure(config)   # before any test module is collected
-    experiment_record.configure(config)   # registers nothing unless --experiment-record or a nested handoff asks
+    experiment_record.configure(config)  # registers nothing unless --experiment-record or a nested handoff asks
     config.addinivalue_line(
         "markers",
         "source_layout: test spawns real subprocesses and asserts on the "

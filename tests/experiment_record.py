@@ -9,13 +9,17 @@ Write the option as `--experiment-record=DIR`, one argument.  Given as two argum
 argument once it exists, pytest counts it when it looks for the rootdir (when no ini file fixes it), the workers
 get another rootdir than the controller, and their node ids no longer match the serial collection's.
 
-Security note (docs/SECURE-CODING.md, written before the code).  Boundaries: the folder named on the command line or
-in the nested handoff; node ids, skip reasons and error text from the tests; the journal files the reducer reads.
-S3: the folder is resolved and must not lie inside any basetemp (pytest would delete it); a journal is created
-exclusively (never reusing or following an existing name) and checked on the opened file; the reducer opens without
-waiting and checks on the opened file that it is a plain file with one name.  S7: every refusal says which input was
-bad; nothing is swallowed.  S8: error text is cut at 64 KiB, reasons at 4 KiB, the handoff is limited to 4 KiB and a
-journal read to 64 MiB; a refusal closes what it opened.  S9: JSON only.  S1: a node id or an error text is data.
+Security note (docs/SECURE-CODING.md).  Boundaries: the folder named on the command line or in the nested handoff;
+node ids, skip reasons and error text from the tests; the journal files the reducer reads.
+S1: a node id or an error text is data.  S3: the folder is resolved and must not lie inside any basetemp (pytest would
+delete it); a journal is created exclusively (never reusing or following an existing name) and checked on the opened
+file; the reducer opens without waiting and checks on the opened file that it is a plain file with one name.
+S5: every record is one JSON line (`json.dumps` escapes quotes and control characters, so no text can end a line or
+forge a record); U+2028 and similar stay literal, which is why a reader splits on "\\n" only.
+S6: stored free text is cleaned of values the recorder can recognise (see "Free text and what is blanked out"); no
+secret is written by the recorder itself.  S7: every refusal says which input was bad; nothing is swallowed.
+S8: error text is cut at 64 KiB, reasons at 4 KiB, the handoff is limited to 4 KiB and a journal read to 64 MiB; a
+refusal closes what it opened.  S9: JSON only.
 
 Journal files
 -------------
@@ -62,16 +66,34 @@ worker-down       controller only, xdist's `pytest_testnodedown`: down_worker (t
                   error fields when has_error.
 nested-launch     written by `nested_environment`: token (16 hex digits) for the nested run it prepares.
 exit-status       at session finish: exitstatus (int).  0 and 1 are not errors; any other value is.
-trailer           last record: complete (true), records (how many records came before it), exitstatus, plugins.
+trailer           last record: complete (true), records (how many records came before it, every kind counted),
+                  exitstatus, plugins.
 
 Error fields (on phase, collection-error, internal-error, worker-down)
 -----------------------------------------------------------------------
-error_text            the text, cut to at most 64 KiB (MAX_ERROR_TEXT) of UTF-8.
-error_truncated       true when the text was cut.
-error_length          the length in UTF-8 bytes of the full text.
-error_digest          SHA-256 over the UTF-8 bytes of `str(report.longrepr)` (the full text, not the cut one),
-                      lowercase hex.  A lone surrogate is encoded as a backslash escape first.
+error_text            the text AFTER cleaning (below), cut to at most 64 KiB (MAX_ERROR_TEXT) of UTF-8.
+error_truncated       true when the cleaned text was cut.
+error_length          the length in UTF-8 bytes of the ORIGINAL full text.
+error_digest          SHA-256 over the UTF-8 bytes of the ORIGINAL `str(report.longrepr)` (not the cleaned or cut
+                      one), lowercase hex.  A lone surrogate is encoded as a backslash escape first.
 error_digest_algorithm  "sha256": the record names the algorithm.
+error_redactions      how many replacements the cleaning made in this text.
+A phase record's skip or xfail `reason` is cleaned the same way and carries `reason_redactions`.
+
+Free text and what is blanked out
+---------------------------------
+Failure text, collection and internal error text, worker-down text and skip or xfail reasons can hold values a test
+printed or compared.  Before such text is stored (and before it is cut), and after its digest and length were taken
+from the original, the recorder replaces, longest first:
+  * every value of the recording process's own environment that is 8 characters or longer, and every
+    `os.pathsep`-separated part of such a value, by `<env:NAME>` (blank values are skipped);
+  * the home folder by `<home>`, the temp folder by `<temp>`, the record folder by `<record>` and the basetemp by
+    `<basetemp>`, written with either slash and, on Windows, in any letter case.
+Each is also found with its backslashes doubled, as a traceback shows a string from the source.
+LIMITS, stated plainly: only environment values and those four folders are recognised.  Values shorter than 8
+characters, a value shown in another spelling (escaped quotes or non-ASCII characters in a Python repr), and secrets
+that come from anywhere else (a file, a prompt, a network reply), cannot be recognised and are stored as
+they are.  Handle journals like test logs.  The probe jobs run without secrets (plan section 4).
 
 The reducer
 -----------
@@ -82,10 +104,12 @@ status            "complete" when every journal ends with its trailer, else "inc
 accepted          true only when status is "complete", there is no problem and no error record.  A failing test
                   does not by itself stop acceptance; it is reported in first_failure.
 problems          a list of {"kind", "detail", ...}; at most 20 per kind are listed, problem_counts has the totals.
-                  Kinds: journal-not-plain, journal-too-large, bad-encoding, torn-last-line, bad-line,
-                  sequence-gap, no-process-start, plugin-inventory-missing, no-trailer, records-after-trailer,
-                  item-unfinished, suffix-missing, group-split, duplicate-id, missing-id, unexpected-id,
-                  nested-journal-missing, nested-journal-unlaunched.
+                  Kinds: journal-not-plain, journal-too-large, bad-encoding (a complete line that is not UTF-8),
+                  torn-last-line (a last line with no end: its writer died; every complete line before it is kept),
+                  bad-line (not a JSON record), bad-field (a record with a damaged field: the record is set aside,
+                  the rest is kept), sequence-gap, no-process-start, plugin-inventory-missing, no-trailer,
+                  records-after-trailer, trailer-count-mismatch, item-unfinished, suffix-missing, group-split,
+                  duplicate-id, missing-id, unexpected-id, nested-journal-missing, nested-journal-unlaunched.
 first_error       the earliest error record (collection-error, internal-error, worker-down with an error,
                   exit-status other than 0 or 1) across all journals, ordered by t_wall, journal name, seq; or
                   null.  Nothing written later, a trailer included, replaces it.
@@ -113,13 +137,16 @@ xdist's `workerinput`, never through the environment.
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
 import stat
 import sys
+import tempfile
 import time
 from collections import Counter
 from collections.abc import Mapping, Sequence
@@ -138,6 +165,8 @@ MAX_HANDOFF_BYTES = 4096
 MAX_JOURNAL_BYTES = 64 * 1024 * 1024
 MAX_PROBLEMS_PER_KIND = 20
 DIGEST_ALGORITHM = "sha256"
+MIN_SECRET_LENGTH = 8
+ROLE_NAMES = ("serial", "controller", "worker", "nested")
 
 _TOKEN = re.compile(r"[0-9a-f]{16}")
 _ACTIVE: Recorder | None = None
@@ -173,15 +202,65 @@ def _bounded(text: str, limit: int) -> tuple[str, bool, str, int]:
     return kept, len(data) > limit, hashlib.sha256(data).hexdigest(), len(data)
 
 
-def _error_fields(text: str) -> dict[str, Any]:
-    kept, truncated, digest, length = _bounded(text, MAX_ERROR_TEXT)
-    return {
-        "error_text": kept,
-        "error_truncated": truncated,
-        "error_length": length,
-        "error_digest": digest,
-        "error_digest_algorithm": DIGEST_ALGORITHM,
-    }
+@functools.lru_cache(maxsize=8)
+def _pattern(needles: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
+    return re.compile("|".join(re.escape(n) for n in needles), re.IGNORECASE if ignorecase else 0)
+
+
+class Redactor:
+    """Blanks out what a journal must not show (see "Free text and what is blanked out" in the module docstring).
+
+    The needles are read from the environment and the folders at every call, so a value set after the recorder
+    started is still recognised."""
+
+    def __init__(self, config: pytest.Config, directory: Path) -> None:
+        self.config = config
+        self.directory = directory
+
+    def _basetemp(self) -> str:
+        factory = getattr(self.config, "_tmp_path_factory", None)
+        if factory is not None:
+            return str(factory.getbasetemp())
+        given = self.config.option.basetemp
+        return os.path.abspath(given) if given else ""
+
+    def needles(self) -> dict[str, str]:
+        """{text to find: replacement}."""
+        found: dict[str, str] = {}
+        for name, value in os.environ.items():
+            for part in {value, *value.split(os.pathsep)}:
+                if len(part) >= MIN_SECRET_LENGTH and part.strip():
+                    found.setdefault(part, f"<env:{name}>")
+        folders = {
+            "<home>": os.path.expanduser("~"),
+            "<temp>": tempfile.gettempdir(),
+            "<record>": str(self.directory),
+            "<basetemp>": self._basetemp(),
+        }
+        for label, folder in folders.items():
+            if len(folder) >= 3 and folder.strip("\\/"):
+                for form in {folder, folder.replace("\\", "/"), folder.replace("/", "\\")}:
+                    found[form] = label
+        # A traceback shows a string from the source line as Python writes it, with every backslash doubled.
+        for needle, label in list(found.items()):
+            if "\\" in needle:
+                found.setdefault(needle.replace("\\", "\\\\"), label)
+        return found
+
+    def clean(self, text: str) -> tuple[str, int]:
+        """(the text with every needle replaced, longest first; the number of replacements)."""
+        found = self.needles()
+        if not found:
+            return text, 0
+        ignorecase = os.name == "nt"
+        ordered = tuple(sorted(found, key=lambda needle: (-len(needle), needle)))
+        labels = {(n.casefold() if ignorecase else n): found[n] for n in ordered}
+
+        def label(match: re.Match[str]) -> str:
+            key = match.group(0)
+            return labels.get(key.casefold() if ignorecase else key, "<redacted>")
+
+        return _pattern(ordered, ignorecase).subn(label, text)
 
 
 def _requested_group(item: pytest.Item) -> str | None:
@@ -232,6 +311,7 @@ class Recorder:
         self.started_ms = int(time.time() * 1000)
         self.seq = 0
         self.path, self._fd = open_journal(directory, role, self.pid, self.started_ms)
+        self._redactor = Redactor(config, directory)
         self._closed = False
 
     # -- writing ----------------------------------------------------------------------------------------------
@@ -259,6 +339,30 @@ class Recorder:
         if not self._closed:
             self._closed = True
             os.close(self._fd)
+
+    # -- free text --------------------------------------------------------------------------------------------
+
+    def error_fields(self, text: str) -> dict[str, Any]:
+        """The error fields of `text`: digest and length from the ORIGINAL text, then the stored copy is cleaned
+        and only then cut to the limit (so a value that straddles the cut cannot leave a fragment)."""
+        original = _encode(text)
+        cleaned, redactions = self._redactor.clean(text)
+        kept, truncated, _digest, _length = _bounded(cleaned, MAX_ERROR_TEXT)
+        return {
+            "error_text": kept,
+            "error_truncated": truncated,
+            "error_length": len(original),
+            "error_digest": hashlib.sha256(original).hexdigest(),
+            "error_digest_algorithm": DIGEST_ALGORITHM,
+            "error_redactions": redactions,
+        }
+
+    def reason_fields(self, reason: Any) -> dict[str, Any]:
+        """A skip or xfail reason, cleaned and cut."""
+        if reason is None:
+            return {"reason": None, "reason_redactions": 0}
+        cleaned, redactions = self._redactor.clean(str(reason))
+        return {"reason": _bounded(cleaned, MAX_REASON_TEXT)[0], "reason_redactions": redactions}
 
     # -- start ------------------------------------------------------------------------------------------------
 
@@ -294,7 +398,7 @@ class Recorder:
 
     def pytest_collectreport(self, report: pytest.CollectReport) -> None:
         if report.failed:
-            self.append("collection-error", nodeid=report.nodeid, **_error_fields(str(report.longrepr)))
+            self.append("collection-error", nodeid=report.nodeid, **self.error_fields(str(report.longrepr)))
 
     # -- running ----------------------------------------------------------------------------------------------
 
@@ -322,27 +426,29 @@ class Recorder:
         if reason is None and report.skipped and isinstance(report.longrepr, tuple):
             reason = report.longrepr[2]
         if report.failed:
-            extra.update(_error_fields(str(report.longrepr)))
+            extra.update(self.error_fields(str(report.longrepr)))
         self.append(
             "phase",
             nodeid=report.nodeid,
             when=report.when,
             outcome=report.outcome,
             duration=report.duration,
-            reason=None if reason is None else _bounded(str(reason), MAX_REASON_TEXT)[0],
             xfail=hasattr(report, "wasxfail"),
+            **self.reason_fields(reason),
             **extra,
         )
 
     # -- errors -----------------------------------------------------------------------------------------------
 
-    @pytest.hookimpl(tryfirst=True)  # a first-result hook on some pytest versions: ask the recorder before others
+    # `tryfirst` is a precaution only: pytest 9.1.1 calls every implementation of this hook, so on that version the
+    # order changes nothing (removing it is an equivalent mutant there).
+    @pytest.hookimpl(tryfirst=True)
     def pytest_internalerror(self, excrepr: Any, excinfo: Any = None) -> None:
-        self.append("internal-error", **_error_fields(str(excrepr)))
+        self.append("internal-error", **self.error_fields(str(excrepr)))
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_testnodedown(self, node: Any, error: Any) -> None:
-        fields = _error_fields(str(error)) if error else {}
+        fields = self.error_fields(str(error)) if error else {}
         self.append("worker-down", down_worker=node.gateway.id, has_error=bool(error), **fields)
 
     @pytest.hookimpl(optionalhook=True)
@@ -356,7 +462,7 @@ class Recorder:
     @pytest.hookimpl(trylast=True)
     def pytest_sessionfinish(self, session: pytest.Session, exitstatus: int) -> None:
         self.append("exit-status", exitstatus=int(exitstatus))
-        self.append("trailer", complete=True, records=self.seq - 1, exitstatus=int(exitstatus), plugins=self._plugins())
+        self.append("trailer", complete=True, records=self.seq, exitstatus=int(exitstatus), plugins=self._plugins())
 
     def pytest_unconfigure(self, config: pytest.Config) -> None:
         global _ACTIVE
@@ -511,30 +617,101 @@ def _read_journal(path: Path, problems: _Problems) -> list[dict[str, Any]] | Non
     if len(data) > MAX_JOURNAL_BYTES:
         problems.add("journal-too-large", f"the journal is over {MAX_JOURNAL_BYTES} bytes", file=path.name)
         return None
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError:
-        problems.add("bad-encoding", "the journal is not valid UTF-8", file=path.name)
-        return None
-    lines = text.split("\n")
-    last = lines.pop()
-    if last:
+    # Split the BYTES on newline first and decode each complete line alone: a writer that died inside a multibyte
+    # character leaves bad bytes only in the last, unterminated piece, and every complete line before it is kept.
+    lines = data.split(b"\n")
+    if lines.pop():
         problems.add("torn-last-line", "the last line has no end; its process died while writing", file=path.name)
     found = []
-    for number, line in enumerate(lines, 1):
+    for number, raw in enumerate(lines, 1):
+        # A line that cannot be used still takes its place (seq = its line number), so it cannot fake a sequence gap.
+        unusable = {"seq": number, "kind": "unusable", "t_wall": 0.0}
         try:
-            record = json.loads(line)
+            record = json.loads(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            problems.add("bad-encoding", f"line {number} is not valid UTF-8", file=path.name)
+            found.append(unusable)
+            continue
         except (ValueError, RecursionError):
             record = None
-        if (
-            not isinstance(record, dict)
-            or not isinstance(record.get("seq"), int)
-            or not isinstance(record.get("kind"), str)
-        ):
+        if not isinstance(record, dict) or not _is_int(record.get("seq")) or not isinstance(record.get("kind"), str):
             problems.add("bad-line", f"line {number} is not a record", file=path.name)
+            found.append(unusable)
+            continue
+        bad = _field_problem(record)
+        if bad is not None:
+            problems.add("bad-field", f"line {number}: {record['kind']} has a bad {bad}", file=path.name)
+            found.append(unusable)
             continue
         found.append(record)
     return found
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _is_text(value: Any) -> bool:
+    return isinstance(value, str)
+
+
+def _is_text_or_null(value: Any) -> bool:
+    return value is None or isinstance(value, str)
+
+
+def _is_bool(value: Any) -> bool:
+    return isinstance(value, bool)
+
+
+def _is_plugin_list(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+# field -> (check, required), for the fields every record has and for the fields the reducer reads per kind.
+_COMMON_FIELDS = {
+    "role": (lambda v: v in ROLE_NAMES, True),
+    "worker": (_is_text_or_null, False),
+    "pid": (_is_int, True),
+    "t_wall": (_is_number, True),
+}
+_EVENT_FIELDS = {
+    "process-start": {
+        "started_ms": (_is_int, False),
+        "loadgroup": (_is_bool, False),
+        "nested_token": (_is_text_or_null, False),
+        "plugins": (_is_plugin_list, False),
+    },
+    "item-start": {
+        "nodeid": (_is_text, True),
+        "requested_group": (_is_text_or_null, False),
+        "effective_group": (_is_text_or_null, False),
+        "suffix_missing": (_is_bool, False),
+    },
+    "item-end": {"nodeid": (_is_text, True)},
+    "phase": {"nodeid": (_is_text, True), "when": (_is_text, True), "outcome": (_is_text, True)},
+    "collection-error": {"nodeid": (_is_text, True), "error_text": (_is_text, False)},
+    "internal-error": {"error_text": (_is_text, False)},
+    "worker-down": {"has_error": (_is_bool, True), "down_worker": (_is_text, False), "error_text": (_is_text, False)},
+    "nested-launch": {"token": (_is_text, True)},
+    "exit-status": {"exitstatus": (_is_int, True)},
+    "trailer": {"complete": (_is_bool, True), "records": (_is_int, True), "exitstatus": (_is_int, False)},
+}
+
+
+def _field_problem(record: dict[str, Any]) -> str | None:
+    """The name of the first damaged field of `record`, or None."""
+    for fields in (_COMMON_FIELDS, _EVENT_FIELDS.get(record["kind"], {})):
+        for name, (check, required) in fields.items():
+            if name not in record:
+                if required:
+                    return name
+            elif not check(record[name]):
+                return name
+    return None
 
 
 def reduce_journals(
@@ -564,9 +741,10 @@ def reduce_journals(
         start = next((r for r in recs if r["kind"] == "process-start"), None)
         trailers = [i for i, r in enumerate(recs) if r["kind"] == "trailer"]
         trailer = recs[-1] if trailers == [len(recs) - 1] and recs[-1].get("complete") is True else None
+        named = re.match(r"journal-([a-z]+)-", path.name)
         info = {
             "file": path.name,
-            "role": (start or recs[0] if recs else {}).get("role"),
+            "role": (start or {}).get("role") or (named.group(1) if named and named.group(1) in ROLE_NAMES else None),
             "worker": (start or {}).get("worker"),
             "pid": (start or {}).get("pid"),
             "complete": trailer is not None,
@@ -588,6 +766,12 @@ def reduce_journals(
         elif trailer is None:
             problems.add(
                 "records-after-trailer", "the trailer is not the last record, or is not complete", file=path.name
+            )
+        elif trailer["records"] != len(recs) - 1:
+            problems.add(
+                "trailer-count-mismatch",
+                f"the trailer counts {trailer['records']} records before it; there are {len(recs) - 1}",
+                file=path.name,
             )
 
     items: dict[str, dict[str, Any]] = {}
