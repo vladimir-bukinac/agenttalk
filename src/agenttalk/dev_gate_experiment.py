@@ -20,6 +20,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -181,6 +182,31 @@ class Request:
     cases: tuple[str, ...] = ()
 
 
+def validate_recorder(checkout):
+    read_plain(checkout / "tests" / "experiment_record.py", within=checkout)
+    read_plain(checkout / "tests" / "conftest.py", within=checkout)
+    try:
+        help_result = subprocess.run(  # noqa: S603 - fixed pytest help argv in the validated checkout
+            [sys.executable, "-I", "-m", "pytest", "--help", "-p", "no:cacheprovider", "tests"],
+            cwd=checkout,
+            env=gate._base_env(checkout),
+            text=True,
+            errors="replace",
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise gate.GateBlock(
+            "experiment_blocked", "tests/conftest.py --experiment-record preflight could not finish"
+        ) from exc
+    require(
+        help_result.returncode == 0
+        and re.search(r"^\s+--experiment-record(?:[=\s]|$)", help_result.stdout, re.MULTILINE) is not None,
+        "tests/conftest.py must register --experiment-record in pytest --help with plugin autoload disabled",
+    )
+
+
 def prepare_request(*, checkout, record, output, leg, modes, arm=None, probe=None, cases=()):
     require("AGENTTALK_DEV_GATE_POSIX_PARALLEL" not in os.environ, "AGENTTALK_DEV_GATE_POSIX_PARALLEL must be absent")
     require(gate._platform_label() == "windows", "Windows experiment requires a Windows host")
@@ -219,6 +245,7 @@ def prepare_request(*, checkout, record, output, leg, modes, arm=None, probe=Non
         not any((parent / ".agenttalk").is_dir() for parent in (output, *output.parents)),
         "output must be outside message stores",
     )
+    validate_recorder(checkout)
     return Request(
         checkout,
         output,
@@ -456,7 +483,8 @@ def execute(request, *, installer, recorder, runner=gate.run_command):
                 inventory = recorder.inventory(paths["records"])
                 validate_inventory(inventory, acceptance=request.probe is None)
                 call["inventory"] = inventory
-                call["exports"]["static"] = str(gate._export_phase(request.binding, work, "static"))
+                exports["static"] = gate._export_phase(request.binding, work, "static")
+                call["exports"]["static"] = str(exports["static"])
             except Exception as exc:
                 failure = exc
                 raise
@@ -467,6 +495,8 @@ def execute(request, *, installer, recorder, runner=gate.run_command):
                     retained = bt.exists()
                     installer.finish(prepared)
                     require(bt.exists() == retained, "installer changed basetemp retention")
+                    for kept in (bt, paths["logs"], paths["records"], *exports.values()):
+                        require(kept.exists(), f"installer removed kept evidence: {kept}")
                     if artifact["calls"] and artifact["calls"][-1].get("mode") == mode:
                         artifact["calls"][-1]["cleanup"] = {
                             "basetemp_removed": False,

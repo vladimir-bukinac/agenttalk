@@ -412,6 +412,14 @@ Before execution, the call is compared with an independent call built from the
 ordinary gate's environment and temporary-folder layout (`pt-s-py312` or
 `pt-w-py312` for Python 3.12), plus the declared experiment arguments.
 
+P3's `tests/experiment_record.py` defines the `--experiment-record` option;
+`tests/conftest.py` registers it through its `pytest_addoption` hook. Pytest loads conftest files even with
+`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`; that setting disables automatic discovery of
+installed plugins. Preflight requires both files, then runs an isolated `pytest --help` child
+in the checkout with autoload disabled and requires the option in its help
+output before either arm can start. The child names `tests` explicitly so pytest
+loads that folder's conftest without collecting or running test bodies.
+
 P7 implements `Installer.prepare(request, mode, workdir)` and `finish(prepared)`.
 Preparation returns a `PreparedEnvironment`: interpreter, committed source and
 import roots, installed-set proof (`freeze_sha256`, empty `probe_files`, and

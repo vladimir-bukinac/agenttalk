@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 import platform
+import re
 import shutil
 import sys
 import subprocess
@@ -40,8 +41,25 @@ def request_factory(exp, identity_impl, tmp_path, monkeypatch):
     (checkout / "dev-gate.json").write_text(json.dumps(manifest), encoding="utf-8")
     contract = json.loads((Path(__file__).parents[1] / "dev-gate-experiment.json").read_text())
     (checkout / "dev-gate-experiment.json").write_text(json.dumps(contract), encoding="utf-8")
+    (checkout / "tests").mkdir()
+    # P3 defines the option in its helper and delegates registration from conftest.
+    (checkout / "tests" / "experiment_record.py").write_text(
+        'OPTION = "--experiment-record"\n'
+        "def add_option(parser):\n"
+        '    parser.addoption(OPTION, dest="experiment_record", default=None, metavar="DIR")\n',
+        encoding="utf-8",
+    )
+    (checkout / "tests" / "conftest.py").write_text(
+        "import experiment_record\ndef pytest_addoption(parser): experiment_record.add_option(parser)\n",
+        encoding="utf-8",
+    )
     binding = SimpleNamespace(candidate_sha="a" * 40, clean=True)
     monkeypatch.setattr(gate, "capture_candidate_binding", lambda root: binding)
+    # Model Windows' one value per case-insensitive name even on POSIX hosts.
+    for name, value in list(os.environ.items()):
+        if name != name.upper():
+            monkeypatch.delenv(name)
+        monkeypatch.setenv(name.upper(), value)
     monkeypatch.setattr(gate, "_platform_label", lambda: "windows")
     monkeypatch.setattr(
         exp,
@@ -447,8 +465,7 @@ def test_installer_interface_execution_records_setup_freeze_and_cleanup(exp, req
     def runner(**kwargs):
         events.append("pytest")
         assert kwargs["check_id"] == f"pytest-{mode}-py312"
-        argv = kwargs["argv"]
-        Path(argv[argv.index("--basetemp") + 1]).mkdir()
+        r4_runner(**kwargs)
         return SimpleNamespace(status="pass")
 
     artifact = exp.execute(request, installer=FakeInstaller(), recorder=FixtureRecorder(), runner=runner)
@@ -542,10 +559,12 @@ def local_identity(exp, tmp_path, monkeypatch):
     )
 
 
-def test_fix_cx1_real_local_pip_install_identity(exp, tmp_path, monkeypatch):
+def test_fix_cx1_real_local_pip_install_identity(exp, tmp_path_factory, monkeypatch):
     pytest.importorskip("hatchling")
+    # Keep the node directory short too: pip adds its own nested build paths.
+    tmp_path = tmp_path_factory.mktemp("i")
     # CX1/CL1: reproduce the approved local-directory route, without a VCS URL.
-    checkout = tmp_path / "package"
+    checkout = tmp_path / "p"
     source = checkout / "src" / "agenttalk"
     source.mkdir(parents=True)
     (source / "__init__.py").write_text("", encoding="utf-8")
@@ -556,8 +575,10 @@ def test_fix_cx1_real_local_pip_install_identity(exp, tmp_path, monkeypatch):
         '[tool.hatch.build.targets.wheel]\npackages = ["src/agenttalk"]\n',
         encoding="utf-8",
     )
-    target = tmp_path / "installed"
-    env = gate._base_env(tmp_path)
+    target = tmp_path / "i"
+    temporary = tmp_path / "t"
+    temporary.mkdir()
+    env = gate._base_env(temporary)
     done = subprocess.run(  # noqa: S603 - fixed local pip argv, offline, temporary target
         [
             sys.executable,
@@ -833,7 +854,7 @@ def test_fix_cl3_execute_uses_ordinary_environment_and_basetemp(
         request,
         installer=execution_fixture.installer,
         recorder=execution_fixture.recorder,
-        runner=lambda **kwargs: captured.append(kwargs) or SimpleNamespace(status="pass"),
+        runner=lambda **kwargs: captured.append(kwargs) or r4_runner(**kwargs),
     )
     assert artifact["status"] == "complete"
     work = request.output / mode
@@ -908,3 +929,260 @@ def test_fix_docs_local_identity_and_temporary_d2_proof():
     assert "have a VCS commit" not in text
     assert "dir_info" in text and "RECORD" in text
     assert "Until P1 lands, D2 is checked only by the installer's proof." in text
+
+
+# Round 4: each negative case starts from a valid request/proof and changes one condition.
+def test_r4_windows_fixture_canonicalizes_duplicate_environment(request, monkeypatch, exp, tmp_path):
+    environment = dict(os.environ)
+    environment.update(HTTP_PROXY="http://127.0.0.1:8080", http_proxy="http://127.0.0.1:8080")
+    monkeypatch.setattr(os, "environ", environment)
+    factory = request.getfixturevalue("request_factory")
+    req = factory(modes=("source",))
+    paths = {name: tmp_path / name for name in ("source", "imports", "bt", "logs", "records")}
+    call = exp.pytest_call(req, "source", Path(sys.executable), paths, gate._base_env(tmp_path))
+    exp.validate_call(call, copy.deepcopy(call))
+
+
+@pytest.mark.parametrize("condition", ["dirty", "commit"])
+def test_r4_candidate_binding_refusal(exp, request_factory, monkeypatch, condition):
+    if condition == "dirty":
+        monkeypatch.setattr(
+            gate, "capture_candidate_binding", lambda root: SimpleNamespace(candidate_sha="a" * 40, clean=False)
+        )
+    else:
+        frozen = json.loads(request_factory.record.read_text())
+        frozen["commit"] = "d" * 40
+        request_factory.record.write_text(json.dumps(frozen), encoding="utf-8")
+    with pytest.raises(gate.GateBlock, match="candidate.*freeze|candidate.*dirty"):
+        request_factory()
+
+
+@pytest.mark.parametrize("condition", ["exists", "inside", "contains", "store"])
+def test_r4_output_refusal(exp, request_factory, tmp_path, monkeypatch, condition):
+    output = tmp_path / "fresh"
+    if condition == "exists":
+        output.mkdir()
+    elif condition == "inside":
+        output = request_factory.checkout / "fresh"
+    elif condition == "contains":
+        output = tmp_path
+        # An ancestor of an existing checkout necessarily exists. Isolate containment
+        # from freshness so deleting only the containment guard is observable.
+        exists = Path.exists
+        monkeypatch.setattr(Path, "exists", lambda path: False if path == output else exists(path))
+    else:
+        store = tmp_path / "store"
+        (store / ".agenttalk").mkdir(parents=True)
+        output = store / "fresh"
+    with pytest.raises(
+        gate.GateBlock, match="output.*" + ("message stores" if condition == "store" else "fresh and external")
+    ):
+        request_factory(output=output)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("freeze_sha256", "d" * 64, "P7 freeze"),
+        ("gateway_policy", "skip", "held-port error policy"),
+        ("probe_files", ["observer.pth"], "probe files"),
+    ],
+)
+def test_r4_install_proof_refusal(exp, field, value, reason):
+    proof = {"freeze_sha256": "c" * 64, "gateway_policy": "error", "probe_files": []}
+    proof[field] = value
+    with pytest.raises(gate.GateBlock, match=reason):
+        exp.validate_install(proof, "c" * 64)
+
+
+def r4_runner(**kwargs):
+    argv = kwargs["argv"]
+    Path(argv[argv.index("--basetemp") + 1]).mkdir()
+    kwargs["logs_dir"].mkdir()
+    records = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--experiment-record="))
+    Path(records).mkdir()
+    return SimpleNamespace(status="pass")
+
+
+@pytest.mark.parametrize(
+    ("condition", "reason"),
+    [
+        ("setup", "setup order"),
+        ("checks-order", "reordered ordinary checks"),
+        ("checks-failed", "failed.*ordinary checks"),
+        ("export", "committed export"),
+    ],
+)
+def test_r4_installer_refusal(exp, request_factory, execution_fixture, monkeypatch, condition, reason):
+    req = request_factory(modes=("wheel",))
+    original = execution_fixture.installer.prepare
+
+    def prepare(*args):
+        prepared = original(*args)
+        if condition == "setup":
+            prepared.setup_steps = list(reversed(prepared.setup_steps))
+        elif condition == "checks-order":
+            prepared.checks = list(reversed(prepared.checks))
+        elif condition == "checks-failed":
+            prepared.checks[0]["status"] = "fail"
+        else:
+            prepared.source_root = req.output / "different-export"
+        return prepared
+
+    monkeypatch.setattr(execution_fixture.installer, "prepare", prepare)
+    artifact = exp.execute(
+        req, installer=execution_fixture.installer, recorder=execution_fixture.recorder, runner=r4_runner
+    )
+    assert artifact["status"] == "blocked"
+    assert re.search(reason, artifact["error"])
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["records", "logs", "candidate-source", "candidate-package", "candidate-wheel", "candidate-static", "pt-w-py312"],
+)
+def test_r4_finish_must_keep_evidence(exp, request_factory, execution_fixture, monkeypatch, missing):
+    req = request_factory(modes=("wheel",))
+
+    def finish(prepared):
+        shutil.rmtree(req.output / "wheel" / missing)
+
+    monkeypatch.setattr(execution_fixture.installer, "finish", finish)
+    artifact = exp.execute(
+        req, installer=execution_fixture.installer, recorder=execution_fixture.recorder, runner=r4_runner
+    )
+    assert artifact["status"] == "blocked"
+    assert ("basetemp retention" if missing.startswith("pt-") else missing) in artifact["error"]
+    assert "cleanup" not in artifact["calls"][0]
+
+
+@pytest.mark.parametrize("condition", ["dirty", "commit"])
+def test_r4_candidate_changed_during_execution(exp, request_factory, execution_fixture, monkeypatch, condition):
+    req = request_factory(modes=("source",))
+    monkeypatch.setattr(
+        gate,
+        "capture_candidate_binding",
+        lambda root: SimpleNamespace(
+            clean=condition != "dirty", candidate_sha="d" * 40 if condition == "commit" else req.commit
+        ),
+    )
+    artifact = exp.execute(
+        req, installer=execution_fixture.installer, recorder=execution_fixture.recorder, runner=r4_runner
+    )
+    assert artifact["status"] == "blocked"
+    assert "candidate changed during execution" in artifact["error"]
+
+
+@pytest.mark.parametrize("complete", [False, 1])
+def test_r4_incomplete_inventory_refused(exp, complete):
+    with pytest.raises(gate.GateBlock, match="P3 inventory incomplete"):
+        exp.validate_inventory({"complete": complete, "plugins": ["pytest", "experiment_record"]}, acceptance=True)
+
+
+def test_r4_non_windows_host_refused(exp, request_factory, monkeypatch):
+    monkeypatch.setattr(gate, "_platform_label", lambda: "linux")
+    with pytest.raises(gate.GateBlock, match="Windows host"):
+        request_factory()
+
+
+@pytest.mark.parametrize("missing", ["experiment_record.py", "conftest.py", "option", "comment", "syntax"])
+def test_r4_recorder_preflight_names_missing_piece(exp, request_factory, missing):
+    tests = request_factory.checkout / "tests"
+    if missing in {"option", "comment", "syntax"}:
+        content = {
+            "option": "def pytest_addoption(parser): pass\n",
+            "comment": "# parser.addoption('--experiment-record')\n",
+            "syntax": "def pytest_addoption(\n",
+        }[missing]
+        (tests / "conftest.py").write_text(content, encoding="utf-8")
+    else:
+        (tests / missing).unlink()
+    reason = (
+        "--experiment-record"
+        if missing in {"option", "comment"}
+        else "conftest.py"
+        if missing == "syntax"
+        else missing.replace(".", r"\.")
+    )
+    with pytest.raises(gate.GateBlock, match=reason):
+        request_factory()
+
+
+@pytest.mark.parametrize("extra", [0, 1])
+def test_r4_read_plain_size_boundary(exp, tmp_path, extra):
+    path = tmp_path / "plain"
+    data = b"x" * (exp.MAX_JSON_BYTES + extra)
+    path.write_bytes(data)
+    if extra:
+        with pytest.raises(gate.GateBlock, match="configuration exceeds size limit"):
+            exp.read_plain(path)
+    else:
+        assert exp.read_plain(path) == data
+
+
+def test_r4_finish_must_not_change_absent_basetemp(exp, request_factory, execution_fixture, monkeypatch):
+    req = request_factory(modes=("wheel",))
+    bt = req.output / "wheel" / "pt-w-py312"
+
+    def runner(**kwargs):
+        result = r4_runner(**kwargs)
+        bt.rmdir()
+        return result
+
+    monkeypatch.setattr(execution_fixture.installer, "finish", lambda prepared: bt.mkdir())
+    artifact = exp.execute(
+        req, installer=execution_fixture.installer, recorder=execution_fixture.recorder, runner=runner
+    )
+    assert artifact["status"] == "blocked"
+    assert "basetemp retention" in artifact["error"]
+    assert "cleanup" not in artifact["calls"][0]
+
+
+@pytest.mark.parametrize("shape", ["delegated", "unused", "missing"])
+def test_r5_recorder_preflight_agrees_with_real_child(exp, request_factory, shape):
+    checkout = request_factory.checkout
+    if shape == "unused":
+        (checkout / "tests" / "conftest.py").write_text(
+            "def unused(parser): parser.addoption('--experiment-record')\n", encoding="utf-8"
+        )
+    elif shape == "missing":
+        (checkout / "tests" / "experiment_record.py").unlink()
+    control = subprocess.run(
+        [sys.executable, "-I", "-m", "pytest", "--help", "-p", "no:cacheprovider", "tests"],
+        cwd=checkout,
+        env=gate._base_env(checkout),
+        text=True,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    if shape == "delegated":
+        assert control.returncode == 0, control.stderr
+        assert "--experiment-record" in control.stdout
+        assert request_factory().checkout == checkout
+    else:
+        if shape == "unused":
+            assert control.returncode == 0, control.stderr
+            assert "--experiment-record" not in control.stdout
+        else:
+            assert "--experiment-record" not in control.stdout
+        with pytest.raises(gate.GateBlock, match="experiment_record" if shape == "missing" else "--experiment-record"):
+            request_factory()
+
+
+def test_r5_docs_name_recorder_option_owner():
+    text = (Path(__file__).parents[1] / "docs" / "DEV-GATE.md").read_text(encoding="utf-8")
+    assert "`tests/experiment_record.py` defines the `--experiment-record` option" in text
+    assert "`tests/conftest.py` registers it through its `pytest_addoption` hook" in text
+
+
+@pytest.mark.parametrize("failure", [OSError("child unavailable"), subprocess.TimeoutExpired("pytest", 30)])
+def test_r5_recorder_child_failure_is_named(exp, request_factory, monkeypatch, failure):
+    def run(*args, **kwargs):
+        assert kwargs["timeout"] == 30
+        assert kwargs["env"]["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] == "1"
+        raise failure
+
+    monkeypatch.setattr(exp.subprocess, "run", run)
+    with pytest.raises(gate.GateBlock, match="conftest.py --experiment-record preflight"):
+        request_factory()
