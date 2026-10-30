@@ -117,7 +117,7 @@ def test_01_serial_equivalence_and_parallel_has_only_d4(exp, request_factory, tm
     ordinary = capture_ordinary(monkeypatch, req.manifest, mode, paths, env)
     call = exp.pytest_call(req, mode, Path(sys.executable), paths, env)
     expected = ordinary["argv"][: -len(req.manifest["checks"]["pytest"]["paths"])]
-    expected += ["--experiment-record", str(paths["records"])] + req.manifest["checks"]["pytest"]["paths"]
+    expected += [f"--experiment-record={paths['records']}"] + req.manifest["checks"]["pytest"]["paths"]
     assert call["argv"] == expected
     assert call["env"] == ordinary["env"] and call["timeout_seconds"] == ordinary["timeout_seconds"]
     assert call["checks"] == trial.partition(req.manifest, req.leg, mode)
@@ -126,6 +126,29 @@ def test_01_serial_equivalence_and_parallel_has_only_d4(exp, request_factory, tm
     insert = len(expected) - len(req.manifest["checks"]["pytest"]["paths"])
     expected[insert:insert] = req.contract["arms"]["parallel"]
     assert parallel["argv"] == expected
+
+
+@pytest.mark.parametrize("mode", ["source", "wheel"])
+@pytest.mark.parametrize("arm", ["serial", "parallel"])
+@pytest.mark.parametrize("builder", ["pytest_call", "expected_call"])
+def test_fix_n3_record_option_is_one_argument(exp, request_factory, tmp_path, mode, arm, builder):
+    request = request_factory(modes=(mode,), arm=arm)
+    work = tmp_path / "work with spaces"
+    records = work / "records"
+    records.mkdir(parents=True)
+    paths = {name: work / name for name in ("source", "imports", "bt", "logs", "records")}
+    if builder == "pytest_call":
+        call = exp.pytest_call(request, mode, Path(sys.executable), paths, gate._base_env(work))
+    else:
+        prepared = SimpleNamespace(
+            python=Path(sys.executable), source_root=paths["source"], import_root=paths["imports"]
+        )
+        call = exp.expected_call(request, mode, prepared, work)
+    argv = call["argv"]
+    # A separate existing folder can influence pytest's rootdir before option parsing.
+    assert "--experiment-record" not in argv
+    assert [arg for arg in argv if arg.startswith("--experiment-record=")] == [f"--experiment-record={records}"]
+    assert str(records) not in argv
 
 
 def test_02_ordinary_windows_parallel_evidence_still_rejected():
@@ -826,8 +849,7 @@ def test_fix_cl3_execute_uses_ordinary_environment_and_basetemp(
     ordinary = capture_ordinary(monkeypatch, request.manifest, mode, paths, env)
     actual = captured[0]
     argv = list(actual["argv"])
-    index = argv.index("--experiment-record")
-    del argv[index : index + 2]
+    argv.remove(f"--experiment-record={work / 'records'}")
     assert argv == ordinary["argv"]
     assert actual["env"] == ordinary["env"]
     assert actual["timeout_seconds"] == ordinary["timeout_seconds"]

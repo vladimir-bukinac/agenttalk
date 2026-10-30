@@ -262,8 +262,7 @@ def pytest_call(request, mode, python, paths, env):
         "no:cacheprovider",
         "--basetemp",
         str(paths["bt"]),
-        "--experiment-record",
-        str(paths["records"]),
+        f"--experiment-record={paths['records']}",
         *request.contract["arms"][arm],
         *probe_args,
         *spec["paths"],
@@ -296,7 +295,7 @@ def expected_call(request, mode, prepared, work):
         candidate_import_root=prepared.import_root if mode == "source" else None,
     )
     arm = request.arm if request.probe is None else request.contract["probes"][request.probe]["arm"]
-    extra = ["--experiment-record", str(work / "records"), *request.contract["arms"][arm]]
+    extra = [f"--experiment-record={work / 'records'}", *request.contract["arms"][arm]]
     if request.probe is not None:
         extra += request.contract["probes"][request.probe]["args"]
     if request.cases:
