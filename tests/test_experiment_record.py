@@ -1462,3 +1462,166 @@ def test_the_docstring_states_the_limits_of_the_cleaning(er):
     text = er.__doc__.lower()
     assert "node ids are kept exactly as pytest makes them" in text
     assert "recognised only by its first and last characters" in text
+    flat = " ".join(text.split())
+    assert "both looked for in the original text" in flat
+    assert "a 64 kib text full of `...` is cleaned" in flat
+
+
+# --- fix round 3: N1 values that start alike, P2 a slow second pass ----------------------------------------------
+
+_LONG32 = LONG_SENTINELS["P3_S_LONG32"]
+_LONG64 = LONG_SENTINELS["P3_S_LONG64"]
+OVERLAP_SENTINELS = {
+    32: _LONG32,
+    64: _LONG64,
+    200: (_LONG32[::-1] + _LONG64 + _LONG32.swapcase() + _LONG64[::-1] + _LONG32)[:200],
+}
+
+OVERLAP_TESTS = "import os\n\nimport pytest\n" + "".join(
+    f"""
+
+def test_assert_{size}():
+    assert os.environ["P3_S_OVL{size}"] == "short"
+
+
+def test_raise_{size}():
+    value = os.environ["P3_S_OVL{size}"]
+    raise ValueError(f"{{value[:12]}}...{{value[-12:]}}")
+
+
+def test_skip_{size}():
+    value = os.environ["P3_S_OVL{size}"]
+    pytest.skip(f"{{value[:12]}}...{{value[-12:]}}")
+"""
+    for size in OVERLAP_SENTINELS
+)
+
+
+def set_overlapping_values(monkeypatch):
+    """Each sentinel, and a second variable that holds only its first 12 characters."""
+    for size, value in OVERLAP_SENTINELS.items():
+        monkeypatch.setenv(f"P3_S_OVL{size}", value)
+        monkeypatch.setenv(f"P3_S_OVL{size}_HEAD", value[:12])
+
+
+def test_a_value_that_is_the_start_of_another_does_not_hide_its_shortened_form(project, er, tmp_path, monkeypatch):
+    # N1 (P1, round 4): the whole-value pass used to replace the shared first 12 characters first, so the shortened
+    # 'head...tail' could no longer be matched to the long value and its tail was stored.
+    set_overlapping_values(monkeypatch)
+    project.makepyfile(test_overlap=OVERLAP_TESTS)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec)
+
+    decoded = "\n".join(
+        value for recs in read_journals(rec).values() for r in recs for value in r.values() if isinstance(value, str)
+    )
+    raw = journal_bytes(rec).decode("utf-8")
+    for size, value in OVERLAP_SENTINELS.items():
+        leaked = [w for w in windows_of(value) if w in decoded or w in raw]
+        assert not leaked, f"{size} characters: pieces of the value reached the journal: {sorted(leaked)[:3]}"
+    phases = phases_of(rec)
+    for size in OVERLAP_SENTINELS:
+        assert f"<env:P3_S_OVL{size}>" in phases[(f"test_raise_{size}", "call")]["error_text"]
+        assert phases[(f"test_skip_{size}", "call")]["reason"] == f"Skipped: <env:P3_S_OVL{size}>"
+        assert phases[(f"test_assert_{size}", "call")]["error_redactions"] >= 1
+
+
+@pytest.mark.parametrize("size", sorted(OVERLAP_SENTINELS))
+def test_overlapping_values_keep_the_digest_of_the_original_text(er, tmp_path, monkeypatch, size):
+    set_overlapping_values(monkeypatch)
+    value = OVERLAP_SENTINELS[size]
+    shortened = f"{value[:12]}...{value[-12:]}"
+    text = f"ValueError: '{shortened}' and in full {value}"
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(text)
+        reason = recorder.reason_fields(shortened)
+    finally:
+        recorder.close()
+    label = f"<env:P3_S_OVL{size}>"
+    assert fields["error_text"] == f"ValueError: '{label}' and in full {label}"
+    assert fields["error_redactions"] == 2
+    assert fields["error_digest"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+    assert fields["error_length"] == len(text.encode("utf-8"))
+    assert (reason["reason"], reason["reason_redactions"]) == (label, 1)
+
+
+def test_a_value_that_ends_inside_a_head_is_one_replacement_with_the_longer_label(er, tmp_path, monkeypatch):
+    # The two spans start in different places: the value `pre-<first 6 characters>` begins 4 characters before the head.
+    value = LONG_SENTINELS["P3_S_LONG32"]
+    monkeypatch.setenv("P3_S_LONG32", value)
+    monkeypatch.setenv("P3_S_ENDING", "pre-" + value[:6])
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(f"got 'pre-{value[:11]}...{value[-11:]}' here")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "got '<env:P3_S_LONG32>' here"
+    assert fields["error_redactions"] == 1
+
+
+def test_two_neighbouring_values_are_still_two_replacements(er, tmp_path, monkeypatch):
+    # Spans that only touch are not merged: each value keeps its own label and its own count.
+    monkeypatch.setenv("P3_S_FIRST", "first-value-9Qw2")
+    monkeypatch.setenv("P3_S_SECOND", "second-value-4Zr7")
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields("first-value-9Qw2second-value-4Zr7")
+    finally:
+        recorder.close()
+    assert fields["error_text"] == "<env:P3_S_FIRST><env:P3_S_SECOND>"
+    assert fields["error_redactions"] == 2
+
+
+CLEAN_TIME_LIMIT = 5.0  # seconds a child process may take to clean each text below; the real figure is far smaller
+
+TIMING_SCRIPT = """
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from types import SimpleNamespace
+
+sys.path.insert(0, sys.argv[1])
+import experiment_record
+
+directory = Path(sys.argv[2])
+config = SimpleNamespace(option=SimpleNamespace(basetemp=None), _tmp_path_factory=None)
+redactor = experiment_record.Redactor(config, directory)
+size = 64 * 1024
+form = "{head}...{tail} ".format(head=os.environ["P3_S_TIME00"][:11], tail=os.environ["P3_S_TIME00"][-11:])
+texts = {
+    "dots": "." * size,
+    "ellipses": "..." * (size // 3),
+    "shortened forms": form * (size // len(form)),
+    "heads without tails": (os.environ["P3_S_TIME00"][:11] + "... ") * (size // 16),
+}
+seconds = {}
+for name, text in texts.items():
+    started = time.perf_counter()
+    cleaned, count = redactor.clean(text)
+    seconds[name] = round(time.perf_counter() - started, 3)
+print(json.dumps(seconds))
+"""
+
+
+def test_a_long_text_full_of_ellipses_is_cleaned_within_a_small_time_limit(tmp_path):
+    # P2 (round 4): the shortened-form pass tried every value at up to 256 lengths for every '...', so 64 KiB of dots
+    # took over a minute. It runs in a child process so that a slow pass is stopped by the timeout, not waited for.
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTEST_", "AGENTTALK_", "PYTHONPATH"))}
+    for number in range(60):
+        env[f"P3_S_TIME{number:02d}"] = f"time-value-{number:02d}-" + "wQ7zK2mP9vL4nR8tW3yB6cD1fG5hJ0"
+    done = subprocess.run(
+        [sys.executable, "-I", "-c", TIMING_SCRIPT, str(TESTS_DIR), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    seconds = json.loads(done.stdout.strip().splitlines()[-1])
+    assert set(seconds) == {"dots", "ellipses", "shortened forms", "heads without tails"}
+    slow = {name: taken for name, taken in seconds.items() if taken > CLEAN_TIME_LIMIT}
+    assert not slow, f"cleaning took longer than {CLEAN_TIME_LIMIT} seconds: {slow}"

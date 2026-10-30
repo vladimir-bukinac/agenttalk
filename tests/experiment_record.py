@@ -90,10 +90,14 @@ from the original, the recorder replaces, longest first:
     `os.pathsep`-separated part of such a value, by `<env:NAME>` (blank values are skipped);
   * the home folder by `<home>`, the temp folder by `<temp>`, the record folder by `<record>` and the basetemp by
     `<basetemp>`, written with either slash and, on Windows, in any letter case.
-Each is also found with its backslashes doubled, as a traceback shows a string from the source.  A second pass then
-joins a shortened form back to its value: pytest shows a long compared value as `head...tail`, and when `head` (at
-least 4 characters) ends where this text puts the `...` and starts a recognised value, and `tail` (at least 4)
-follows it and ends the same value, the whole form becomes the same `<env:NAME>`, counted in the redactions.
+Each is also found with its backslashes doubled, as a traceback shows a string from the source.  A shortened form is
+joined back to its value too: pytest shows a long compared value as `head...tail`, and when `head` (at least 4
+characters) ends where this text puts the `...` and starts a recognised value, and `tail` (at least 4) follows it and
+ends the same value, the whole form becomes the same `<env:NAME>`, counted in the redactions.  Whole values and
+shortened forms are both looked for in the ORIGINAL text, so a value that is the start of another cannot hide the
+other's shortened form; spans that overlap become one replacement (the label of the longest), spans that only touch stay
+two.  The search is bounded: each `...` looks only at the 256 characters around it, and only at places where a
+recognised value begins, so a 64 KiB text full of `...` is cleaned in about a second at worst (tests allow 5).
 LIMITS, stated plainly: only environment values and those four folders are recognised.
   * Values shorter than 8 characters cannot be recognised and are stored as they are.
   * A value shown in another spelling (escaped quotes or non-ASCII characters in a Python repr) is stored.
@@ -146,6 +150,7 @@ xdist's `workerinput`, never through the environment.
 
 from __future__ import annotations
 
+import bisect
 import functools
 import hashlib
 import json
@@ -218,46 +223,98 @@ def _pattern(needles: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(n) for n in needles), re.IGNORECASE if ignorecase else 0)
 
 
-def _join_shortened(text: str, ordered: tuple[str, ...], found: dict[str, str], ignorecase: bool) -> tuple[str, int]:
-    """Replace each `head...tail` that is one recognised value shown shortened by `<label>`; return (text, count).
+@functools.lru_cache(maxsize=8)
+def _heads_pattern(heads: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
+    """Finds, at every position (overlapping), the first MIN_SHORTENED_PIECE characters of some value."""
+    return re.compile("(?=(" + "|".join(re.escape(h) for h in heads) + "))", re.IGNORECASE if ignorecase else 0)
+
+
+def _shortened_spans(
+    text: str, ordered: tuple[str, ...], found: dict[str, str], ignorecase: bool
+) -> list[tuple[int, int, str]]:
+    """(start, end, label) of each `head...tail` in `text` that is one recognised value shown shortened.
 
     pytest cuts a long compared value to its first and last characters with "..." between them, so neither piece is
     the whole value. Both pieces must be at least MIN_SHORTENED_PIECE characters, `head` must be a prefix and `tail`
-    a suffix of the same value."""
+    a suffix of the same value, each within SHORTENED_WINDOW characters of the "...". A head can only start where
+    some value begins, so only those places are tried for each "..."."""
     if "..." not in text:
-        return text, 0
+        return []
     fold = str.casefold if ignorecase else (lambda value: value)
-    pieces: list[str] = []
-    cursor = count = 0
+    by_head: dict[str, list[str]] = {}
+    for needle in ordered:
+        if len(needle) >= 2 * MIN_SHORTENED_PIECE:
+            by_head.setdefault(fold(needle[:MIN_SHORTENED_PIECE]), []).append(needle)
+    if not by_head:
+        return []
+    heads = tuple({needle[:MIN_SHORTENED_PIECE] for group in by_head.values() for needle in group})
+    starts = [(match.start(), fold(match.group(1))) for match in _heads_pattern(heads, ignorecase).finditer(text)]
+    positions = [start for start, _ in starts]
+    spans: list[tuple[int, int, str]] = []
     position = text.find("...")
     while position != -1:
-        left = text[max(cursor, position - SHORTENED_WINDOW) : position]
-        right = text[position + 3 : position + 3 + SHORTENED_WINDOW]
-        for needle in ordered:
-            if len(needle) < 2 * MIN_SHORTENED_PIECE:
+        first = bisect.bisect_left(positions, position - SHORTENED_WINDOW)
+        last = bisect.bisect_right(positions, position - MIN_SHORTENED_PIECE)
+        span = _first_shortened_span(text, position, starts[first:last], by_head, found, fold)
+        if span:
+            spans.append(span)
+        position = text.find("...", position + 3)
+    return spans
+
+
+def _first_shortened_span(text, position, candidates, by_head, found, fold):
+    """The span for the "..." at `position` from the longest head and the longest value that fit, or None."""
+    for start, key in candidates:
+        head = text[start:position]
+        for needle in by_head[key]:
+            if len(head) > len(needle) - MIN_SHORTENED_PIECE or fold(head) != fold(needle[: len(head)]):
                 continue
-            head = _longest_match(left, needle, fold, from_end=True)
-            tail = _longest_match(right, needle, fold, from_end=False) if head else 0
-            if head and tail:
-                pieces.append(text[cursor : position - head])
-                pieces.append(found[needle])
-                cursor = position + 3 + tail
-                count += 1
-                break
-        position = text.find("...", max(position + 3, cursor))
-    pieces.append(text[cursor:])
-    return "".join(pieces), count
+            tail = _longest_tail(text[position + 3 : position + 3 + SHORTENED_WINDOW], needle, fold)
+            if tail:
+                return start, position + 3 + tail, found[needle]
+    return None
 
 
-def _longest_match(side: str, needle: str, fold, *, from_end: bool) -> int:
-    """The longest length k (at least MIN_SHORTENED_PIECE, leaving as much for the other piece) such that the last k
-    characters of `side` (from_end) are the first k of `needle`, or the first k of `side` are the last k of `needle`;
-    0 when none."""
-    for size in range(min(len(side), len(needle) - MIN_SHORTENED_PIECE), MIN_SHORTENED_PIECE - 1, -1):
-        piece, expected = (side[-size:], needle[:size]) if from_end else (side[:size], needle[-size:])
-        if fold(piece) == fold(expected):
-            return size
+def _longest_tail(side: str, needle: str, fold) -> int:
+    """The longest length k (at least MIN_SHORTENED_PIECE, leaving as much for the head) such that the first k
+    characters of `side` are the last k of `needle`; 0 when none."""
+    limit = min(len(side), len(needle) - MIN_SHORTENED_PIECE)
+    if limit < MIN_SHORTENED_PIECE:
+        return 0
+    folded_side, folded_needle = fold(side[:limit]), fold(needle)
+    if len(folded_side) != limit or len(folded_needle) != len(needle):
+        # Folding changed a length (a letter like the German sharp s): compare piece by piece, the slow way.
+        for size in range(limit, MIN_SHORTENED_PIECE - 1, -1):
+            if fold(side[:size]) == fold(needle[-size:]):
+                return size
+        return 0
+    index = folded_needle.find(folded_side[0], len(needle) - limit)  # only where the tail's first character occurs
+    while index != -1 and len(needle) - index >= MIN_SHORTENED_PIECE:
+        if folded_needle.endswith(folded_side[: len(needle) - index]):
+            return len(needle) - index
+        index = folded_needle.find(folded_side[0], index + 1)
     return 0
+
+
+def _replace_spans(text: str, spans: list[tuple[int, int, str]]) -> tuple[str, int]:
+    """(`text` with each span replaced by its label, the number of replacements). Spans that overlap are one
+    replacement, with the label of the longest of them; spans that only touch stay separate."""
+    merged: list[list[Any]] = []  # [start, end, label, length of the longest span so far]
+    for start, end, label in sorted(spans, key=lambda span: (span[0], -span[1])):
+        if merged and start < merged[-1][1]:
+            last = merged[-1]
+            last[1] = max(last[1], end)
+            if end - start > last[3]:
+                last[2], last[3] = label, end - start
+        else:
+            merged.append([start, end, label, end - start])
+    pieces: list[str] = []
+    cursor = 0
+    for start, end, label, _ in merged:
+        pieces.extend((text[cursor:start], label))
+        cursor = end
+    pieces.append(text[cursor:])
+    return "".join(pieces), len(merged)
 
 
 class Redactor:
@@ -301,7 +358,8 @@ class Redactor:
         return found
 
     def clean(self, text: str) -> tuple[str, int]:
-        """(the text with every needle replaced, longest first; the number of replacements)."""
+        """(the text with every needle replaced, longest first; the number of replacements). Whole values and
+        shortened forms are both found in the original text, then replaced together."""
         found = self.needles()
         if not found:
             return text, 0
@@ -313,9 +371,9 @@ class Redactor:
             key = match.group(0)
             return labels.get(key.casefold() if ignorecase else key, "<redacted>")
 
-        cleaned, count = _pattern(ordered, ignorecase).subn(label, text)
-        cleaned, joined = _join_shortened(cleaned, ordered, found, ignorecase)
-        return cleaned, count + joined
+        spans = [(match.start(), match.end(), label(match)) for match in _pattern(ordered, ignorecase).finditer(text)]
+        spans.extend(_shortened_spans(text, ordered, found, ignorecase))
+        return _replace_spans(text, spans)
 
 
 def _requested_group(item: pytest.Item) -> str | None:
