@@ -20,7 +20,7 @@ import json
 import os
 import re
 import stat
-import subprocess
+import subprocess  # nosec B404
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -186,7 +186,8 @@ def validate_recorder(checkout):
     read_plain(checkout / "tests" / "experiment_record.py", within=checkout)
     read_plain(checkout / "tests" / "conftest.py", within=checkout)
     try:
-        help_result = subprocess.run(  # noqa: S603 - fixed pytest help argv in the validated checkout
+        # Fixed pytest help argv in the validated checkout.
+        help_result = subprocess.run(  # noqa: S603  # nosec B603
             [sys.executable, "-I", "-m", "pytest", "--help", "-p", "no:cacheprovider", "tests"],
             cwd=checkout,
             env=gate._base_env(checkout),
