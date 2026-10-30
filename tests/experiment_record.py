@@ -160,13 +160,16 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   report for that node id exists), crash-unrecorded (an unfinished item of a worker that no crash
                   record explains), suffix-missing, group-split, duplicate-id, missing-id, unexpected-id,
                   nested-journal-missing, nested-journal-unlaunched, and the evidence checks:
-                  manifest-missing (a serial or worker process wrote no collection manifest),
+                  manifest-missing (a serial or worker process wrote no collection manifest; also a nested serial
+                  run or a nested worker, then with `nested_run`: absent evidence is never read as none),
                   controller-missing (worker journals of a run and no controller journal: its node manifests
                   and crash records cannot be there either; a nested xdist run's controller journal has the role
                   "nested", and the check is made per run token),
                   multiple-root-runs (more than one root serial journal, more than one root controller, or one
                   worker id twice: stale evidence from an earlier run in a reused folder cannot be told from this
                   run's) and mixed-root-topology (a root serial run and a root xdist run in one folder),
+                  multiple-nested-runs (the same rule per nested token: two `nested` journals, or one worker id
+                  twice, under one token; it carries `nested_run`),
                   manifest-disagreement (the controller's manifest for a worker is missing or differs from the
                   worker's own), collection-mismatch (the collected canonical ids differ from `expected_ids`),
                   never-started (collected but never started: the run stopped before it; checked for every
@@ -1418,6 +1421,17 @@ def reduce_journals(
         )
     if serials and (controllers or worker_ids):
         problems.add("mixed-root-topology", "the record folder holds a serial run and an xdist run together")
+    nested = [info for _, info, _ in loaded if info["nested_token"] and info["role"] in ("nested", "worker")]
+    nested_roles = Counter(i["nested_token"] for i in nested if i["role"] == "nested")
+    nested_workers = Counter((i["nested_token"], i["worker"]) for i in nested if i["role"] == "worker")
+    twice = {t for t, count in nested_roles.items() if count > 1} | {t for (t, _), c in nested_workers.items() if c > 1}
+    for token in sorted(twice):
+        problems.add(
+            "multiple-nested-runs",
+            "more than one nested journal, or one worker id twice, was written under one nested token: two runs "
+            "launched with one handoff cannot be told apart",
+            nested_run=token,
+        )
 
     items: dict[str, dict[str, Any]] = {}
     groups: dict[str, set[str]] = {}
@@ -1439,6 +1453,7 @@ def reduce_journals(
     controller_runs: set[str | None] = set()  # runs with a controller journal (a nested one has the role "nested")
     nested_collected: dict[str, dict[str, None]] = defaultdict(dict)  # nested run -> canonical ids in its manifests
     nested_started: dict[str, set[str]] = defaultdict(set)  # nested run -> canonical ids that started
+    unmanifested: list[tuple[str, str, str]] = []  # (nested run, role, journal) of a nested process with no manifest
     for name, info, recs in loaded:
         if info["nested_token"]:
             journaled.add(info["nested_token"])
@@ -1469,10 +1484,10 @@ def reduce_journals(
                 elif record["source"] == "session" and reconcile:
                     for raw_id, identity in zip(record["raw_ids"], record["identities"], strict=True):
                         identity_of.setdefault((run, raw_id), identity)
+                    has_manifest = True
                     if info["role"] == "worker":
                         own_manifests[run][str(info["worker"])] = record["raw_ids"]
                     if root:
-                        has_manifest = True
                         for identity in record["identities"]:
                             collected.setdefault(identity["canonical_id"])
                     elif run is not None:
@@ -1538,6 +1553,8 @@ def reduce_journals(
             unfinished.append((name, info["role"], info["worker"], run, nodeid, current["phases"]))
         if root and not has_manifest:
             problems.add("manifest-missing", "the process wrote no collection manifest", file=name)
+        elif run is not None and reconcile and not has_manifest:
+            unmanifested.append((run, info["role"], name))
 
     for name, role, worker, run, nodeid, phases in unfinished:
         recorded = (run, nodeid) in crashed_ids or (worker is not None and (run, worker) in crashed_workers)
@@ -1590,6 +1607,11 @@ def reduce_journals(
             only_collected=only_collected,
             only_reference=only_expected,
         )
+    # A nested serial run and a nested worker must have written a manifest; the "nested" journal of a nested xdist
+    # run is its controller, which collects nothing (like the root controller) and needs none.
+    for run, role, name in unmanifested:
+        if role == "worker" or run not in worker_runs:
+            problems.add("manifest-missing", "the process wrote no collection manifest", file=name, nested_run=run)
     for run in sorted(worker_runs | set(node_manifests), key=lambda r: r or ""):
         extra = {} if run is None else {"nested_run": run}
         if run in worker_runs and run not in controller_runs:

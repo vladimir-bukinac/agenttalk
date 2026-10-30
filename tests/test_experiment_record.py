@@ -3482,3 +3482,168 @@ def test_the_inactive_helper_test_passes_in_a_recorded_run_and_the_record_reduce
     summary = er.reduce_journals(rec, [RECORDED_TEST])
     assert summary["problems"] == [], summary["problems"]
     assert summary["accepted"] is True
+
+
+# --- fix round 14: nested manifests must be present, and a nested token is one run -----------------------------------
+
+
+def test_a_nested_serial_run_that_lost_its_manifest_is_refused_naming_its_run(er, tmp_path):
+    # codex-rev's P1: with the manifest gone, a collected item that never ran could not be seen at all
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[], manifest=False)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "manifest-missing"]
+    assert problem["nested_run"] == NESTED_TOKEN and problem["file"].startswith("journal-nested-12-")
+    assert summary["accepted"] is False
+
+
+def test_the_same_nested_serial_run_with_its_manifest_is_accepted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[("n.py::x", None)])
+
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"] is True
+
+
+def _nested_xdist_without(tmp_path, *, worker_manifests, node_manifests):
+    rows = {"gw0": [("n.py::x", None)], "gw1": [("n.py::y", None)]}
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    nodes = [("collection-manifest", manifest_fields(r, "node", w)) for w, r in rows.items()] if node_manifests else []
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nodes)
+    for number, (worker, r) in enumerate(rows.items(), start=13):
+        write_journal(
+            tmp_path, "worker", number, worker=worker, nested_token=NESTED_TOKEN, starts=r, manifest=worker_manifests
+        )
+
+
+def test_a_nested_xdist_run_whose_worker_and_controller_manifests_are_all_gone_is_refused(er, tmp_path):
+    _nested_xdist_without(tmp_path, worker_manifests=False, node_manifests=False)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    missing = [p for p in summary["problems"] if p["kind"] == "manifest-missing"]
+    assert sorted(p["file"] for p in missing) == ["journal-worker-13-1000.jsonl", "journal-worker-14-1000.jsonl"]
+    assert {p["nested_run"] for p in missing} == {NESTED_TOKEN}
+    assert summary["accepted"] is False
+
+
+def test_a_nested_xdist_run_with_only_its_worker_manifests_gone_is_refused(er, tmp_path):
+    _nested_xdist_without(tmp_path, worker_manifests=False, node_manifests=True)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert {"manifest-missing", "manifest-disagreement"} <= kinds(summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_a_nested_xdist_run_with_only_its_controller_manifests_gone_is_refused(er, tmp_path):
+    _nested_xdist_without(tmp_path, worker_manifests=True, node_manifests=False)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "manifest-disagreement" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+def test_a_nested_controller_needs_no_manifest_of_its_own_like_the_root_controller(er, tmp_path):
+    # the control for the presence rule: a run's controller does not collect, so only workers and serial runs need one
+    _nested_xdist_without(tmp_path, worker_manifests=True, node_manifests=True)
+
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"] is True
+
+
+def test_two_nested_children_with_one_token_are_not_merged_into_one_run(er, tmp_path):
+    # claude-rev's P2: child A collected x and never started it, child B ran x; merged, the run looked complete
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[], collected=[("n.py::x", None)])
+    write_journal(tmp_path, "nested", 13, nested_token=NESTED_TOKEN, starts=[("n.py::x", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "multiple-nested-runs"]
+    assert problem["nested_run"] == NESTED_TOKEN
+    assert summary["accepted"] is False
+
+
+def test_one_worker_id_twice_under_one_nested_token_is_not_one_run(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    rows = [("n.py::x", None)]
+    nodes = [("collection-manifest", manifest_fields(rows, "node", "gw0"))]
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nodes)
+    write_journal(tmp_path, "worker", 13, worker="gw0", nested_token=NESTED_TOKEN, starts=rows)
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"] is True, "the control: one gw0 is fine"
+    write_journal(tmp_path, "worker", 14, worker="gw0", nested_token=NESTED_TOKEN, starts=rows)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "multiple-nested-runs"]
+    assert problem["nested_run"] == NESTED_TOKEN and summary["accepted"] is False
+
+
+def test_the_same_worker_id_under_two_different_tokens_is_two_runs_and_fine(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN, TOKEN2))
+    for pid, token in ((12, NESTED_TOKEN), (14, TOKEN2)):
+        rows = [("n.py::x", None)]
+        nodes = [("collection-manifest", manifest_fields(rows, "node", "gw0"))]
+        write_journal(tmp_path, "nested", pid, nested_token=token, extra=nodes)
+        write_journal(tmp_path, "worker", pid + 1, worker="gw0", nested_token=token, starts=rows)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["problems"] == [] and summary["accepted"] is True
+
+
+# real nested two-worker children: no valid run may be refused
+
+NESTED_XDIST_PARENT = """
+import subprocess
+import sys
+
+import experiment_record
+
+CONFTEST = "{conftest}"
+
+
+def launch(tmp_path, env):
+    (tmp_path / "conftest.py").write_text(CONFTEST, encoding="utf-8")
+    (tmp_path / "test_child.py").write_text(
+        "\\n\\n".join(f"def test_c{n}():\\n    pass\\n" for n in range(1, 5)), encoding="utf-8"
+    )
+    return subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "xdist.plugin", "-n", "2", "-p", "no:cacheprovider",
+         "--basetemp", str(tmp_path / "bt"), str(tmp_path / "test_child.py")],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True, timeout=180,
+    )
+
+
+def test_with_the_helper(tmp_path):
+    done = launch(tmp_path, experiment_record.nested_environment())
+    assert done.returncode == 0, done.stdout + done.stderr
+""".replace("{conftest}", NESTED_CONFTEST)
+
+
+def test_a_real_nested_two_worker_child_inside_a_recorded_serial_run_is_accepted(project, er, tmp_path):
+    project.makepyfile(test_parent=NESTED_XDIST_PARENT)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec, "-k", "test_with_the_helper").assert_outcomes(passed=1)
+
+    summary = er.reduce_journals(rec, ["test_parent.py::test_with_the_helper"])
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True and summary["nested"] == {"launched": 1, "journaled": 1}
+    roles = sorted((p["role"], p["worker"]) for p in summary["processes"])
+    assert roles == [("nested", None), ("serial", None), ("worker", "gw0"), ("worker", "gw1")]
+
+
+def test_a_real_nested_two_worker_child_inside_a_recorded_two_worker_run_is_accepted(project, er, tmp_path):
+    project.makepyfile(test_parent=NESTED_XDIST_PARENT)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec, "-k", "test_with_the_helper").assert_outcomes(passed=1)
+
+    summary = er.reduce_journals(rec)
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True and summary["nested"] == {"launched": 1, "journaled": 1}
+    roles = sorted((p["role"], p["worker"], bool(p["nested_token"])) for p in summary["processes"])
+    assert roles.count(("worker", "gw0", True)) == 1 and roles.count(("worker", "gw0", False)) == 1
+    assert ("controller", None, False) in roles and ("nested", None, True) in roles
