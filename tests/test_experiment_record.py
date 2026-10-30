@@ -17,6 +17,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -728,6 +729,14 @@ def test_with_the_helper(tmp_path):
 def test_without_the_helper(tmp_path):
     assert experiment_record.HANDOFF_ENV not in os.environ
     done = launch(tmp_path, dict(os.environ))
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_helper_plus_addopts(tmp_path):
+    env = experiment_record.nested_environment()
+    # a parent that turned recording on through PYTEST_ADDOPTS: the child inherits the option AND the handoff
+    env["PYTEST_ADDOPTS"] = "--experiment-record=" + experiment_record._ACTIVE.directory.as_posix()  # shlex-split
+    done = launch(tmp_path, env)
     assert done.returncode == 0, done.stdout + done.stderr
 """.replace("{conftest}", NESTED_CONFTEST)
 
@@ -2584,5 +2593,228 @@ def test_the_docstring_states_the_round_8_rules(er):
         "phase-in-no-body-probe (under `require_phases=False`",
         "about 3 KB per item",
         "P8's dry run measures the real serial journal size",
+    ):
+        assert text in flat, text
+
+
+# --- fix round 9: the automated reviewer's P1 (reparse points) and three P2 ----------------------------------------
+
+
+def _a_journal_outside(tmp_path):
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    return write_journal(outside, "serial", 11, starts=[("t.py::a", None)])
+
+
+def _folder_with_a_link_to(target, tmp_path):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    link = folder / target.name
+    try:
+        link.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system cannot create a symbolic link here")
+    return folder
+
+
+def test_a_symbolic_link_named_like_a_journal_is_refused(er, tmp_path):
+    # P1: Windows has no O_NOFOLLOW, so the open followed the link and fstat saw only a plain target.
+    folder = _folder_with_a_link_to(_a_journal_outside(tmp_path), tmp_path)
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert kinds(summary["problems"]) >= {"journal-not-plain"}, summary["problems"]
+    assert summary["status"] == "incomplete" and summary["items"] == {}
+    assert summary["accepted"] is False
+
+
+def _lstat_that(monkeypatch, name, change):
+    """os.lstat of the path whose last part is `name` answers through `change(result, call_number)`."""
+    real = os.lstat
+    calls = []
+
+    def fake(path, *args, **kwargs):
+        result = real(path, *args, **kwargs)
+        if Path(path).name != name:
+            return result
+        calls.append(path)
+        fields = {k: getattr(result, k) for k in ("st_mode", "st_dev", "st_ino", "st_nlink", "st_size")}
+        fields["st_file_attributes"] = getattr(result, "st_file_attributes", 0)
+        return SimpleNamespace(**change(fields, len(calls)))
+
+    monkeypatch.setattr(os, "lstat", fake)
+
+
+@pytest.mark.parametrize("looks", ["every-look", "first-look-only"])
+def test_a_journal_that_lstat_shows_as_a_reparse_point_is_refused_on_every_system(er, tmp_path, monkeypatch, looks):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"], "the journal is fine before the attribute is set"
+    first_only = looks == "first-look-only"
+
+    _lstat_that(
+        monkeypatch,
+        path.name,
+        lambda fields, call: {**fields, "st_file_attributes": 1024 * (call == 1 or not first_only)},
+    )
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+    assert kinds(summary["problems"]) >= {"journal-not-plain"}, summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_a_journal_that_becomes_a_reparse_point_while_it_is_opened_is_refused(er, tmp_path, monkeypatch):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    _lstat_that(monkeypatch, path.name, lambda fields, call: {**fields, "st_file_attributes": 1024 * (call > 1)})
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "journal-not-plain" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_a_journal_whose_identity_changes_while_it_is_opened_is_refused(er, tmp_path, monkeypatch):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    _lstat_that(monkeypatch, path.name, lambda fields, call: {**fields, "st_ino": fields["st_ino"] + (call > 1)})
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert kinds(summary["problems"]) >= {"journal-not-plain"}, summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_a_record_folder_that_is_a_link_is_refused(er, tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    write_journal(real, "serial", 11, starts=[("t.py::a", None)])
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(real, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        pytest.skip("this system cannot create a symbolic link here")
+
+    summary = er.reduce_journals(link, ["t.py::a"])
+
+    assert "folder-not-plain" in kinds(summary["problems"]), summary["problems"]
+    assert summary["processes"] == [] and summary["accepted"] is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="a junction is a Windows reparse point")
+def test_a_record_folder_that_is_a_real_junction_is_refused(er, tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    write_journal(real, "serial", 11, starts=[("t.py::a", None)])
+    junction = tmp_path / "junction"
+    made = subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), str(real)], capture_output=True, text=True)
+    if made.returncode != 0:
+        pytest.skip(f"cannot create a junction here: {made.stdout} {made.stderr}")
+
+    summary = er.reduce_journals(junction, ["t.py::a"])
+
+    assert "folder-not-plain" in kinds(summary["problems"]), summary["problems"]
+    assert summary["processes"] == [] and summary["accepted"] is False
+    assert er.reduce_journals(real, ["t.py::a"])["accepted"], "the target itself is a plain folder"
+
+
+def test_a_record_folder_that_lstat_shows_as_a_reparse_point_is_refused_on_every_system(er, tmp_path, monkeypatch):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    _lstat_that(monkeypatch, "record", lambda fields, call: {**fields, "st_file_attributes": 1024})
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert "folder-not-plain" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_a_missing_or_plain_folder_is_not_a_folder_problem(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"]
+    assert er.reduce_journals(tmp_path / "nowhere")["problems"] == []  # nothing to read: incomplete, as before
+
+
+def test_a_nested_run_whose_parent_also_turned_recording_on_through_pytest_addopts_is_still_nested(
+    project, er, tmp_path
+):
+    # P2: the inherited option won over the handoff, so the child was labelled `serial` and the join failed.
+    project.makepyfile(test_parent=NESTED_PARENT)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec, "-k", "test_helper_plus_addopts").assert_outcomes(passed=1)
+
+    ((_, launch),) = records(rec, "nested-launch")
+    roles = sorted(r["role"] for _, r in records(rec, "process-start"))
+    assert roles == ["nested", "serial"], roles
+    ((_, nested_start),) = [(n, r) for n, r in records(rec, "process-start") if r["role"] == "nested"]
+    assert nested_start["nested_token"] == launch["token"]
+    summary = er.reduce_journals(rec, ["test_parent.py::test_helper_plus_addopts"])
+    assert summary["accepted"], summary["problems"]
+    assert summary["nested"] == {"launched": 1, "journaled": 1}
+
+
+@pytest.mark.parametrize(
+    "version",
+    [1, 3, 0, "2", 2.0, True, [2], None],
+    ids=["one", "three", "zero", "text", "float", "bool", "list", "missing"],
+)
+def test_a_record_with_any_other_schema_version_is_refused(er, tmp_path, version):
+    # P2: the common `v` field is checked for every record; a missing, damaged or other version is a bad-field.
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"] and er.reduce_journals(tmp_path)["schema"] == 2
+    damaged(path, "process-start", v=version)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "bad-field" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_too_many_journal_bytes_are_refused_before_any_is_parsed(er, tmp_path, monkeypatch):
+    # P2: each journal may be 64 MiB and all parsed journals were kept until the end.
+    for pid in (11, 12, 13):
+        write_journal(tmp_path, "serial", pid, starts=[("t.py::a", None)])
+    total = sum(p.stat().st_size for p in tmp_path.glob("journal-*.jsonl"))
+    monkeypatch.setattr(er, "_read_journal", lambda *a, **k: pytest.fail("a journal was parsed"))
+    monkeypatch.setattr(er, "MAX_TOTAL_JOURNAL_BYTES", total - 1)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "input-too-large" in kinds(summary["problems"]), summary["problems"]
+    assert summary["processes"] == [] and summary["status"] == "incomplete" and summary["accepted"] is False
+
+
+def test_too_many_journals_are_refused_before_any_is_parsed(er, tmp_path, monkeypatch):
+    for pid in (11, 12, 13):
+        write_journal(tmp_path, "serial", pid, starts=[("t.py::a", None)])
+    monkeypatch.setattr(er, "_read_journal", lambda *a, **k: pytest.fail("a journal was parsed"))
+    monkeypatch.setattr(er, "MAX_JOURNALS", 2)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "input-too-large" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_input_exactly_at_the_limits_is_read(er, tmp_path, monkeypatch):
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a@g", "g")])
+    write_journal(tmp_path, "worker", 12, worker="gw1", starts=[("t.py::b@g", "g")])
+    total = sum(p.stat().st_size for p in tmp_path.glob("journal-*.jsonl"))
+    monkeypatch.setattr(er, "MAX_TOTAL_JOURNAL_BYTES", total)
+    monkeypatch.setattr(er, "MAX_JOURNALS", 2)
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert "input-too-large" not in kinds(summary["problems"]) and len(summary["processes"]) == 2
+
+
+def test_the_docstring_states_the_round_9_limits(er):
+    flat = " ".join(er.__doc__.split())
+    assert er.MAX_TOTAL_JOURNAL_BYTES == 256 * 1024 * 1024 and er.MAX_JOURNALS == 512
+    for text in (
+        "input-too-large",
+        "folder-not-plain",
+        "a link or a reparse point",
+        "A valid nested handoff decides the role",
+        "at most 512 journals and 256 MiB",
     ):
         assert text in flat, text

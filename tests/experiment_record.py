@@ -145,7 +145,10 @@ status            "complete" when every journal ends with its trailer, else "inc
 accepted          true only when status is "complete", there is no problem and no error record.  A failing test
                   does not by itself stop acceptance; it is reported in first_failure.
 problems          a list of {"kind", "detail", ...}; at most 20 per kind are listed, problem_counts has the totals.
-                  Kinds: journal-not-plain, journal-too-large, bad-encoding (a complete line that is not UTF-8),
+                  Kinds: journal-not-plain (not a plain file with one name, a link or a reparse point, or changed
+                  while it was opened), folder-not-plain (the record folder itself is a link or a reparse point),
+                  input-too-large (more journals or bytes than the limits below: none is parsed),
+                  journal-too-large, bad-encoding (a complete line that is not UTF-8),
                   torn-last-line (a last line with no end: its writer died; every complete line before it is kept),
                   bad-line (not a JSON record), bad-field (a record with a damaged field: the record is set aside,
                   the rest is kept), sequence-gap, no-process-start, plugin-inventory-missing, no-trailer,
@@ -202,7 +205,16 @@ parent_pid) and writes a `nested-launch` record.  The recorder never puts the va
 a nested run removes it from its own, so ordinary nested runs do not inherit it.  Without an active recorder the
 helper hands off nothing.  A launch with no nested journal is a failure (`nested-journal-missing`), never
 compliance; so is `nested_seen` larger than the number of nested journals.  Workers get the folder through
-xdist's `workerinput`, never through the environment.
+xdist's `workerinput`, never through the environment.  A valid nested handoff decides the role: a child that also
+inherits `--experiment-record` (for example through PYTEST_ADDOPTS) is still a nested run, never a top-level one.
+
+Limits of the reducer
+---------------------
+It reads the journals of one plain record folder (a link or a reparse point is refused, the folder and each
+journal alike, and a journal must still be the same file after it is opened): at most 512 journals and 256 MiB
+of journal bytes together, checked before any is parsed (MAX_JOURNALS, MAX_TOTAL_JOURNAL_BYTES), and 64 MiB for
+one journal.  More is refused with input-too-large, not read; parsed records take several times their bytes in
+memory, which is why the total is bounded.
 """
 
 from __future__ import annotations
@@ -235,6 +247,8 @@ MAX_ERROR_TEXT = 64 * 1024
 MAX_REASON_TEXT = 4096
 MAX_HANDOFF_BYTES = 4096
 MAX_JOURNAL_BYTES = 64 * 1024 * 1024
+MAX_TOTAL_JOURNAL_BYTES = 256 * 1024 * 1024
+MAX_JOURNALS = 512
 MAX_PROBLEMS_PER_KIND = 20
 DIGEST_ALGORITHM = "sha256"
 MIN_SECRET_LENGTH = 8
@@ -824,15 +838,15 @@ def configure(config: pytest.Config) -> Recorder | None:
         )
         role, worker, distributed = "worker", str(workerinput["workerid"]), False
         token, parent = workerinput.get("experiment_record_token"), workerinput.get("experiment_record_parent_pid")
-    elif config.option.experiment_record:
-        directory = _checked_directory(config, config.option.experiment_record, create=True, source=OPTION)
-        numprocesses = getattr(config.option, "numprocesses", None)
-        role, worker, distributed = ("controller" if numprocesses else "serial"), None, bool(numprocesses)
-    elif handoff_text is not None:
+    elif handoff_text is not None:  # a valid handoff decides the role, whatever option was inherited with it
         data = _read_handoff(handoff_text)
         directory = _checked_directory(config, data["dir"], create=False, source=HANDOFF_ENV)
         role, worker, token, parent = "nested", None, data["token"], data["parent_pid"]
         distributed = bool(getattr(config.option, "numprocesses", None))
+    elif config.option.experiment_record:
+        directory = _checked_directory(config, config.option.experiment_record, create=True, source=OPTION)
+        numprocesses = getattr(config.option, "numprocesses", None)
+        role, worker, distributed = ("controller" if numprocesses else "serial"), None, bool(numprocesses)
     else:
         return None
     recorder = Recorder(config, directory, role, worker, token, parent, distributed)
@@ -860,14 +874,37 @@ class _Problems:
             self.listed.append({"kind": kind, "detail": detail, **extra})
 
 
+def _is_reparse_point(info: Any) -> bool:
+    """A Windows reparse point (a symbolic link or a junction), from `st_file_attributes` (zero elsewhere)."""
+    return bool(getattr(info, "st_file_attributes", 0) & 1024)
+
+
 def _read_journal(path: Path, problems: _Problems) -> list[dict[str, Any]] | None:
     """The journal's records, or None when the file is refused.  Opens without waiting; checks the open file."""
     no_wait = getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    plain = "the journal must be a plain file with a single name, not a link or a reparse point"
     try:
+        before = os.lstat(path)  # the path itself, not what it points to
+        if not stat.S_ISREG(before.st_mode) or _is_reparse_point(before):
+            problems.add("journal-not-plain", plain, file=path.name)
+            return None
         with open(path, "rb", opener=lambda p, flags: os.open(p, flags | no_wait)) as handle:
             info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
-                problems.add("journal-not-plain", "the journal must be a plain file with a single name", file=path.name)
+            # Windows has no O_NOFOLLOW, so the open may have followed a link: the opened file must be the very file
+            # the path names (device, inode and mode), and the path must still be a plain file after the open.
+            after = os.lstat(path)
+            if (
+                not stat.S_ISREG(info.st_mode)
+                or info.st_nlink != 1
+                or not stat.S_ISREG(after.st_mode)
+                or _is_reparse_point(after)
+                or any(
+                    getattr(before, key, None) != getattr(current, key, None)
+                    for current in (info, after)
+                    for key in ("st_dev", "st_ino", "st_mode")
+                )
+            ):
+                problems.add("journal-not-plain", plain, file=path.name)
                 return None
             data = handle.read(MAX_JOURNAL_BYTES + 1)
     except OSError as error:
@@ -1045,6 +1082,35 @@ def _phase_check(phases: list[tuple[str, str]], require_phases: bool) -> tuple[s
     return None
 
 
+def _journal_paths(folder: Path, problems: _Problems) -> list[Path]:
+    """The journals to read, or none: the record folder must be a plain folder (not a link or a reparse point), and
+    the journals together must fit the limits, which are checked here, before any is parsed."""
+    try:
+        info = os.lstat(folder)
+    except OSError:
+        info = None  # nothing there: nothing to read
+    if info is not None and (not stat.S_ISDIR(info.st_mode) or _is_reparse_point(info)):
+        problems.add("folder-not-plain", "the record folder must be a plain folder, not a link or a reparse point")
+        return []
+    paths = sorted(folder.glob("journal-*.jsonl"))
+    total = 0
+    for path in paths:
+        try:
+            total += path.stat().st_size
+        except OSError:
+            pass  # reported when the journal is opened
+    if len(paths) > MAX_JOURNALS or total > MAX_TOTAL_JOURNAL_BYTES:
+        problems.add(
+            "input-too-large",
+            f"{len(paths)} journals of {total} bytes; at most {MAX_JOURNALS} journals and {MAX_TOTAL_JOURNAL_BYTES} "
+            "bytes are read, and none was",
+            journals=len(paths),
+            total_bytes=total,
+        )
+        return []
+    return paths
+
+
 def reduce_journals(
     folder: str | os.PathLike[str],
     expected_ids: Sequence[str] | None = None,
@@ -1056,7 +1122,7 @@ def reduce_journals(
     problems = _Problems()
     processes: list[dict[str, Any]] = []
     loaded: list[tuple[str, dict[str, Any], list[dict[str, Any]]]] = []
-    for path in sorted(Path(folder).glob("journal-*.jsonl")):
+    for path in _journal_paths(Path(folder), problems):
         recs = _read_journal(path, problems)
         if recs is None:
             processes.append(
