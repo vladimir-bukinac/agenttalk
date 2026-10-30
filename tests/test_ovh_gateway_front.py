@@ -7,6 +7,7 @@ import http.client
 import io
 import json
 import socket
+import socketserver
 import sys
 import threading
 import time
@@ -699,6 +700,66 @@ def test_make_server_without_a_listener_still_binds_the_config_address_itself(tm
     with pytest.raises(RuntimeError, match="stop before binding"):
         front.make_server()
     assert seen == [{"address": ("127.0.0.1", 4999)}]
+
+
+class _SocketModuleWith:
+    """What `socketserver` sees as the `socket` module: the real one, but `socket.socket` is `recording`."""
+
+    def __init__(self, recording: type) -> None:
+        self.socket = recording
+
+    def __getattr__(self, name: str):
+        return getattr(socket, name)
+
+
+@pytest.mark.parametrize("platform_option", ["native", "absent"])
+def test_make_server_without_a_listener_runs_its_own_bind_with_the_exclusive_option_first(
+    tmp_path, monkeypatch, platform_option
+) -> None:
+    """The path every service caller uses: the product's own server class makes, binds and activates its socket.
+    A recording socket (nothing is really bound, so no port is taken and no gap is opened) shows the configured
+    loopback address, the exclusive-address option set before the bind where the platform has it, and that address
+    reuse is not set. `absent` takes the option away, as on Linux and macOS."""
+    exclusive = getattr(socket, "SO_EXCLUSIVEADDRUSE", None)
+    if platform_option == "absent":
+        monkeypatch.delattr(socket, "SO_EXCLUSIVEADDRUSE", raising=False)
+        exclusive = None
+    calls: list[tuple] = []
+
+    class Recording(socket.socket):
+        def setsockopt(self, *args) -> None:
+            calls.append(("setsockopt", *args))
+            super().setsockopt(*args)
+
+        def bind(self, address) -> None:
+            calls.append(("bind", address))
+            self.bound = address
+
+        def getsockname(self):
+            return self.bound
+
+        def listen(self, backlog) -> None:
+            calls.append(("listen", backlog))
+
+    monkeypatch.setattr(socketserver, "socket", _SocketModuleWith(Recording))
+    front = _front_on(4999, tmp_path)
+
+    server = front.make_server()
+
+    try:
+        assert isinstance(server.socket, Recording)
+        assert front._server is server
+        assert server.server_address == ("127.0.0.1", 4999)
+        names = [call[0] for call in calls]
+        assert names.index("bind") < names.index("listen"), calls
+        assert ("bind", ("127.0.0.1", 4999)) in calls
+        options = [call for call in calls if call[0] == "setsockopt"]
+        # Exactly the exclusive option or nothing: no address reuse, no port reuse.
+        assert options == ([] if exclusive is None else [("setsockopt", socket.SOL_SOCKET, exclusive, 1)]), calls
+        if exclusive is not None:
+            assert names.index("setsockopt") < names.index("bind"), calls
+    finally:
+        server.server_close()
 
 
 def test_a_listener_on_another_address_is_refused_and_closed(tmp_path) -> None:
