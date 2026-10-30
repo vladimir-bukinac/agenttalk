@@ -306,6 +306,52 @@ def pytest_collection_modifyitems(items):
     assert summary["accepted"] is False
 
 
+LATE_MARKER = """
+import pytest
+
+
+def pytest_collection_modifyitems(items):
+    for item in items:
+        item.add_marker(pytest.mark.xdist_group(name="g1"))
+"""
+
+
+@pytest.mark.parametrize("shape", ["with-suffix", "without-suffix"])
+def test_the_identity_fields_say_what_the_raw_id_shows_in_either_shape(project, er, tmp_path, shape):
+    # CI (pytest 9.2 without the gate's repair): an inner run's raw ids carry no `@g1`; with the repair, or on 9.1,
+    # they do. The recorder computes the canonical id and the effective group from what the item reports, so in both
+    # shapes every record agrees with its own raw id and the join to the serial collection holds.
+    suffixed = shape == "with-suffix"
+    if suffixed:
+        project.makepyfile(test_mod=GROUPED)
+    else:
+        project.makeconftest(CONFTEST + LATE_MARKER)  # a marker added too late for xdist: no suffix on the raw id
+        project.makepyfile(test_mod="def test_x():\n    pass\n\n\ndef test_y():\n    pass\n")
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec)
+
+    starts = [r for _, r in records(rec, "item-start")]
+    phases = [r for n, r in records(rec, "phase") if n.startswith("journal-worker-")]
+    assert starts and phases
+    for record in [*starts, *phases]:
+        assert record["requested_group"] == "g1"
+        assert (record["effective_group"] == "g1") is suffixed
+        assert record["nodeid"] == record["canonical_id"] + ("@g1" if suffixed else "")
+    ((_, manifest),) = [(n, r) for n, r in records(rec, "collection-manifest") if n.startswith("journal-worker-")][:1]
+    assert [i["canonical_id"] for i in manifest["identities"]] == expected
+    assert len(manifest["raw_ids"]) == len(expected)
+    assert all(
+        raw == canonical + ("@g1" if suffixed else "")
+        for raw, canonical in zip(manifest["raw_ids"], expected, strict=True)
+    )
+    summary = er.reduce_journals(rec, expected)
+    assert sorted(summary["items"]) == sorted(expected)  # the join to the serial collection holds in both shapes
+    assert ("suffix-missing" in kinds(summary["problems"])) is not suffixed
+    assert summary["accepted"] is suffixed
+
+
 # --- 4: the one-to-one join --------------------------------------------------------------------------------------
 
 
