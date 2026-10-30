@@ -605,24 +605,58 @@ class GatewayFront:
                         "idle_limit_seconds": self.config.stream_idle_timeout_seconds,
                     })
 
-    def make_server(self) -> ThreadingHTTPServer:
-        if self._server is not None:
-            raise GatewayConfigError("front server already exists")
+    def make_server(self, listener: socket.socket | None = None) -> ThreadingHTTPServer:
+        """Build the public server. With no `listener` it binds the configured address itself.
 
-        class Server(ThreadingHTTPServer):
-            allow_reuse_address = False
-            daemon_threads = True
+        With a `listener` (a socket the caller has already bound and is listening on, which keeps the port held
+        from bind to serving), the server uses that socket and does not bind. From the moment of the call the
+        server owns the listener: `server_close()` closes it, and every refusal below closes it too, so a
+        refused hand-over leaks nothing."""
+        server = None
+        try:
+            if self._server is not None:
+                raise GatewayConfigError("front server already exists")
+            if listener is not None:
+                if listener.family != socket.AF_INET:
+                    raise GatewayConfigError("the handed listener must be an IPv4 socket")
+                if listener.type != socket.SOCK_STREAM:
+                    raise GatewayConfigError("the handed listener must be a stream socket")
+                if listener.getsockname()[:2] != (self.config.public_host, self.config.public_port):
+                    raise GatewayConfigError("the handed listener is not bound to the configured public address")
+                if hasattr(socket, "SO_ACCEPTCONN") and not listener.getsockopt(
+                    socket.SOL_SOCKET, socket.SO_ACCEPTCONN
+                ):
+                    raise GatewayConfigError("the handed listener is not listening")
 
-            def server_bind(self) -> None:
-                if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-                    self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-                super().server_bind()
+            class Server(ThreadingHTTPServer):
+                allow_reuse_address = False
+                daemon_threads = True
 
-        self._server = Server(
-            (self.config.public_host, self.config.public_port),
-            self._handler_type(),
-        )
-        return self._server
+                def server_bind(self) -> None:
+                    if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+                        self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+                    super().server_bind()
+
+            address = (self.config.public_host, self.config.public_port)
+            if listener is None:
+                self._server = Server(address, self._handler_type())
+                return self._server
+            server = Server(address, self._handler_type(), bind_and_activate=False)
+            # The constructor made a socket of its own; swap in the handed one. Skipping server_bind also skips
+            # the names HTTPServer.server_bind sets, so set them the same way.
+            server.socket.close()
+            server.socket = listener
+            host, port = server.server_address
+            server.server_name = socket.getfqdn(host)
+            server.server_port = port
+            self._server = server
+            return server
+        except BaseException:
+            if server is not None and server.socket is not listener:
+                server.socket.close()  # the constructor's own spare socket
+            if listener is not None:
+                listener.close()
+            raise
 
     def internal_liveliness(self) -> bool:
         conn: http.client.HTTPConnection | None = None
