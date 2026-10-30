@@ -2415,7 +2415,6 @@ RUN_VARIABLES = (
     "PYTEST_VERSION",
     "PYTEST_XDIST_WORKER",
     "PYTEST_XDIST_TESTRUNUID",
-    "PYTEST_ADDOPTS",
 )
 
 
@@ -2442,10 +2441,21 @@ def test_pytests_own_run_variables_are_not_masked_but_an_ordinary_value_next_to_
     assert fields["error_digest"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def test_an_other_pytest_variable_such_as_the_addopts_is_masked_like_any_value(er, tmp_path, monkeypatch):
+    # round 10, claude-rev N2: only the run-time names are exempt, not everything that starts with PYTEST_
+    monkeypatch.setenv("PYTEST_ADDOPTS", "--secret-token=Zx81-qq77")
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields("failed with --secret-token=Zx81-qq77 given")
+    finally:
+        recorder.close()
+    assert "Zx81-qq77" not in fields["error_text"] and "<env:PYTEST_ADDOPTS>" in fields["error_text"]
+
+
 def test_the_docstring_states_that_pytests_run_variables_are_not_masked(er):
     flat = " ".join(er.__doc__.split())
-    assert "except the variables whose names start with `PYTEST_`" in flat
-    assert "pytest's own run variables (every `PYTEST_*`" in flat
+    assert "`PYTEST_CURRENT_TEST`, `PYTEST_VERSION` or starting with `PYTEST_XDIST_`" in flat
+    assert "Other `PYTEST_*` variables (such as `PYTEST_ADDOPTS`" in flat
 
 
 # --- fix round 8: nested runs reconciled, a missing controller journal, require_phases and order -----------------
@@ -2816,5 +2826,161 @@ def test_the_docstring_states_the_round_9_limits(er):
         "a link or a reparse point",
         "A valid nested handoff decides the role",
         "at most 512 journals and 256 MiB",
+    ):
+        assert text in flat, text
+
+
+# --- fix round 10: the record folder's identity holds through every journal open ---------------------
+
+
+def _swap_in_a_link(record, outside, saved):
+    """Replace the folder `record` by a link to `outside`, keeping the original as `saved` (a junction on Windows, a
+    symbolic link elsewhere); skip, with the folder put back, where the system cannot make one."""
+    record.rename(saved)
+    if sys.platform == "win32":
+        made = subprocess.run(["cmd", "/c", "mklink", "/J", str(record), str(outside)], capture_output=True, text=True)
+        refused = made.returncode != 0
+    else:
+        try:
+            record.symlink_to(outside, target_is_directory=True)
+            refused = False
+        except (OSError, NotImplementedError):
+            refused = True
+    if refused:
+        saved.rename(record)
+        pytest.skip("this system cannot create a folder link here")
+
+
+def _race_folders(tmp_path):
+    work = tmp_path / "race"
+    work.mkdir()
+    record, saved, outside = work / "record", work / "record-before", work / "outside"
+    record.mkdir()
+    outside.mkdir()
+    write_journal(record, "serial", 11, starts=[("t.py::safe", None)])
+    write_journal(outside, "serial", 11, starts=[("t.py::outside", None)])
+    assert reduce_with_the_module(record)["accepted"], "the record folder is fine before the race"
+    return record, saved, outside
+
+
+def reduce_with_the_module(folder):
+    import experiment_record
+
+    return experiment_record.reduce_journals(folder, ["t.py::safe"])
+
+
+def test_a_folder_swapped_for_a_link_after_enumeration_is_refused_and_nothing_is_read_through_it(
+    er, tmp_path, monkeypatch
+):
+    # codex-rev's race: the folder was checked once, then replaced by a junction before the first journal was opened,
+    # and the unchanged file checks read the outside target: accepted=true, item t.py::outside.
+    record, saved, outside = _race_folders(tmp_path)
+    original = er._read_journal
+    swapped = []
+
+    def after_enumeration(path, problems):
+        if not swapped:
+            _swap_in_a_link(record, outside, saved)
+            swapped.append(True)
+        return original(path, problems)
+
+    monkeypatch.setattr(er, "_read_journal", after_enumeration)
+
+    summary = er.reduce_journals(record, ["t.py::outside"])
+
+    assert swapped
+    assert "folder-changed" in kinds(summary["problems"]), summary["problems"]
+    assert summary["items"] == {}, "something was read through the swapped folder"
+    assert summary["accepted"] is False
+
+
+def test_a_folder_whose_identity_changes_while_a_journal_is_opened_is_refused_on_every_system(
+    er, tmp_path, monkeypatch
+):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    assert er.reduce_journals(folder, ["t.py::a"])["accepted"]
+    _lstat_that(monkeypatch, "record", lambda fields, call: {**fields, "st_ino": fields["st_ino"] + (call > 1)})
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert "folder-changed" in kinds(summary["problems"]), summary["problems"]
+    assert summary["items"] == {} and summary["accepted"] is False
+
+
+def test_a_folder_that_becomes_a_reparse_point_while_a_journal_is_opened_is_refused(er, tmp_path, monkeypatch):
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    _lstat_that(monkeypatch, "record", lambda fields, call: {**fields, "st_file_attributes": 1024 * (call > 1)})
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert "folder-changed" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the final path of an open handle is a Windows check")
+def test_the_final_path_of_an_open_journal_is_its_real_path(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    with open(path, "rb") as handle:
+        final = er._final_path(handle.fileno())
+    assert os.path.normcase(final) == os.path.normcase(os.path.realpath(path))
+    assert not final.startswith("\\\\?\\")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="the final path of an open handle is a Windows check")
+def test_a_journal_whose_open_handle_lies_outside_the_folder_is_refused(er, tmp_path, monkeypatch):
+    # a swap-and-restore around the open leaves the folder looking unchanged; the handle's own path still shows
+    folder = tmp_path / "record"
+    folder.mkdir()
+    path = write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    monkeypatch.setattr(er, "_final_path", lambda fd: str(tmp_path / "elsewhere" / path.name))
+
+    summary = er.reduce_journals(folder, ["t.py::a"])
+
+    assert "folder-changed" in kinds(summary["problems"]), summary["problems"]
+    assert summary["items"] == {} and summary["accepted"] is False
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a descriptor-relative open is the POSIX way")
+def test_on_posix_the_journals_are_opened_through_the_folder_descriptor_held_from_the_start(er, tmp_path, monkeypatch):
+    # with the after-open recheck turned off, a swapped folder still cannot lead the open outside: the journal is
+    # opened relative to the descriptor of the folder that was verified, which no rename of the path changes
+    record, saved, outside = _race_folders(tmp_path)
+    original = er._read_journal
+    swapped = []
+
+    def after_enumeration(path, problems):
+        if not swapped:
+            _swap_in_a_link(record, outside, saved)
+            swapped.append(True)
+        return original(path, problems)
+
+    monkeypatch.setattr(er, "_read_journal", after_enumeration)
+    monkeypatch.setattr(er._Folder, "unchanged", lambda self: True)
+
+    summary = er.reduce_journals(record, ["t.py::safe"])
+
+    assert swapped and list(summary["items"]) == ["t.py::safe"], summary
+
+
+def test_a_journal_can_still_be_read_on_its_own(er, tmp_path):
+    # tests/experiment/w0.py (P5) reads single journals through this function, with no reduce_journals around it
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    problems = er._Problems()
+    records = er._read_journal(path, problems)
+    assert records and records[0]["kind"] == "process-start" and problems.listed == []
+
+
+def test_the_docstring_states_what_the_folder_protection_covers_and_what_it_does_not(er):
+    flat = " ".join(er.__doc__.split())
+    for text in (
+        "folder-changed",
+        "its identity is kept for every journal open",
+        "relative to the folder's own descriptor",
+        "final path",
+        "cannot be closed",
     ):
         assert text in flat, text

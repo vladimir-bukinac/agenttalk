@@ -105,7 +105,7 @@ printed or compared.  Before such text is stored (and before it is cut), and aft
 from the original, the recorder replaces, longest first:
   * every value of the recording process's own environment that is 8 characters or longer, and every
     `os.pathsep`-separated part of such a value, by `<env:NAME>` (blank values are skipped), except the variables
-    whose names start with `PYTEST_` (below);
+    named `PYTEST_CURRENT_TEST`, `PYTEST_VERSION` or starting with `PYTEST_XDIST_` (below);
   * the home folder by `<home>`, the temp folder by `<temp>`, the record folder by `<record>` and the basetemp by
     `<basetemp>`, written with either slash and, on Windows, in any letter case.
 Each is also found with its backslashes doubled, as a traceback shows a string from the source.  A shortened form is
@@ -128,10 +128,10 @@ LIMITS, stated plainly: only environment values and those four folders are recog
   * Node ids are kept exactly as pytest makes them (a value used in a parametrize id is stored), because the
     reducer joins on them.
   * Secrets that come from anywhere else (a file, a prompt, a network reply) cannot be recognised.
-  * pytest's own run variables (every `PYTEST_*`, such as `PYTEST_CURRENT_TEST`, `PYTEST_XDIST_WORKER` and
-    `PYTEST_VERSION`) are never masked: they are not secrets, and the current test's id overlaps ordinary error
-    text (`test_mod.py:6: AssertionError`), so masking it would corrupt the evidence.  A secret kept in a
-    variable with such a name is therefore not recognised; every other environment value still is.
+  * pytest's own run-time variables (`PYTEST_CURRENT_TEST`, `PYTEST_VERSION` and every `PYTEST_XDIST_*`) are never
+    masked: they are not secrets, and the current test's id overlaps ordinary error text (`test_mod.py:6:
+    AssertionError`), so masking it would corrupt the evidence.  Other `PYTEST_*` variables (such as
+    `PYTEST_ADDOPTS`, which a person types) are masked like any other value.
   * Several environment values crafted on purpose to overlap or compete are defended against only in the cases the
     tests cover; this cleaning is a safety net, not a guarantee, which is why the journals are handled like test logs.
 Handle journals like test logs.  The probe jobs run without secrets (plan section 4).
@@ -147,6 +147,8 @@ accepted          true only when status is "complete", there is no problem and n
 problems          a list of {"kind", "detail", ...}; at most 20 per kind are listed, problem_counts has the totals.
                   Kinds: journal-not-plain (not a plain file with one name, a link or a reparse point, or changed
                   while it was opened), folder-not-plain (the record folder itself is a link or a reparse point),
+                  folder-changed (the folder is not the one that was checked, or a journal lies outside it: the
+                  journal is not used),
                   input-too-large (more journals or bytes than the limits below: none is parsed),
                   journal-too-large, bad-encoding (a complete line that is not UTF-8),
                   torn-last-line (a last line with no end: its writer died; every complete line before it is kept),
@@ -215,11 +217,23 @@ journal alike, and a journal must still be the same file after it is opened): at
 of journal bytes together, checked before any is parsed (MAX_JOURNALS, MAX_TOTAL_JOURNAL_BYTES), and 64 MiB for
 one journal.  More is refused with input-too-large, not read; parsed records take several times their bytes in
 memory, which is why the total is bounded.
+
+The folder protection.  The record folder is verified once (`lstat`: a plain folder, not a link or a reparse
+point) and its identity is kept for every journal open.  On POSIX the folder is opened once and every journal is
+opened relative to the folder's own descriptor, so no path is resolved again.  On Windows the open handle's final
+path (GetFinalPathNameByHandleW) must be the journal's name inside the folder's real path.  Everywhere, after each
+open the folder path must still have the same device, inode and mode and not be a link or a reparse point.  Any
+mismatch is refused as folder-changed and nothing from that journal is used.  What cannot be closed: a folder
+that was already a different real directory before the first check (there is no earlier baseline), a journal
+changed while it is read, and a link in a parent folder of the path (only the folder itself is checked for being
+a link; the files still stay inside the folder that was opened).  Whoever can do that can write the evidence
+anyway.
 """
 
 from __future__ import annotations
 
 import bisect
+import contextvars
 import functools
 import hashlib
 import json
@@ -252,7 +266,10 @@ MAX_JOURNALS = 512
 MAX_PROBLEMS_PER_KIND = 20
 DIGEST_ALGORITHM = "sha256"
 MIN_SECRET_LENGTH = 8
-RUN_VARIABLE_PREFIX = "PYTEST_"
+# pytest's and xdist's run-time variables, which are set by the tools and are not secrets; a name like PYTEST_ADDOPTS
+# is typed by a person and can carry a value, so it is masked like any other.
+RUN_VARIABLES = frozenset({"PYTEST_CURRENT_TEST", "PYTEST_VERSION"})
+RUN_VARIABLE_PREFIXES = ("PYTEST_XDIST_",)
 MIN_SHORTENED_PIECE = 4
 SHORTENED_WINDOW = 256
 ROLE_NAMES = ("serial", "controller", "worker", "nested")
@@ -458,7 +475,7 @@ class Redactor:
         """{text to find: replacement}."""
         found: dict[str, str] = {}
         for name, value in os.environ.items():
-            if name.upper().startswith(RUN_VARIABLE_PREFIX):
+            if name.upper() in RUN_VARIABLES or name.upper().startswith(RUN_VARIABLE_PREFIXES):
                 continue  # pytest's and xdist's own run variables: not secrets, and masking them corrupts evidence
             for part in {value, *value.split(os.pathsep)}:
                 if len(part) >= MIN_SECRET_LENGTH and part.strip():
@@ -874,25 +891,144 @@ class _Problems:
             self.listed.append({"kind": kind, "detail": detail, **extra})
 
 
+# The record folder being reduced, verified once by `reduce_journals` and held while its journals are opened.
+_FOLDER: contextvars.ContextVar[Any] = contextvars.ContextVar("experiment_record_folder", default=None)
+_HAS_DIR_FD = hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
+
+
+def _identity(info: Any) -> tuple[Any, ...]:
+    return tuple(getattr(info, key, None) for key in ("st_dev", "st_ino", "st_mode"))
+
+
+def _final_path(fd: int) -> str:
+    """The real path of the file an open descriptor refers to, as Windows reports it for the handle
+    (GetFinalPathNameByHandleW: every link and junction on the way resolved), without the long-path prefix."""
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    get = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
+    get.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+    get.restype = wintypes.DWORD
+    handle = msvcrt.get_osfhandle(fd)
+    size = 1024
+    while True:
+        buffer = ctypes.create_unicode_buffer(size)
+        length = get(handle, buffer, size, 0)
+        if length == 0:
+            raise OSError(ctypes.get_last_error(), "GetFinalPathNameByHandleW failed")
+        if length < size:
+            break
+        size = length + 1
+    final = buffer.value
+    if final.startswith("\\\\?\\UNC\\"):
+        return "\\\\" + final[8:]
+    return final[4:] if final.startswith("\\\\?\\") else final
+
+
+class _Folder:
+    """The record folder, verified once; its identity is kept for every journal open (see "Limits of the reducer").
+
+    `verify` takes `lstat` of the folder (a plain folder, not a link or a reparse point) and remembers its device,
+    inode and mode and its real path. Where the system allows it (POSIX) the folder is also opened once, and every
+    journal is opened relative to that descriptor, so no path is resolved again. After each open `unchanged` looks at
+    the folder path again, and `holds` asks (Windows) whether the open handle really is that name inside the folder."""
+
+    def __init__(self, path: Path, info: Any) -> None:
+        self.path = path
+        self.identity = _identity(info)
+        self.real = os.path.realpath(path)
+        self.fd: int | None = None
+        if _HAS_DIR_FD:
+            self.fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+            if _identity(os.fstat(self.fd))[:2] != self.identity[:2]:
+                self.close()
+                raise OSError("the record folder is not the one that was checked")
+
+    @classmethod
+    def verify(cls, path: Path, problems: _Problems) -> _Folder | None:
+        try:
+            info = os.lstat(path)
+        except OSError:
+            return None  # nothing there: nothing to read
+        if not stat.S_ISDIR(info.st_mode) or _is_reparse_point(info):
+            problems.add("folder-not-plain", "the record folder must be a plain folder, not a link or a reparse point")
+            return None
+        try:
+            return cls(path, info)
+        except OSError as error:
+            problems.add("folder-changed", f"the record folder could not be held: {error}")
+            return None
+
+    def unchanged(self) -> bool:
+        """The folder path still names the same plain folder."""
+        try:
+            now = os.lstat(self.path)
+        except OSError:
+            return False
+        return stat.S_ISDIR(now.st_mode) and not _is_reparse_point(now) and _identity(now) == self.identity
+
+    def holds(self, fd: int, name: str) -> bool:
+        """The open file `fd` is `name` inside this folder, by the handle's own path (Windows); true where the file was
+        opened relative to the folder's descriptor, which cannot lead anywhere else."""
+        if self.fd is not None or sys.platform != "win32":
+            return True
+        try:
+            final = _final_path(fd)
+        except OSError:
+            return False
+        return os.path.normcase(final) == os.path.normcase(os.path.join(self.real, name))
+
+    def close(self) -> None:
+        if self.fd is not None:
+            os.close(self.fd)
+            self.fd = None
+
+
 def _is_reparse_point(info: Any) -> bool:
     """A Windows reparse point (a symbolic link or a junction), from `st_file_attributes` (zero elsewhere)."""
     return bool(getattr(info, "st_file_attributes", 0) & 1024)
 
 
 def _read_journal(path: Path, problems: _Problems) -> list[dict[str, Any]] | None:
-    """The journal's records, or None when the file is refused.  Opens without waiting; checks the open file."""
+    """The journal's records, or None when the file is refused.  Opens without waiting; checks the open file and the
+    folder it lies in: the folder `reduce_journals` verified and holds, or, called on its own, the path's own."""
+    anchor = _FOLDER.get()
+    own = None
+    if anchor is None or anchor.path != path.parent:
+        own = anchor = _Folder.verify(path.parent, problems)
+        if anchor is None:
+            return None
+    try:
+        return _read_journal_in(anchor, path, problems)
+    finally:
+        if own is not None:
+            own.close()
+
+
+def _read_journal_in(folder: _Folder, path: Path, problems: _Problems) -> list[dict[str, Any]] | None:
     no_wait = getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
     plain = "the journal must be a plain file with a single name, not a link or a reparse point"
+    # With a held folder descriptor the journal is named relative to it and no path is resolved again.
+    target = path.name if folder.fd is not None else path
     try:
-        before = os.lstat(path)  # the path itself, not what it points to
+        before = os.lstat(target, dir_fd=folder.fd)  # the entry itself, not what it points to
         if not stat.S_ISREG(before.st_mode) or _is_reparse_point(before):
             problems.add("journal-not-plain", plain, file=path.name)
             return None
-        with open(path, "rb", opener=lambda p, flags: os.open(p, flags | no_wait)) as handle:
+        with open(target, "rb", opener=lambda p, flags: os.open(p, flags | no_wait, dir_fd=folder.fd)) as handle:
             info = os.fstat(handle.fileno())
             # Windows has no O_NOFOLLOW, so the open may have followed a link: the opened file must be the very file
             # the path names (device, inode and mode), and the path must still be a plain file after the open.
-            after = os.lstat(path)
+            after = os.lstat(target, dir_fd=folder.fd)
+            # The folder itself must be the one that was verified, and the open file must lie in it.
+            if not (folder.unchanged() and folder.holds(handle.fileno(), path.name)):
+                problems.add(
+                    "folder-changed",
+                    "the record folder is not the one that was checked, or the journal lies outside it; not used",
+                    file=path.name,
+                )
+                return None
             if (
                 not stat.S_ISREG(info.st_mode)
                 or info.st_nlink != 1
@@ -1082,16 +1218,12 @@ def _phase_check(phases: list[tuple[str, str]], require_phases: bool) -> tuple[s
     return None
 
 
-def _journal_paths(folder: Path, problems: _Problems) -> list[Path]:
-    """The journals to read, or none: the record folder must be a plain folder (not a link or a reparse point), and
-    the journals together must fit the limits, which are checked here, before any is parsed."""
-    try:
-        info = os.lstat(folder)
-    except OSError:
-        info = None  # nothing there: nothing to read
-    if info is not None and (not stat.S_ISDIR(info.st_mode) or _is_reparse_point(info)):
-        problems.add("folder-not-plain", "the record folder must be a plain folder, not a link or a reparse point")
-        return []
+def _journal_paths(folder: Path, problems: _Problems) -> tuple[_Folder | None, list[Path]]:
+    """The verified folder and the journals to read, or (None, []): the record folder must be a plain folder (not a
+    link or a reparse point), and the journals together must fit the limits, checked here, before any is parsed."""
+    anchor = _Folder.verify(folder, problems)
+    if anchor is None:
+        return None, []
     paths = sorted(folder.glob("journal-*.jsonl"))
     total = 0
     for path in paths:
@@ -1107,8 +1239,9 @@ def _journal_paths(folder: Path, problems: _Problems) -> list[Path]:
             journals=len(paths),
             total_bytes=total,
         )
-        return []
-    return paths
+        anchor.close()
+        return None, []
+    return anchor, paths
 
 
 def reduce_journals(
@@ -1122,8 +1255,15 @@ def reduce_journals(
     problems = _Problems()
     processes: list[dict[str, Any]] = []
     loaded: list[tuple[str, dict[str, Any], list[dict[str, Any]]]] = []
-    for path in _journal_paths(Path(folder), problems):
-        recs = _read_journal(path, problems)
+    anchor, paths = _journal_paths(Path(folder), problems)
+    token = _FOLDER.set(anchor)  # every journal is opened against the one folder that was verified
+    try:
+        journals = [(path, _read_journal(path, problems)) for path in paths]
+    finally:
+        _FOLDER.reset(token)
+        if anchor is not None:
+            anchor.close()
+    for path, recs in journals:
         if recs is None:
             processes.append(
                 {
