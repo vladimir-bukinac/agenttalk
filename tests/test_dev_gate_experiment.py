@@ -520,6 +520,7 @@ def local_identity(exp, tmp_path, monkeypatch):
 
 
 def test_fix_cx1_real_local_pip_install_identity(exp, tmp_path, monkeypatch):
+    pytest.importorskip("hatchling")
     # CX1/CL1: reproduce the approved local-directory route, without a VCS URL.
     checkout = tmp_path / "package"
     source = checkout / "src" / "agenttalk"
