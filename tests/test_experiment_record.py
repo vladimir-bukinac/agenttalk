@@ -797,7 +797,10 @@ def test_a_nested_journal_nobody_launched_is_flagged(er, tmp_path):
     assert summary["accepted"] is False
 
 
-def test_the_helper_without_a_recorder_hands_off_nothing_and_drops_a_stale_entry(er):
+def test_the_helper_without_a_recorder_hands_off_nothing_and_drops_a_stale_entry(er, monkeypatch):
+    # "without a recorder" holds in this process only if none is active: a run of this module with --experiment-record
+    # (tests/conftest.py) has one, and the helper would then write a nested-launch to the real journal
+    monkeypatch.setattr(er, "_ACTIVE", None)
     env = er.nested_environment({"Agenttalk_Experiment_Record_Handoff": "stale", "A": "1"})
     assert env == {"A": "1"}
 
@@ -2597,7 +2600,7 @@ def test_require_phases_false_also_refuses_phases_of_an_unfinished_item_and_of_a
 def test_the_docstring_states_the_round_8_rules(er):
     flat = " ".join(er.__doc__.split())
     for text in (
-        "controller-missing (worker journals of a root run and no controller journal",
+        "controller-missing (worker journals of a run and no controller journal",
         "Nested journals are reconciled the same way, run by run",
         "requires that a started item has NO phase at all",
         "phase-in-no-body-probe (under `require_phases=False`",
@@ -3245,3 +3248,237 @@ def test_the_held_folder_is_released_when_the_listing_fails(er, tmp_path, monkey
     assert len(held) == 1
     with pytest.raises(OSError):
         os.fstat(held[0])
+
+
+# --- fix round 13: the connector's second review (five threads on dddf037b) -------------------------------------
+
+TOKEN2 = "fedcba9876543210"
+
+
+def _launch(*tokens):
+    return [("nested-launch", {"token": token}) for token in tokens]
+
+
+# thread 5: a phase outcome is one of three words
+
+
+@pytest.mark.parametrize("outcome", ["faield", "", "PASSED", "xfailed", "error"])
+def test_a_damaged_phase_outcome_is_a_bad_field_and_the_run_is_not_accepted(er, tmp_path, outcome):
+    phases = {"t.py::a": [("setup", "passed"), ("call", outcome), ("teardown", "passed")]}
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases=phases)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "bad-field" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+@pytest.mark.parametrize("when", ["Call", "tear down", "", "???x"])
+def test_a_damaged_phase_name_is_a_bad_field_too(er, tmp_path, when):
+    phases = {"t.py::a": [("setup", "passed"), (when, "passed"), ("teardown", "passed")]}
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases=phases)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "bad-field" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+@pytest.mark.parametrize("outcome", ["passed", "failed", "skipped"])
+def test_the_three_real_outcomes_are_still_accepted(er, tmp_path, outcome):
+    phases = {"t.py::a": [("setup", "passed"), ("call", outcome), ("teardown", "passed")]}
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases=phases)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "bad-field" not in kinds(summary["problems"])
+
+
+# thread 2: one root run per record folder
+
+
+def test_two_complete_root_serial_journals_are_not_merged_into_one_run(er, tmp_path):
+    # a reused record folder: one journal holds only `a`, another only `b`; no pytest run collected both
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    write_journal(tmp_path, "serial", 12, starts=[("t.py::b", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+
+    assert "multiple-root-runs" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_a_serial_journal_beside_worker_journals_is_a_mixed_topology(er, tmp_path):
+    rows0, rows1 = [("t.py::a", None)], [("t.py::b", None)]
+    nodes = [
+        ("collection-manifest", manifest_fields(rows0, "node", "gw0")),
+        ("collection-manifest", manifest_fields(rows1, "node", "gw1")),
+    ]
+    write_journal(tmp_path, "controller", 10, extra=nodes)
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=rows0)
+    write_journal(tmp_path, "worker", 12, worker="gw1", starts=rows1)
+    assert er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])["accepted"], "the control: one xdist run is fine"
+    write_journal(tmp_path, "serial", 13, starts=[("t.py::a", None)])  # stale evidence from an earlier serial run
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+
+    assert "mixed-root-topology" in kinds(summary["problems"]), summary["problems"]
+    assert summary["accepted"] is False
+
+
+def test_two_root_controllers_or_one_worker_id_twice_are_not_one_run(er, tmp_path):
+    rows = [("t.py::a", None)]
+    node = [("collection-manifest", manifest_fields(rows, "node", "gw0"))]
+    write_journal(tmp_path, "controller", 10, extra=node)
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=rows)
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"], "the control"
+
+    write_journal(tmp_path, "worker", 12, worker="gw0", starts=rows)  # the same worker id again
+    twice = er.reduce_journals(tmp_path, ["t.py::a"])
+    (tmp_path / "journal-worker-12-1000.jsonl").unlink()
+    write_journal(tmp_path, "controller", 13, extra=node)  # a second root controller
+    controllers = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "multiple-root-runs" in kinds(twice["problems"]) and twice["accepted"] is False
+    assert "multiple-root-runs" in kinds(controllers["problems"]) and controllers["accepted"] is False
+
+
+def test_nested_runs_do_not_count_as_root_runs(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN, TOKEN2))
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[("n.py::x", None)])
+    write_journal(tmp_path, "nested", 13, nested_token=TOKEN2, starts=[("n.py::y", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True
+
+
+# thread 3: nested manifests are reconciled per token
+
+
+def test_a_nested_item_that_was_collected_and_never_started_is_a_problem_of_its_run(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[], collected=[("n.py::x", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "never-started"]
+    assert problem["nodeid"] == "n.py::x" and problem["nested_run"] == NESTED_TOKEN
+    assert summary["accepted"] is False
+    assert "n.py::x" not in summary["items"], "the nested id stays out of the root summary"
+    assert summary["collection"]["never_started"] == []
+
+
+def test_each_nested_run_is_counted_on_its_own_when_two_runs_share_an_id(er, tmp_path):
+    # the same id collected by both nested runs, started by only one of them
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN, TOKEN2))
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[("n.py::x", None)])
+    write_journal(tmp_path, "nested", 13, nested_token=TOKEN2, starts=[], collected=[("n.py::x", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert [(p["kind"], p["nested_run"]) for p in summary["problems"]] == [("never-started", TOKEN2)]
+
+
+def test_a_nested_worker_that_never_started_a_collected_item_is_caught_too(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    rows = [("n.py::x", None), ("n.py::y", None)]
+    nodes = [("collection-manifest", manifest_fields(rows, "node", "gw0"))]
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nodes)
+    write_journal(tmp_path, "worker", 13, worker="gw0", nested_token=NESTED_TOKEN, starts=rows[:1], collected=rows)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert [(p["kind"], p["nodeid"]) for p in summary["problems"] if p["kind"] == "never-started"] == [
+        ("never-started", "n.py::y")
+    ]
+
+
+# thread 4: a nested xdist run has its own controller, checked by token
+
+
+def _nested_xdist(tmp_path, *, controller=True, node_rows=None, worker_rows=None):
+    rows0, rows1 = [("n.py::x", None)], [("n.py::y", None)]
+    node_rows = node_rows or {"gw0": rows0, "gw1": rows1}
+    worker_rows = worker_rows or {"gw0": rows0, "gw1": rows1}
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    if controller:
+        nodes = [("collection-manifest", manifest_fields(rows, "node", w)) for w, rows in node_rows.items()]
+        write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nodes)
+    for number, (worker, rows) in enumerate(worker_rows.items(), start=13):
+        write_journal(tmp_path, "worker", number, worker=worker, nested_token=NESTED_TOKEN, starts=rows)
+
+
+def test_a_complete_nested_xdist_run_is_accepted(er, tmp_path):
+    _nested_xdist(tmp_path)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True
+
+
+def test_a_nested_xdist_run_without_its_controller_journal_is_refused_by_token(er, tmp_path):
+    _nested_xdist(tmp_path, controller=False)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "controller-missing"]
+    assert problem["nested_run"] == NESTED_TOKEN
+    assert summary["accepted"] is False
+
+
+def test_a_nested_controller_that_disagrees_with_a_nested_worker_is_refused(er, tmp_path):
+    _nested_xdist(tmp_path, node_rows={"gw0": [("n.py::x", None), ("n.py::z", None)], "gw1": [("n.py::y", None)]})
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "manifest-disagreement"]
+    assert problem["worker"] == "gw0" and problem["nested_run"] == NESTED_TOKEN
+
+
+def test_a_nested_controller_that_recorded_a_worker_with_no_manifest_is_refused(er, tmp_path):
+    _nested_xdist(tmp_path, node_rows={"gw0": [("n.py::x", None)], "gw1": [("n.py::y", None)], "gw2": []})
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert [(p["kind"], p["worker"]) for p in summary["problems"]] == [("manifest-disagreement", "gw2")]
+
+
+def test_a_root_xdist_run_and_a_nested_xdist_run_are_checked_apart(er, tmp_path):
+    # the same worker id (gw0) in the root run and in the nested run must not be compared with each other
+    rows = [("t.py::a", None)]
+    node = [("collection-manifest", manifest_fields(rows, "node", "gw0"))]
+    write_journal(tmp_path, "controller", 10, extra=node + _launch(NESTED_TOKEN))
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=rows)
+    nested_nodes = [("collection-manifest", manifest_fields([("n.py::x", None)], "node", "gw0"))]
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nested_nodes)
+    write_journal(tmp_path, "worker", 13, worker="gw0", nested_token=NESTED_TOKEN, starts=[("n.py::x", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True
+
+
+# thread 1: the inactive-helper test must not depend on whether the run is recorded
+
+RECORDED_TEST = (
+    "tests/test_experiment_record.py::test_the_helper_without_a_recorder_hands_off_nothing_and_drops_a_stale_entry"
+)
+
+
+def test_the_inactive_helper_test_passes_in_a_recorded_run_and_the_record_reduces_cleanly(er, tmp_path):
+    rec = tmp_path / "rec"
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("PYTEST_ADDOPTS", "PYTHONPATH", "PYTEST_CURRENT"))}
+    env.update(PYTEST_DISABLE_PLUGIN_AUTOLOAD="1", PYTHONPATH=str(SRC_DIR))
+    argv = [sys.executable, "-m", "pytest", RECORDED_TEST, "-q", "-p", "no:cacheprovider"]
+    argv += ["--basetemp", str(tmp_path / "bt"), f"--experiment-record={rec}"]
+
+    done = subprocess.run(argv, cwd=TESTS_DIR.parent, env=env, capture_output=True, text=True, timeout=300, check=False)
+
+    assert done.returncode == 0, done.stdout + done.stderr
+    summary = er.reduce_journals(rec, [RECORDED_TEST])
+    assert summary["problems"] == [], summary["problems"]
+    assert summary["accepted"] is True
