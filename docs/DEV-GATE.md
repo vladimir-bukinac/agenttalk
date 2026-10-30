@@ -377,19 +377,24 @@ each angle-bracket value with a real path or frozen input):
 python -I -m agenttalk.dev_gate_experiment accept --checkout <checkout> --arm serial --leg windows/3.12 --modes source,wheel --record <frozen.json> --output <fresh-output>
 ```
 
-Probe invocations use the separate `run` subcommand and `--probe p8|p9|p10|p11`
+Probe invocations use the separate `run` subcommand and `--probe p8|p8-gateway-repeat|p9|p10|p11`
 instead of `accept` and `--arm`. The closed contract maps each probe to reserved
 plugin arguments; those plugins belong to later probe work. Acceptance rejects
 probe plugins or observer files, and missing plugin inventories fail closed.
 The POSIX parallel setting must be absent, including an empty inherited value.
+P11 uses the serial arm; the gateway repeat probe uses the parallel arm. P9 alone
+accepts `--cases worker`, `--cases controller` or `--cases worker,controller`.
 
 The frozen JSON input contains `commit`, `contract_sha256`, and `environments`.
 Each environment is keyed by Python minor, such as `3.12`, and contains its
 `freeze_sha256`. The contract digest uses UTF-8 canonical JSON with sorted keys
 and fixed separators, so checkout line endings do not change it. Before stage 1,
 freeze all four minors' environment plans and the evidence method. The installed
-candidate must be non-editable, have a VCS commit matching the clean checkout,
-and expose its version and dist-info RECORD fingerprint. A tested wheel's
+candidate must be a noneditable local install: `direct_url.json` names the
+resolved checkout URL and contains a noneditable `dir_info` object. Its package
+RECORD hashes and installed bytes must match the checkout's source files, including
+the installed entry point. The commit comes from the clean checkout binding;
+the installed copy also exposes its version and dist-info RECORD fingerprint. A tested wheel's
 installation is a separate installer proof.
 
 The allowed differences are D1 (frozen installs for host, build, runtime and
@@ -402,6 +407,10 @@ it does not erase other differences. A bounded fixture run checks runtime skips
 and setup/cleanup separately from collection identities and marks.
 Credentialed proxy URLs are refused because exact environment evidence must not
 disclose their credentials; the refusal does not echo the supplied URL.
+Until P1 lands, D2 is checked only by the installer's proof.
+Before execution, the call is compared with an independent call built from the
+ordinary gate's environment and temporary-folder layout (`pt-s-py312` or
+`pt-w-py312` for Python 3.12), plus the declared experiment arguments.
 
 P7 implements `Installer.prepare(request, mode, workdir)` and `finish(prepared)`.
 Preparation returns a `PreparedEnvironment`: interpreter, committed source and
@@ -421,3 +430,6 @@ removal took place. Missing input files, dirty or changed candidates,
 different contract hashes, incomplete proofs, and extra command arguments refuse
 the run. The local tests cover these boundaries; the full two-worker local run
 and the later hosted probes are separate evidence.
+Execution failures record their type and message in the partial artifact and end
+with exit code 1; preflight refusals use exit code 2. Cleanup failures are recorded
+separately so they cannot hide the original execution failure.

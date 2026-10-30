@@ -11,7 +11,11 @@ Until these real dependencies land, production_dependencies refuses every run.
 from __future__ import annotations
 
 import argparse
+import base64
+import csv
+import hashlib
 import importlib.metadata
+import io
 import json
 import os
 import re
@@ -27,9 +31,10 @@ TYPE = "agenttalk-windows-workers-preparation-v1"
 PARALLEL = ["-p", "xdist.plugin", "-n", "2", "--dist", "loadgroup", "--max-worker-restart=0"]
 PROBES = {
     "p8": {"arm": "serial", "args": ["-p", "experiment.audit_probe"]},
+    "p8-gateway-repeat": {"arm": "parallel", "args": ["-p", "experiment.audit_probe"]},
     "p9": {"arm": "parallel", "args": ["-p", "experiment.death_probe"]},
     "p10": {"arm": "parallel", "args": ["-p", "experiment.collection_probe"]},
-    "p11": {"arm": "parallel", "args": ["-p", "experiment.native_trace"]},
+    "p11": {"arm": "serial", "args": ["-p", "experiment.native_trace"]},
 }
 MAX_JSON_BYTES = 2_000_000
 
@@ -54,7 +59,7 @@ def read_plain(path, *, within=None):
         require(len(raw) <= MAX_JSON_BYTES, "configuration exceeds size limit")
         return raw
     except OSError as exc:
-        raise gate.GateBlock("experiment_blocked", "configuration missing or unreadable") from exc
+        raise gate.GateBlock("experiment_blocked", f"configuration missing or unreadable: {path}") from exc
 
 
 def read_json(path, *, within=None):
@@ -70,7 +75,7 @@ def read_json(path, *, within=None):
         require(isinstance(value, dict), "configuration must be a JSON object")
         return value
     except (OSError, ValueError, RecursionError) as exc:
-        raise gate.GateBlock("experiment_blocked", "configuration missing, unreadable or invalid") from exc
+        raise gate.GateBlock("experiment_blocked", f"configuration missing, unreadable or invalid: {path}") from exc
 
 
 def _unique_object(pairs):
@@ -109,26 +114,53 @@ def validate_contract(contract):
 
 
 def installed_identity(checkout):
-    """Require a non-editable VCS-installed candidate with an explicit full commit."""
+    """Tie a noneditable local install to the clean checkout and its source bytes."""
     try:
+        checkout = Path(checkout).resolve()
         distribution = importlib.metadata.distribution("agenttalk")
         root = Path(distribution.locate_file("")).resolve()
         entries = {str(item).replace("\\", "/"): item for item in distribution.files or ()}
         record = next(item for name, item in entries.items() if name.endswith(".dist-info/RECORD"))
         direct = next(item for name, item in entries.items() if name.endswith(".dist-info/direct_url.json"))
         metadata = read_json(Path(distribution.locate_file(direct)), within=root)
-        require(metadata.get("dir_info", {}).get("editable") is not True, "installed candidate must not be editable")
-        commit = metadata.get("vcs_info", {}).get("commit_id", "")
-        require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None, "installed candidate has no commit binding")
+        directory = metadata.get("dir_info")
+        require(isinstance(directory, dict), "installed candidate dir_info must be an object")
+        require(directory.get("editable", False) is False, "installed candidate must not be editable")
+        if "vcs_info" in metadata:
+            vcs = metadata["vcs_info"]
+            require(isinstance(vcs, dict), "installed candidate vcs_info must be an object")
+            require(isinstance(vcs.get("commit_id"), str), "installed candidate commit_id must be a string")
+        require(metadata.get("url") == checkout.as_uri(), "installed candidate URL differs from checkout")
+        binding = gate.capture_candidate_binding(checkout)
+        require(binding.clean, "installed candidate checkout is dirty")
         record_path = Path(distribution.locate_file(record)).resolve()
-        require(Path(__file__).resolve().is_relative_to(root), "entry point is not from the installed candidate")
+        entry = Path(__file__).resolve()
+        require(entry.is_relative_to(root), "entry point is not from the installed candidate")
+        raw_record = read_plain(record_path, within=root)
+        verified = set()
+        for row in csv.reader(io.StringIO(raw_record.decode("utf-8"))):
+            require(len(row) == 3, "installed RECORD row must have three fields")
+            name, digest, size = row
+            if not name.startswith("agenttalk/") or name.endswith(".pyc"):
+                continue  # pip-generated metadata, scripts and bytecode are not checkout source
+            relative = Path(name)
+            require(not relative.is_absolute() and ".." not in relative.parts, "installed RECORD path escapes package")
+            require(digest.startswith("sha256="), "installed package file has no SHA256 RECORD hash")
+            installed = Path(distribution.locate_file(name)).resolve()
+            actual = read_plain(installed, within=root)
+            source = read_plain(checkout / "src" / relative, within=checkout)
+            encoded = base64.urlsafe_b64encode(hashlib.sha256(actual).digest()).decode().rstrip("=")
+            require(digest == f"sha256={encoded}" and size == str(len(actual)), "installed RECORD hash or size differs")
+            require(actual == source, "installed package file differs from checkout")
+            verified.add(installed)
+        require(entry in verified, "installed entry point has no verified RECORD hash")
         require(distribution.version == gate._committed_version(checkout), "installed candidate version differs")
         return {
-            "commit": commit,
+            "commit": binding.candidate_sha,
             "version": distribution.version,
-            "record_sha256": gate.sha256_bytes(read_plain(record_path, within=root)),
+            "record_sha256": gate.sha256_bytes(raw_record),
         }
-    except (importlib.metadata.PackageNotFoundError, StopIteration, OSError, ValueError) as exc:
+    except (importlib.metadata.PackageNotFoundError, StopIteration, OSError, ValueError, csv.Error) as exc:
         raise gate.GateBlock("experiment_blocked", "installed candidate identity unavailable") from exc
 
 
@@ -146,10 +178,11 @@ class Request:
     identity: dict
     commit: str
     binding: object
+    cases: tuple[str, ...] = ()
 
 
-def prepare_request(*, checkout, record, output, leg, modes, arm=None, probe=None):
-    require("AGENTTALK_DEV_GATE_POSIX_PARALLEL" not in os.environ, "POSIX parallel switch must be absent")
+def prepare_request(*, checkout, record, output, leg, modes, arm=None, probe=None, cases=()):
+    require("AGENTTALK_DEV_GATE_POSIX_PARALLEL" not in os.environ, "AGENTTALK_DEV_GATE_POSIX_PARALLEL must be absent")
     require(gate._platform_label() == "windows", "Windows experiment requires a Windows host")
     checkout = Path(checkout).resolve()
     manifest = gate.validate_manifest(read_json(checkout / "dev-gate.json", within=checkout))
@@ -162,6 +195,10 @@ def prepare_request(*, checkout, record, output, leg, modes, arm=None, probe=Non
     require(modes and len(modes) == len(set(modes)) and set(modes) <= {"source", "wheel"}, "invalid modes")
     require((arm is None) != (probe is None), "choose an acceptance arm or a probe, never both")
     require(arm in {None, "serial", "parallel"} and probe in {None, *PROBES}, "unknown arm or probe")
+    require(
+        not cases or (probe == "p9" and len(cases) == len(set(cases)) and set(cases) <= {"worker", "controller"}),
+        "cases must name worker or controller, for p9 only",
+    )
     environments = frozen.get("environments")
     require(isinstance(environments, dict), "P7 environment plan missing")
     freeze = environments.get(leg.split("/")[1], {})
@@ -195,6 +232,7 @@ def prepare_request(*, checkout, record, output, leg, modes, arm=None, probe=Non
         identity,
         binding.candidate_sha,
         binding,
+        tuple(cases),
     )
 
 
@@ -214,6 +252,8 @@ def pytest_call(request, mode, python, paths, env):
     spec = request.manifest["checks"]["pytest"]
     arm = request.arm if request.probe is None else request.contract["probes"][request.probe]["arm"]
     probe_args = [] if request.probe is None else request.contract["probes"][request.probe]["args"]
+    if request.cases:
+        probe_args = [*probe_args, "--cases", ",".join(request.cases)]
     argv = gate.isolated_tool_argv(
         python,
         "pytest",
@@ -234,6 +274,40 @@ def pytest_call(request, mode, python, paths, env):
         "env": dict(env),
         "cwd": str(paths["source"]),
         "timeout_seconds": spec["windows_timeout_seconds"],
+        "checks": partition(request.manifest, request.leg, mode),
+    }
+
+
+def expected_call(request, mode, prepared, work):
+    """Ordinary gate setup plus only the contract's declared instrumentation."""
+    minor = request.leg.split("/")[1]
+    base = gate._base_env(work)
+    env = gate.source_environment(base, prepared.source_root) if mode == "source" else base
+    spec = request.manifest["checks"]["pytest"]
+    ordinary = gate.isolated_tool_argv(
+        prepared.python,
+        "pytest",
+        *spec["args"],
+        "-p",
+        "no:cacheprovider",
+        "--basetemp",
+        str(work / f"pt-{'s' if mode == 'source' else 'w'}-{gate._python_suffix(minor)}"),
+        *spec["paths"],
+        candidate_import_root=prepared.import_root if mode == "source" else None,
+    )
+    arm = request.arm if request.probe is None else request.contract["probes"][request.probe]["arm"]
+    extra = ["--experiment-record", str(work / "records"), *request.contract["arms"][arm]]
+    if request.probe is not None:
+        extra += request.contract["probes"][request.probe]["args"]
+    if request.cases:
+        extra += ["--cases", ",".join(request.cases)]
+    insert = len(ordinary) - len(spec["paths"])
+    ordinary[insert:insert] = extra
+    return {
+        "argv": ordinary,
+        "env": env,
+        "cwd": str(prepared.source_root),
+        "timeout_seconds": gate._pytest_timeout_seconds(spec),
         "checks": partition(request.manifest, request.leg, mode),
     }
 
@@ -330,10 +404,11 @@ def execute(request, *, installer, recorder, runner=gate.run_command):
             paths = {
                 "source": prepared.source_root,
                 "imports": prepared.import_root,
-                "bt": work / "bt",
+                "bt": work / f"pt-{'s' if mode == 'source' else 'w'}-{gate._python_suffix(request.leg.split('/')[1])}",
                 "logs": work / "logs",
                 "records": work / "records",
             }
+            failure = None
             try:
                 freeze = request.frozen["environments"][request.leg.split("/")[1]]["freeze_sha256"]
                 validate_install(prepared.installed_set, freeze, mode=mode)
@@ -358,7 +433,8 @@ def execute(request, *, installer, recorder, runner=gate.run_command):
                 if mode == "source":
                     env = gate.source_environment(env, prepared.source_root)
                 call = pytest_call(request, mode, prepared.python, paths, env)
-                expected = json.loads(json.dumps(call))
+                expected = expected_call(request, mode, prepared, work)
+                validate_call(call, expected, actual_root=work, expected_root=work)
                 outcome = runner(
                     check_id=f"pytest-{mode}-py{request.leg.split('/')[1].replace('.', '')}",
                     argv=call["argv"],
@@ -368,7 +444,6 @@ def execute(request, *, installer, recorder, runner=gate.run_command):
                     logs_dir=paths["logs"],
                     timeout_note=gate.PYTEST_DURATIONS_UNAVAILABLE,
                 )
-                validate_call(call, expected)
                 call.update(
                     mode=mode,
                     status=outcome.status,
@@ -383,26 +458,47 @@ def execute(request, *, installer, recorder, runner=gate.run_command):
                 validate_inventory(inventory, acceptance=request.probe is None)
                 call["inventory"] = inventory
                 call["exports"]["static"] = str(gate._export_phase(request.binding, work, "static"))
+            except Exception as exc:
+                failure = exc
+                raise
             finally:
-                bt = paths["bt"]
-                require(bt.resolve().is_relative_to(work.resolve()), "basetemp escaped run folder")
-                retained = bt.exists()
-                installer.finish(prepared)
-                require(bt.exists() == retained, "installer changed basetemp retention")
-                if artifact["calls"] and artifact["calls"][-1].get("mode") == mode:
-                    artifact["calls"][-1]["cleanup"] = {
-                        "basetemp_removed": False,
-                        "basetemp_present": retained,
-                        "kept": ["bt", "logs", "records", "exports"],
-                    }
+                try:
+                    bt = paths["bt"]
+                    require(bt.resolve().is_relative_to(work.resolve()), "basetemp escaped run folder")
+                    retained = bt.exists()
+                    installer.finish(prepared)
+                    require(bt.exists() == retained, "installer changed basetemp retention")
+                    if artifact["calls"] and artifact["calls"][-1].get("mode") == mode:
+                        artifact["calls"][-1]["cleanup"] = {
+                            "basetemp_removed": False,
+                            "basetemp_present": retained,
+                            "kept": [bt.name, "logs", "records", "exports"],
+                        }
+                except Exception as exc:
+                    artifact.setdefault("cleanup_errors", []).append(error_detail(exc))
+                    if failure is None:
+                        raise
         binding = gate.capture_candidate_binding(request.checkout)
         require(binding.clean and binding.candidate_sha == request.commit, "candidate changed during execution")
         artifact["status"] = "complete"
-    except gate.GateBlock as exc:
-        artifact["error"] = exc.detail
+    except Exception as exc:
+        detail = error_detail(exc)
+        artifact["error"] = detail["message"]
+        artifact["error_type"] = detail["type"]
     finally:
         write_text(request.output / "experiment.json", json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     return artifact
+
+
+def error_detail(exc):
+    return {"type": type(exc).__name__, "message": exc.detail if isinstance(exc, gate.GateBlock) else str(exc)}
+
+
+def parse_cases(value):
+    cases = tuple(value.split(","))
+    if len(cases) != len(set(cases)) or not set(cases) <= {"worker", "controller"}:
+        raise argparse.ArgumentTypeError("cases must be worker, controller or worker,controller")
+    return cases
 
 
 def parse_args(argv=None):
@@ -420,7 +516,12 @@ def parse_args(argv=None):
             required=True,
             choices=tuple(PROBES) if name == "run" else ("serial", "parallel"),
         )
-    return parser.parse_args(argv)
+        if name == "run":
+            action.add_argument("--cases", type=parse_cases, default=())
+    args = parser.parse_args(argv)
+    if getattr(args, "cases", ()) and args.probe != "p9":
+        parser.error("--cases is valid for p9 only")
+    return args
 
 
 def main(argv=None):
@@ -434,13 +535,25 @@ def main(argv=None):
             modes=tuple(args.modes.split(",")),
             arm=getattr(args, "arm", None),
             probe=getattr(args, "probe", None),
+            cases=getattr(args, "cases", ()),
         )
         installer, recorder = production_dependencies(request)
-        result = execute(request, installer=installer, recorder=recorder)
-        return 0 if result["status"] == "complete" else 1
     except gate.GateBlock as exc:
         print(f"experiment refused: {exc.detail}", file=sys.stderr)
         return 2
+    try:
+        result = execute(request, installer=installer, recorder=recorder)
+        if result["status"] == "complete":
+            return 0
+        print(
+            f"experiment failed: {result.get('error_type', 'GateBlock')}: {result.get('error', 'incomplete')}",
+            file=sys.stderr,
+        )
+        for detail in result.get("cleanup_errors", []):
+            print(f"cleanup failed: {detail['type']}: {detail['message']}", file=sys.stderr)
+    except Exception as exc:
+        print(f"experiment failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+    return 1
 
 
 if __name__ == "__main__":

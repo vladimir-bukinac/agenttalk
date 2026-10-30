@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import copy
+import base64
+import hashlib
 import importlib
 import json
 import os
 import platform
 import shutil
 import sys
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,7 +19,7 @@ import pytest
 
 from agenttalk import dev_gate as gate
 from agenttalk import dev_gate_trial as trial
-from test_dev_gate import _leg_artifact, _manifest
+from test_dev_gate import _binding, _leg_artifact, _manifest
 
 
 @pytest.fixture
@@ -25,7 +28,12 @@ def exp():
 
 
 @pytest.fixture
-def request_factory(exp, tmp_path, monkeypatch):
+def identity_impl(exp):
+    return exp.installed_identity
+
+
+@pytest.fixture
+def request_factory(exp, identity_impl, tmp_path, monkeypatch):
     checkout = tmp_path / "checkout"
     checkout.mkdir()
     manifest = _manifest()
@@ -135,14 +143,24 @@ def test_03_posix_switch_refused_even_when_empty(exp, request_factory, monkeypat
         request_factory()
 
 
-def test_04_experiment_artifact_never_votes(exp, request_factory, tmp_path):
+def test_04_experiment_artifact_never_votes(exp, request_factory, tmp_path, monkeypatch):
     artifact = exp.artifact_header(request_factory())
     assert artifact["artifact_type"] == "agenttalk-windows-workers-preparation-v1"
     assert artifact["authoritative"] is False
-    with pytest.raises(gate.GateBlock):
-        gate.validate_run_artifact(artifact, _manifest())
-    with pytest.raises(gate.GateBlock):
-        gate.validate_aggregate_artifact(artifact, _manifest())
+    manifest = gate.validate_manifest(_manifest())
+    ordinary = _leg_artifact(manifest, "windows/3.12")
+    gate.validate_run_artifact(ordinary, manifest)
+    ordinary["artifact_type"] = exp.TYPE
+    with pytest.raises(gate.GateBlock, match="artifact schema or type"):
+        gate.validate_run_artifact(ordinary, manifest)
+    legs = [_leg_artifact(manifest, leg) for leg in gate.expected_ci_legs(manifest, "release")]
+    monkeypatch.setattr(gate, "_committed_version", lambda root: "0.78.1")
+    aggregate = gate.aggregate_leg_artifacts(manifest, "release", legs, _binding(manifest, root=tmp_path))
+    gate.validate_aggregate_artifact(aggregate, manifest)
+    aggregate["artifact_type"] = exp.TYPE
+    # The ordinary aggregate validator calls its type refusal an invalid header.
+    with pytest.raises(gate.GateBlock, match="aggregate header is invalid"):
+        gate.validate_aggregate_artifact(aggregate, manifest)
     (tmp_path / "trial.json").write_text(json.dumps(artifact), encoding="utf-8")
     with pytest.raises(gate.GateBlock):
         trial.validate_part(tmp_path, {}, _manifest(), "windows/3.12", "source")
@@ -445,38 +463,425 @@ def test_json_input_is_bounded_plain_unambiguous_and_contained(exp, tmp_path, ki
         exp.read_json(path, within=root)
 
 
-@pytest.mark.parametrize("change", [None, "editable", "missing-commit", "wrong-version", "source-entry", "record-link"])
-def test_installed_distribution_provenance_and_record(exp, tmp_path, monkeypatch, change):
-    root = tmp_path / "installed"
-    info = root / "agenttalk-1.dist-info"
-    info.mkdir(parents=True)
-    record = info / "RECORD"
-    record.write_text("candidate-fingerprint\n", encoding="utf-8")
-    direct = {"vcs_info": {"commit_id": "a" * 40}}
-    if change == "editable":
-        direct["dir_info"] = {"editable": True}
-    elif change == "missing-commit":
-        direct = {}
+@pytest.mark.parametrize("change", [None, "missing-dir", "wrong-version", "source-entry", "record-link"])
+def test_installed_distribution_provenance_and_record(exp, local_identity, tmp_path, monkeypatch, change):
+    f = local_identity
+    if change == "missing-dir":
+        f.direct.write_text(json.dumps({"url": f.checkout.as_uri()}), encoding="utf-8")
+    elif change == "wrong-version":
+        f.distribution.version = "2.0"
+    elif change == "source-entry":
+        monkeypatch.setattr(exp, "__file__", str(tmp_path / "outside.py"))
     elif change == "record-link":
-        os.link(record, info / "linked-record")
-    (info / "direct_url.json").write_text(json.dumps(direct), encoding="utf-8")
-    distribution = SimpleNamespace(
-        version="2.0" if change == "wrong-version" else "1.0",
-        files=[Path("agenttalk-1.dist-info/RECORD"), Path("agenttalk-1.dist-info/direct_url.json")],
-        locate_file=lambda path: root / path,
-    )
-    monkeypatch.setattr(exp.importlib.metadata, "distribution", lambda name: distribution)
-    monkeypatch.setattr(
-        exp, "__file__", str(tmp_path / "outside.py" if change == "source-entry" else root / "entry.py")
-    )
-    monkeypatch.setattr(gate, "_committed_version", lambda checkout: "1.0")
+        os.link(f.record, f.record.with_name("linked-record"))
     if change is not None:
         with pytest.raises(gate.GateBlock):
-            exp.installed_identity(tmp_path)
+            exp.installed_identity(f.checkout)
     else:
-        identity = exp.installed_identity(tmp_path)
+        identity = exp.installed_identity(f.checkout)
         assert identity == {
             "commit": "a" * 40,
             "version": "1.0",
-            "record_sha256": gate.sha256_bytes(record.read_bytes()),
+            "record_sha256": gate.sha256_bytes(f.record.read_bytes()),
         }
+
+
+@pytest.fixture
+def local_identity(exp, tmp_path, monkeypatch):
+    checkout = tmp_path / "checkout"
+    source = checkout / "src" / "agenttalk" / "dev_gate_experiment.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("# candidate fixture\n", encoding="utf-8")
+    installed = tmp_path / "installed"
+    entry = installed / "agenttalk" / source.name
+    entry.parent.mkdir(parents=True)
+    entry.write_bytes(source.read_bytes())
+    info = installed / "agenttalk-1.0.dist-info"
+    info.mkdir()
+    direct = info / "direct_url.json"
+    direct.write_text(json.dumps({"url": checkout.as_uri(), "dir_info": {}}), encoding="utf-8")
+    record = info / "RECORD"
+    digest = base64.urlsafe_b64encode(hashlib.sha256(source.read_bytes()).digest()).decode().rstrip("=")
+    record.write_text(f"agenttalk/{source.name},sha256={digest},{source.stat().st_size}\n", encoding="utf-8")
+    distribution = SimpleNamespace(
+        version="1.0",
+        files=[Path("agenttalk-1.0.dist-info/RECORD"), Path("agenttalk-1.0.dist-info/direct_url.json")],
+        locate_file=lambda path: installed / path,
+    )
+    monkeypatch.setattr(exp.importlib.metadata, "distribution", lambda name: distribution)
+    monkeypatch.setattr(exp, "__file__", str(entry))
+    monkeypatch.setattr(gate, "_committed_version", lambda root: "1.0")
+    monkeypatch.setattr(
+        gate, "capture_candidate_binding", lambda root: SimpleNamespace(clean=True, candidate_sha="a" * 40)
+    )
+    return SimpleNamespace(
+        checkout=checkout, source=source, entry=entry, direct=direct, record=record, distribution=distribution
+    )
+
+
+def test_fix_cx1_real_local_pip_install_identity(exp, tmp_path, monkeypatch):
+    # CX1/CL1: reproduce the approved local-directory route, without a VCS URL.
+    checkout = tmp_path / "package"
+    source = checkout / "src" / "agenttalk"
+    source.mkdir(parents=True)
+    (source / "__init__.py").write_text("", encoding="utf-8")
+    (source / "dev_gate_experiment.py").write_text("# fixture entry point\n", encoding="utf-8")
+    (checkout / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n'
+        '[project]\nname = "agenttalk"\nversion = "1.0"\n'
+        '[tool.hatch.build.targets.wheel]\npackages = ["src/agenttalk"]\n',
+        encoding="utf-8",
+    )
+    target = tmp_path / "installed"
+    env = gate._base_env(tmp_path)
+    done = subprocess.run(  # noqa: S603 - fixed local pip argv, offline, temporary target
+        [
+            sys.executable,
+            "-I",
+            "-m",
+            "pip",
+            "install",
+            "--no-deps",
+            "--no-build-isolation",
+            "--no-index",
+            "--no-cache-dir",
+            "--target",
+            str(target),
+            str(checkout),
+        ],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    distribution = next(iter(exp.importlib.metadata.distributions(path=[str(target)])))
+    provenance = json.loads(distribution.read_text("direct_url.json"))
+    assert provenance == {"dir_info": {}, "url": checkout.as_uri()}
+    monkeypatch.setattr(exp.importlib.metadata, "distribution", lambda name: distribution)
+    monkeypatch.setattr(exp, "__file__", str(target / "agenttalk" / "dev_gate_experiment.py"))
+    monkeypatch.setattr(gate, "_committed_version", lambda root: "1.0")
+    monkeypatch.setattr(
+        gate, "capture_candidate_binding", lambda root: SimpleNamespace(clean=True, candidate_sha="a" * 40)
+    )
+    assert exp.installed_identity(checkout)["commit"] == "a" * 40
+
+
+@pytest.mark.parametrize(
+    "damage", ["url", "editable", "installed-bytes", "source-bytes", "hash", "unhashed-entry", "dirty"]
+)
+def test_fix_cx1_local_identity_refuses_mismatched_copy(exp, local_identity, monkeypatch, damage):
+    f = local_identity
+    if damage in {"url", "editable"}:
+        data = json.loads(f.direct.read_text())
+        if damage == "url":
+            data["url"] = f.checkout.parent.as_uri()
+        else:
+            data["dir_info"]["editable"] = True
+        f.direct.write_text(json.dumps(data), encoding="utf-8")
+    elif damage == "installed-bytes":
+        f.entry.write_text("# altered installed copy\n", encoding="utf-8")
+    elif damage == "source-bytes":
+        f.source.write_text("# altered checkout\n", encoding="utf-8")
+    elif damage == "hash":
+        f.record.write_text(f.record.read_text().replace("sha256=", "sha512="), encoding="utf-8")
+    elif damage == "unhashed-entry":
+        f.record.write_text("agenttalk/dev_gate_experiment.py,,\n", encoding="utf-8")
+    else:
+        monkeypatch.setattr(
+            gate, "capture_candidate_binding", lambda root: SimpleNamespace(clean=False, candidate_sha="a" * 40)
+        )
+    with pytest.raises(gate.GateBlock):
+        exp.installed_identity(f.checkout)
+
+
+@pytest.mark.parametrize("metadata", [{"dir_info": None}, {"dir_info": {}, "vcs_info": {"commit_id": 123}}])
+def test_fix_cx2_malformed_provenance_refuses_through_main(
+    exp, identity_impl, request_factory, local_identity, monkeypatch, capsys, metadata
+):
+    payload = {"url": local_identity.checkout.as_uri(), "dir_info": {}, **metadata}
+    local_identity.direct.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(exp, "installed_identity", identity_impl)
+    result = exp.main(
+        [
+            "accept",
+            "--checkout",
+            str(request_factory.checkout),
+            "--arm",
+            "serial",
+            "--leg",
+            "windows/3.12",
+            "--modes",
+            "source",
+            "--record",
+            str(request_factory.record),
+            "--output",
+            str(local_identity.checkout.parent / "out"),
+        ]
+    )
+    assert result == 2
+    err = capsys.readouterr().err
+    assert "experiment refused:" in err and "Traceback" not in err
+    assert ("dir_info" if metadata["dir_info"] is None else "commit_id") in err
+
+
+@pytest.fixture
+def execution_fixture(exp, request_factory, monkeypatch):
+    monkeypatch.setattr(gate, "export_candidate", lambda binding, destination, archive: destination.mkdir())
+
+    class Installer:
+        def prepare(self, request, mode, work):
+            checks = [
+                c
+                for c in exp.partition(request.manifest, request.leg, mode)
+                if c not in {"git-binding", "final-binding"} and not c.startswith("pytest-")
+            ]
+            source = work / f"candidate-{mode}"
+            return exp.PreparedEnvironment(
+                Path(sys.executable),
+                source,
+                source / "src" if mode == "source" else source,
+                {"freeze_sha256": "c" * 64, "probe_files": [], "gateway_policy": "error", "wheel_sha256": "d" * 64},
+                ["host"] if mode == "source" else ["host", "build", "runtime", "wheel-test"],
+                [{"id": check, "status": "pass"} for check in checks],
+            )
+
+        def finish(self, prepared):
+            pass
+
+    return SimpleNamespace(
+        installer=Installer(),
+        recorder=SimpleNamespace(
+            inventory=lambda directory: {"complete": True, "plugins": ["pytest", "experiment_record"]}
+        ),
+    )
+
+
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+def test_fix_cx3_runner_error_and_cleanup_error_remain_visible(
+    exp, request_factory, execution_fixture, monkeypatch, capsys, cleanup_fails
+):
+    request = request_factory(modes=("source",))
+    adapters = execution_fixture
+
+    def runner(**kwargs):
+        raise OSError("fixture runner disk failure")
+
+    if cleanup_fails:
+
+        def finish(prepared):
+            raise gate.GateBlock("fixture_cleanup", "fixture cleanup failure")
+
+        monkeypatch.setattr(adapters.installer, "finish", finish)
+    original_execute = exp.execute
+    monkeypatch.setattr(exp, "prepare_request", lambda **kwargs: request)
+    monkeypatch.setattr(exp, "production_dependencies", lambda req: (adapters.installer, adapters.recorder))
+    monkeypatch.setattr(exp, "execute", lambda req, **kwargs: original_execute(req, runner=runner, **kwargs))
+    rc = exp.main(
+        [
+            "accept",
+            "--checkout",
+            str(request.checkout),
+            "--arm",
+            "serial",
+            "--leg",
+            "windows/3.12",
+            "--modes",
+            "source",
+            "--record",
+            "unused",
+            "--output",
+            str(request.output),
+        ]
+    )
+    assert rc == 1
+    artifact = json.loads((request.output / "experiment.json").read_text())
+    assert artifact["status"] == "blocked"
+    assert artifact["error_type"] == "OSError"
+    assert artifact["error"] == "fixture runner disk failure"
+    if cleanup_fails:
+        assert artifact["cleanup_errors"] == [{"type": "GateBlock", "message": "fixture cleanup failure"}]
+    err = capsys.readouterr().err
+    assert "OSError" in err and "fixture runner disk failure" in err and "Traceback" not in err
+
+
+@pytest.mark.parametrize(
+    "probe,cases", [("p8-gateway-repeat", None), ("p9", "worker,controller"), ("p9", "worker"), ("p9", "controller")]
+)
+def test_fix_cl2_plan_commands_parse_and_cases_reach_pytest(exp, request_factory, tmp_path, probe, cases):
+    argv = [
+        "run",
+        "--checkout",
+        ".",
+        "--probe",
+        probe,
+        "--leg",
+        "windows/3.12",
+        "--modes",
+        "source,wheel",
+        "--record",
+        "frozen.json",
+        "--output",
+        "fresh-output",
+    ]
+    if cases is not None:
+        argv += ["--cases", cases]
+    args = exp.parse_args(argv)
+    request = request_factory(arm=None, probe=probe, cases=getattr(args, "cases", ()))
+    paths = {name: tmp_path / name for name in ("source", "imports", "bt", "records")}
+    call = exp.pytest_call(request, "source", Path(sys.executable), paths, {})
+    assert "--max-worker-restart=0" in call["argv"]
+    if cases:
+        assert call["argv"][call["argv"].index("--cases") + 1] == cases
+
+
+@pytest.mark.parametrize(
+    "probe,cases",
+    [
+        ("p8", "worker"),
+        ("p10", "controller"),
+        ("p11", "worker"),
+        ("p9", "other"),
+        ("p9", "worker,worker"),
+        ("p9", "worker,"),
+    ],
+)
+def test_fix_cl2_cases_are_closed_and_only_for_p9(exp, probe, cases):
+    with pytest.raises(SystemExit):
+        exp.parse_args(
+            [
+                "run",
+                "--checkout",
+                ".",
+                "--probe",
+                probe,
+                "--cases",
+                cases,
+                "--leg",
+                "windows/3.12",
+                "--modes",
+                "source",
+                "--record",
+                "frozen.json",
+                "--output",
+                "out",
+            ]
+        )
+
+
+def test_fix_l1_p11_is_serial_in_contract_and_call(exp, request_factory, tmp_path):
+    request = request_factory(arm=None, probe="p11")
+    assert request.contract["probes"]["p11"]["arm"] == "serial"
+    paths = {name: tmp_path / name for name in ("source", "imports", "bt", "records")}
+    assert "-n" not in exp.pytest_call(request, "source", Path(sys.executable), paths, {})["argv"]
+
+
+def test_fix_cl3_execute_rejects_extra_environment_before_running(exp, request_factory, execution_fixture, monkeypatch):
+    request = request_factory(modes=("source",))
+    original = exp.pytest_call
+    ran = []
+
+    def changed(*args, **kwargs):
+        call = original(*args, **kwargs)
+        call["env"]["P6_UNDECLARED"] = "1"
+        return call
+
+    monkeypatch.setattr(exp, "pytest_call", changed)
+    artifact = exp.execute(
+        request,
+        installer=execution_fixture.installer,
+        recorder=execution_fixture.recorder,
+        runner=lambda **kwargs: ran.append(kwargs) or SimpleNamespace(status="pass"),
+    )
+    assert artifact["status"] == "blocked" and "undeclared call difference" in artifact["error"]
+    assert ran == []
+
+
+@pytest.mark.parametrize("mode", ["source", "wheel"])
+def test_fix_cl3_execute_uses_ordinary_environment_and_basetemp(
+    exp, request_factory, execution_fixture, monkeypatch, mode
+):
+    request = request_factory(modes=(mode,))
+    captured = []
+    artifact = exp.execute(
+        request,
+        installer=execution_fixture.installer,
+        recorder=execution_fixture.recorder,
+        runner=lambda **kwargs: captured.append(kwargs) or SimpleNamespace(status="pass"),
+    )
+    assert artifact["status"] == "complete"
+    work = request.output / mode
+    paths = {
+        "source": work / f"candidate-{mode}",
+        "imports": work / f"candidate-{mode}" / "src",
+        "bt": work / f"pt-{'s' if mode == 'source' else 'w'}-py312",
+        "logs": work / "logs",
+    }
+    env = gate._base_env(work)
+    if mode == "source":
+        env = gate.source_environment(env, paths["source"])
+    ordinary = capture_ordinary(monkeypatch, request.manifest, mode, paths, env)
+    actual = captured[0]
+    argv = list(actual["argv"])
+    index = argv.index("--experiment-record")
+    del argv[index : index + 2]
+    assert argv == ordinary["argv"]
+    assert actual["env"] == ordinary["env"]
+    assert actual["timeout_seconds"] == ordinary["timeout_seconds"]
+
+
+@pytest.mark.parametrize("missing", ["dev-gate.json", "dev-gate-experiment.json", "record"])
+def test_fix_cl5_missing_input_names_file(exp, request_factory, capsys, missing):
+    path = request_factory.record if missing == "record" else request_factory.checkout / missing
+    path.unlink()
+    rc = exp.main(
+        [
+            "accept",
+            "--checkout",
+            str(request_factory.checkout),
+            "--arm",
+            "serial",
+            "--leg",
+            "windows/3.12",
+            "--modes",
+            "source",
+            "--record",
+            str(request_factory.record),
+            "--output",
+            "unused",
+        ]
+    )
+    assert rc == 2
+    assert path.name in capsys.readouterr().err
+
+
+def test_fix_cl5_switch_refusal_names_variable(exp, request_factory, monkeypatch, capsys):
+    monkeypatch.setenv("AGENTTALK_DEV_GATE_POSIX_PARALLEL", "")
+    rc = exp.main(
+        [
+            "accept",
+            "--checkout",
+            str(request_factory.checkout),
+            "--arm",
+            "serial",
+            "--leg",
+            "windows/3.12",
+            "--modes",
+            "source",
+            "--record",
+            str(request_factory.record),
+            "--output",
+            "unused",
+        ]
+    )
+    assert rc == 2
+    assert "AGENTTALK_DEV_GATE_POSIX_PARALLEL" in capsys.readouterr().err
+
+
+def test_fix_docs_local_identity_and_temporary_d2_proof():
+    text = Path("docs/DEV-GATE.md").read_text(encoding="utf-8")
+    assert "have a VCS commit" not in text
+    assert "dir_info" in text and "RECORD" in text
+    assert "Until P1 lands, D2 is checked only by the installer's proof." in text

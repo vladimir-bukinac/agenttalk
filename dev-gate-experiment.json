@@ -7,9 +7,10 @@
   },
   "probes": {
     "p8": {"arm": "serial", "args": ["-p", "experiment.audit_probe"]},
+    "p8-gateway-repeat": {"arm": "parallel", "args": ["-p", "experiment.audit_probe"]},
     "p9": {"arm": "parallel", "args": ["-p", "experiment.death_probe"]},
     "p10": {"arm": "parallel", "args": ["-p", "experiment.collection_probe"]},
-    "p11": {"arm": "parallel", "args": ["-p", "experiment.native_trace"]}
+    "p11": {"arm": "serial", "args": ["-p", "experiment.native_trace"]}
   },
   "gateway_policy": "error",
   "differences": {
