@@ -97,8 +97,10 @@ def start_held_front(
 
 
 def assert_bind_refused(port: int, host: str = "127.0.0.1") -> None:
-    """A second bind to `host:port` must fail.  It is made with address reuse set: only an exclusive hold refuses
-    that on Windows, so a refusal proves the hold."""
+    """A second bind to `host:port` must fail.  It is made with address reuse set, so a refusal shows that the port
+    is held, and that it stays held. It does not show the exclusive option: where a plain held listener already
+    refuses the bind (a current Windows does), the refusal is the same with or without it. The option is proven by
+    the observer test of the socket calls (`test_held_listener_sets_the_exclusive_option_before_the_bind...`)."""
     probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

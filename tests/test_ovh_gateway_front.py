@@ -7,6 +7,7 @@ import http.client
 import io
 import json
 import socket
+import sys
 import threading
 import time
 import warnings
@@ -566,6 +567,15 @@ def test_start_held_front_holds_its_port_without_any_opt_in(tmp_path) -> None:
     assert listener.close_count == 1
 
 
+def _reuse_control_applies() -> bool:
+    """Whether a second bind with address reuse set succeeds on a bound, non-listening socket that set it too.
+
+    It does on Windows and on Linux. On macOS (BSD rules) binding the same exact address twice needs SO_REUSEPORT, so
+    that second bind is refused and the control below would prove the opposite; the macOS behaviour rests on Apple's
+    documentation and kernel source, not on a local run, and the pull request's macOS leg is what confirms it."""
+    return sys.platform == "win32" or sys.platform.startswith("linux")
+
+
 def test_the_hand_over_checks_see_a_port_that_was_released(tmp_path) -> None:
     """Close the held socket before serving, and the check fails: the test can see a release."""
     listener, _port = held_listener()
@@ -576,8 +586,11 @@ def test_the_hand_over_checks_see_a_port_that_was_released(tmp_path) -> None:
             assert_hand_over(held, listener, lambda: None)
         held.server.server_close()
 
-    # and a port that is not held does not pass the second-bind check (a bound socket with address reuse set
-    # lets a second reusing bind through on Windows, Linux and macOS alike)
+    # and, where the platform allows it (Windows and Linux), a port that is not held does not pass the second-bind
+    # check: a bound socket with address reuse set lets a second reusing bind through there. The half above, which
+    # detects a closed listener, runs on every platform.
+    if not _reuse_control_applies():
+        return
     loose = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         loose.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -586,6 +599,38 @@ def test_the_hand_over_checks_see_a_port_that_was_released(tmp_path) -> None:
             assert_bind_refused(int(loose.getsockname()[1]))
     finally:
         loose.close()
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [("win32", True), ("linux", True), ("linux2", True), ("darwin", False), ("freebsd14", False)],
+)
+def test_only_windows_and_linux_take_the_loose_socket_control(monkeypatch, platform, expected) -> None:
+    # Simulated platforms: only the yes-or-no answer is computed, so nothing else reads the patched value.
+    monkeypatch.setattr(sys, "platform", platform)
+    assert _reuse_control_applies() is expected
+
+
+@pytest.mark.parametrize("applies", [True, False, "native"])
+def test_the_loose_socket_control_runs_only_where_it_applies(tmp_path, monkeypatch, applies) -> None:
+    # The control is a call to assert_bind_refused on a loose socket. It is replaced here by a stand-in that records the
+    # call and raises the 'not held' error, so the answer shown is the guard's, and no real bind is made on a platform
+    # where the real one would answer differently. 'native' uses the real guard on this machine: on Windows and Linux
+    # the control runs (both halves of the test); on macOS it does not, and the release half still does.
+    calls = []
+
+    def stand_in(port, host="127.0.0.1"):
+        calls.append(port)
+        raise AssertionError(f"a second bind to port {port} was accepted: the port is not held")
+
+    expected = _reuse_control_applies() if applies == "native" else applies
+    if applies != "native":
+        monkeypatch.setattr(sys.modules[__name__], "_reuse_control_applies", lambda: applies)
+    monkeypatch.setattr(sys.modules[__name__], "assert_bind_refused", stand_in)
+
+    test_the_hand_over_checks_see_a_port_that_was_released(tmp_path)
+
+    assert bool(calls) is expected
 
 
 def test_held_listener_sets_the_exclusive_option_before_the_bind_and_never_address_reuse(monkeypatch) -> None:
