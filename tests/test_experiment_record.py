@@ -3216,3 +3216,32 @@ def test_the_docstring_states_the_single_baseline_and_the_refusal_to_fall_back(e
         "never a silent fallback to path checks",
     ):
         assert text in flat, text
+
+
+def test_the_held_folder_is_released_when_the_listing_fails(er, tmp_path, monkeypatch):
+    # codex-rev's P2: the handle was taken before the listing, but only the caller's later try/finally closed it, so an
+    # exception during the listing left the descriptor open
+    folder = tmp_path / "record"
+    folder.mkdir()
+    write_journal(folder, "serial", 11, starts=[("t.py::a", None)])
+    held = []
+    real_hold = er._hold_directory
+
+    def remember(path):
+        fd = real_hold(path)
+        held.append(fd)
+        return fd
+
+    def listing_fails(*args, **kwargs):
+        raise RuntimeError("the listing failed")
+
+    monkeypatch.setattr(er, "_hold_directory", remember)
+    monkeypatch.setattr(Path, "glob", listing_fails)  # Windows lists through the path
+    monkeypatch.setattr(os, "listdir", listing_fails)  # POSIX lists through the held descriptor
+
+    with pytest.raises(RuntimeError, match="the listing failed"):
+        er.reduce_journals(folder, ["t.py::a"])
+
+    assert len(held) == 1
+    with pytest.raises(OSError):
+        os.fstat(held[0])

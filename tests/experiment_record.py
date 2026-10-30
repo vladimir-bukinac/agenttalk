@@ -1292,33 +1292,37 @@ def _journal_paths(folder: Path, problems: _Problems) -> tuple[_Folder | None, l
     anchor = _Folder.verify(folder, problems)
     if anchor is None:
         return None, []
-    total = 0
-    if anchor.dir_fd is not None:  # POSIX: the inventory comes from the held directory itself
-        names = sorted(n for n in os.listdir(anchor.dir_fd) if fnmatch.fnmatchcase(n, "journal-*.jsonl"))
-        paths = [folder / name for name in names]
-        for name in names:
-            try:
-                total += os.stat(name, dir_fd=anchor.dir_fd, follow_symlinks=False).st_size
-            except OSError:
-                pass  # reported when the journal is opened
-    else:  # Windows: the names come from the path; every open is checked against the held handle
-        paths = sorted(folder.glob("journal-*.jsonl"))
-        for path in paths:
-            try:
-                total += path.stat().st_size
-            except OSError:
-                pass
-    if len(paths) > MAX_JOURNALS or total > MAX_TOTAL_JOURNAL_BYTES:
-        problems.add(
-            "input-too-large",
-            f"{len(paths)} journals of {total} bytes; at most {MAX_JOURNALS} journals and {MAX_TOTAL_JOURNAL_BYTES} "
-            "bytes are read, and none was",
-            journals=len(paths),
-            total_bytes=total,
-        )
-        anchor.close()
-        return None, []
-    return anchor, paths
+    try:
+        total = 0
+        if anchor.dir_fd is not None:  # POSIX: the inventory comes from the held directory itself
+            names = sorted(n for n in os.listdir(anchor.dir_fd) if fnmatch.fnmatchcase(n, "journal-*.jsonl"))
+            paths = [folder / name for name in names]
+            for name in names:
+                try:
+                    total += os.stat(name, dir_fd=anchor.dir_fd, follow_symlinks=False).st_size
+                except OSError:
+                    pass  # reported when the journal is opened
+        else:  # Windows: the names come from the path; every open is checked against the held handle
+            paths = sorted(folder.glob("journal-*.jsonl"))
+            for path in paths:
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    pass
+        if len(paths) > MAX_JOURNALS or total > MAX_TOTAL_JOURNAL_BYTES:
+            problems.add(
+                "input-too-large",
+                f"{len(paths)} journals of {total} bytes; at most {MAX_JOURNALS} journals and "
+                f"{MAX_TOTAL_JOURNAL_BYTES} bytes are read, and none was",
+                journals=len(paths),
+                total_bytes=total,
+            )
+            anchor.close()
+            return None, []
+        return anchor, paths
+    except BaseException:
+        anchor.close()  # owned from the moment it was opened: any exception during the listing releases it
+        raise
 
 
 def reduce_journals(
