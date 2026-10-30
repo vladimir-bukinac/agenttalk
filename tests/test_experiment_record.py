@@ -383,8 +383,14 @@ def test_a_duplicate_missing_or_unexpected_id_fails_the_join(er, tmp_path, case,
 
 
 def test_an_exact_one_to_one_join_is_accepted(er, tmp_path):
-    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a@g1", "g1")])
-    write_journal(tmp_path, "worker", 12, worker="gw1", starts=[("t.py::b@g2", "g2")])
+    rows0, rows1 = [("t.py::a@g1", "g1")], [("t.py::b@g2", "g2")]
+    nodes = [
+        ("collection-manifest", manifest_fields(rows0, "node", "gw0")),
+        ("collection-manifest", manifest_fields(rows1, "node", "gw1")),
+    ]
+    write_journal(tmp_path, "controller", 10, extra=nodes)  # an xdist run has its controller's journal
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=rows0)
+    write_journal(tmp_path, "worker", 12, worker="gw1", starts=rows1)
     summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
     assert summary["accepted"], summary["problems"]
     assert summary["status"] == "complete"
@@ -2431,3 +2437,152 @@ def test_the_docstring_states_that_pytests_run_variables_are_not_masked(er):
     flat = " ".join(er.__doc__.split())
     assert "except the variables whose names start with `PYTEST_`" in flat
     assert "pytest's own run variables (every `PYTEST_*`" in flat
+
+
+# --- fix round 8: nested runs reconciled, a missing controller journal, require_phases and order -----------------
+
+NESTED_NEGATIVE_PARENT = (
+    NESTED_PARENT.replace(NESTED_CONFTEST, json.dumps(NEGATIVE_CONFTEST)[1:-1])  # the child's phase writer is off
+    .replace('f"    assert {experiment_record.HANDOFF_ENV!r} not in os.environ\\n"', '"    assert False\\n"')
+    .replace("assert done.returncode == 0", "assert done.returncode == 1")  # the child's test fails, as it should
+)
+
+
+def test_a_nested_run_whose_phase_lines_were_never_written_is_not_accepted(project, er, tmp_path):
+    # R3 for a nested run: with only the phase writer off in a nested child that has a failing test, the reducer said
+    # accepted, no problem, no failure, because nested journals skipped the reconciliation.
+    project.makepyfile(test_parent=NESTED_NEGATIVE_PARENT)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec, "-k", "test_with_the_helper").assert_outcomes(passed=1)
+
+    ((_, launch),) = records(rec, "nested-launch")
+    summary = er.reduce_journals(rec, ["test_parent.py::test_with_the_helper"])
+    assert summary["nested"] == {"launched": 1, "journaled": 1} and summary["first_failure"] is None
+    missing = [p for p in summary["problems"] if p["kind"] == "phase-missing"]
+    assert [p["nested_run"] for p in missing] == [launch["token"]], summary["problems"]
+    assert list(summary["items"]) == ["test_parent.py::test_with_the_helper"]  # no nested id in the root collection
+    assert summary["accepted"] is False
+
+
+NESTED_TOKEN = "0123456789abcdef"
+
+
+def test_nested_journals_are_reconciled_per_run_and_their_ids_stay_out_of_the_root_collection(er, tmp_path):
+    launch = [("nested-launch", {"token": NESTED_TOKEN})]
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=launch)
+    backwards = [("teardown", "passed"), ("setup", "passed"), ("call", "passed")]
+    write_journal(
+        tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[("t.py::a", None)], phases={"t.py::a": backwards}
+    )
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert [(p["kind"], p["nested_run"]) for p in summary["problems"]] == [("phase-order", NESTED_TOKEN)]
+    assert summary["items"]["t.py::a"]["started"] == 1  # the nested item of the same id is not the root item
+    assert summary["accepted"] is False
+
+
+def test_a_nested_workers_unfinished_item_needs_a_crash_record_of_its_own_run(er, tmp_path):
+    launch = [("nested-launch", {"token": NESTED_TOKEN})]
+    root_down = [("worker-down", {"down_worker": "gw0", "has_error": True, "error_text": "root crash"})]
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=launch)
+    write_journal(tmp_path, "controller", 10, extra=root_down)  # a crash of ANOTHER run's gw0
+    unfinished = [("n.py::x@g", "g", [("setup", "passed")])]
+    write_journal(tmp_path, "worker", 13, worker="gw0", nested_token=NESTED_TOKEN, trailer=False, unfinished=unfinished)
+
+    lonely = er.reduce_journals(tmp_path)
+    assert {"item-unfinished", "crash-unrecorded"} <= kinds(lonely["problems"])
+
+    nested_down = [("worker-down", {"down_worker": "gw0", "has_error": True, "error_text": "nested crash"})]
+    write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nested_down)
+    recorded = er.reduce_journals(tmp_path)
+    assert "crash-unrecorded" not in kinds(recorded["problems"])
+    assert next(p for p in recorded["problems"] if p["kind"] == "item-unfinished")["crash_recorded"] is True
+
+
+def test_a_two_worker_run_without_its_controller_journal_is_refused(project, er, tmp_path):
+    # The manifest checks used to depend on the controller journal being there; removing it left accepted=true.
+    project.makepyfile(test_mixed=MIXED)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+    run_parallel(project, rec).assert_outcomes(passed=3, skipped=1, xfailed=1)
+    assert er.reduce_journals(rec, expected)["accepted"], "the real journals are accepted before the file goes"
+
+    (controller,) = rec.glob("journal-controller-*.jsonl")
+    controller.unlink()
+
+    summary = er.reduce_journals(rec, expected)
+    assert "controller-missing" in kinds(summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_worker_journals_with_no_controller_journal_are_refused_and_a_serial_run_is_not(er, tmp_path):
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a@g", "g")])
+    assert "controller-missing" in kinds(er.reduce_journals(tmp_path, ["t.py::a"])["problems"])
+    other = tmp_path / "serial"
+    other.mkdir()
+    write_journal(other, "serial", 12, starts=[("t.py::a", None)])
+    assert er.reduce_journals(other, ["t.py::a"])["accepted"]
+
+
+@pytest.mark.parametrize(
+    "phases",
+    [
+        PASSED,
+        [("setup", "passed"), ("teardown", "passed")],
+        [("setup", "passed")],
+        [("teardown", "passed"), ("setup", "passed"), ("call", "passed")],
+        [("setup", "skipped"), ("call", "passed"), ("teardown", "passed")],
+        [("setup", "passed"), ("call", "passed"), ("call", "passed"), ("teardown", "passed")],
+    ],
+    ids=["ordinary", "call-lost", "setup-only", "wrong-order", "call-after-skip", "call-twice"],
+)
+def test_require_phases_false_refuses_any_phase_of_a_started_item(er, tmp_path, phases):
+    # The lead's ruling: a no-body probe has NO phase at all, so any phase (a probe that ran a body by mistake, a phase
+    # out of order, a lone setup) is a problem of its own kind, and the run is not accepted.
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases={"t.py::a": phases})
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"], require_phases=False)
+
+    assert kinds(summary["problems"]) == {"phase-in-no-body-probe"}, summary["problems"]
+    assert summary["problems"][0]["nodeid"] == "t.py::a"
+    assert summary["accepted"] is False
+
+
+def test_require_phases_false_accepts_a_probe_with_no_phase_and_the_default_still_refuses_it(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases={"t.py::a": []})
+
+    accepted = er.reduce_journals(tmp_path, ["t.py::a"], require_phases=False)
+    refused = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert accepted["problems"] == [] and accepted["accepted"] is True
+    assert kinds(refused["problems"]) == {"phase-missing"} and refused["accepted"] is False
+
+
+def test_require_phases_false_also_refuses_phases_of_an_unfinished_item_and_of_a_nested_run(er, tmp_path):
+    unfinished = [("t.py::a", None, [("setup", "passed")])]
+    write_journal(tmp_path, "serial", 11, trailer=False, unfinished=unfinished)
+    summary = er.reduce_journals(tmp_path, require_phases=False)
+    assert "phase-in-no-body-probe" in kinds(summary["problems"])
+
+    other = tmp_path / "nested"
+    other.mkdir()
+    launch = [("nested-launch", {"token": NESTED_TOKEN})]
+    write_journal(other, "serial", 11, starts=[("t.py::a", None)], phases={"t.py::a": []}, extra=launch)
+    write_journal(other, "nested", 12, nested_token=NESTED_TOKEN, starts=[("n.py::x", None)])  # ran its body
+    nested = er.reduce_journals(other, ["t.py::a"], require_phases=False)
+    assert [(p["kind"], p["nested_run"]) for p in nested["problems"]] == [("phase-in-no-body-probe", NESTED_TOKEN)]
+
+
+def test_the_docstring_states_the_round_8_rules(er):
+    flat = " ".join(er.__doc__.split())
+    for text in (
+        "controller-missing (worker journals of a root run and no controller journal",
+        "Nested journals are reconciled the same way, run by run",
+        "requires that a started item has NO phase at all",
+        "phase-in-no-body-probe (under `require_phases=False`",
+        "about 3 KB per item",
+        "P8's dry run measures the real serial journal size",
+    ):
+        assert text in flat, text

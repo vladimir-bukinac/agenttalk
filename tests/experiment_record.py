@@ -155,13 +155,17 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   record explains), suffix-missing, group-split, duplicate-id, missing-id, unexpected-id,
                   nested-journal-missing, nested-journal-unlaunched, and the evidence checks:
                   manifest-missing (a serial or worker process wrote no collection manifest),
+                  controller-missing (worker journals of a root run and no controller journal: its node manifests
+                  and crash records cannot be there either),
                   manifest-disagreement (the controller's manifest for a worker is missing or differs from the
                   worker's own), collection-mismatch (the collected canonical ids differ from `expected_ids`),
                   never-started (collected but never started: the run stopped before it), phase-missing (an item
                   that ended lacks its setup, its call after a setup that passed, or its teardown: lost evidence or
                   an interrupted teardown), phase-order (the phases are not setup, call, teardown once each in that
                   order, or a call came after a setup that did not pass) and phase-outside-item (a phase report
-                  with no started item).  Each item gets at most one phase problem.
+                  with no started item), phase-in-no-body-probe (under `require_phases=False`, a started item
+                  reported a phase).  Each item gets at most one phase problem.  A problem of a nested run
+                  carries `nested_run` (its token).
 first_error       the earliest error record (collection-error, internal-error, worker-down with an error,
                   exit-status other than 0 or 1) across all journals, ordered by t_wall, journal name, seq; or
                   null.  Nothing written later, a trailer included, replaces it.
@@ -179,8 +183,16 @@ nested            {"launched": launches written, "journaled": launches that have
 When `expected_ids` (the serial collection's ids) is given, the join must be one to one: each expected id started
 exactly once, and the manifests must list the same canonical ids.  A serial run is a one-worker run.
 The phases of every ended item are reconciled with what pytest does: a missing outcome is a problem, so a run
-whose phase writer was off, or whose phase lines were removed, is not accepted.  A probe run that deliberately
-runs no test bodies (items start and end with no phase) passes `require_phases=False` and keeps every other check.
+whose phase writer was off, or whose phase lines were removed, is not accepted.  Nested journals are reconciled
+the same way, run by run (their ids stay out of the root run's collection and join).  A probe run that
+deliberately runs no test bodies (items start and end with no phase) passes `require_phases=False`: that drops the
+missing-phase result and instead requires that a started item has NO phase at all (any phase is
+phase-in-no-body-probe, which also catches a probe that ran a body by mistake and phases out of order), and
+keeps every other check.
+Size: a journal takes about 3 KB per item with its identity and the manifest (a 12,000-item serial run is about
+36 MiB); a run with many failing tests (each error text up to 64 KiB) can pass MAX_JOURNAL_BYTES, and the reducer
+then refuses that journal as journal-too-large instead of reading it.  P8's dry run measures the real serial
+journal size, which settles the margin.
 
 Nested pytest runs
 ------------------
@@ -1022,6 +1034,17 @@ def _phase_problem(phases: list[tuple[str, str]]) -> tuple[str, str] | None:
     return None
 
 
+def _phase_check(phases: list[tuple[str, str]], require_phases: bool) -> tuple[str, str] | None:
+    """The phase problem of an item, if any. A no-body probe (`require_phases` off) must have NO phase at all, so any
+    phase it reports is a problem of its own kind (a body ran by mistake, or the phases are not a probe's)."""
+    if require_phases:
+        return _phase_problem(phases)
+    if phases:
+        whens = [when for when, _ in phases]
+        return "phase-in-no-body-probe", f"a probe run that runs no test bodies reported phases {whens}"
+    return None
+
+
 def reduce_journals(
     folder: str | os.PathLike[str],
     expected_ids: Sequence[str] | None = None,
@@ -1092,18 +1115,25 @@ def reduce_journals(
     failures: list[tuple[tuple[float, str, int], dict[str, Any]]] = []
     launches: list[str] = []
     journaled: set[str] = set()
-    unfinished: list[tuple[str, str, str | None, str, list[tuple[str, str]]]] = []
-    crashed_workers: set[str] = set()
-    crashed_ids: set[str] = set()
+    # An item that started and never ended: (journal, role, worker, nested run or None, raw id, phases seen).
+    unfinished: list[tuple[str, str, str | None, str | None, str, list[tuple[str, str]]]] = []
+    crashed_workers: set[tuple[str | None, str]] = set()  # (nested run or None, worker id) with a worker-down error
+    crashed_ids: set[tuple[str | None, str]] = set()  # (nested run or None, raw id) of a "???" crash report
     collected: dict[str, None] = {}  # canonical ids, in the order they first appear in a manifest
-    identity_of: dict[str, dict[str, Any]] = {}  # raw id -> identity, from the manifests of the collecting processes
+    identity_of: dict[tuple[str | None, str], dict[str, Any]] = {}  # (nested run, raw id) -> identity, from manifests
     own_manifests: dict[str, list[str]] = {}  # worker id (or role) -> the raw ids its own manifest lists
     node_manifests: dict[str, list[str]] = {}  # worker id -> the raw ids the controller recorded for it
+    root_workers = False  # worker journals of the root run exist: it was an xdist run
     for name, info, recs in loaded:
         if info["nested_token"]:
             journaled.add(info["nested_token"])
-        nested_tree = bool(info["nested_token"])
-        tracked = not nested_tree and info["role"] in ("serial", "worker")
+        run = info["nested_token"] or None  # the nested run this journal belongs to; None for the root run
+        # Every process that runs items is reconciled, nested ones too, run by run; only the root run's items feed
+        # the collection, the groups and the join with the serial reference.
+        reconcile = info["role"] in ("serial", "worker", "nested")
+        root = run is None and info["role"] in ("serial", "worker")
+        extra = {} if run is None else {"nested_run": run}
+        root_workers = root_workers or (root and info["role"] == "worker")
         loadgroup = bool(next((r for r in recs if r["kind"] == "process-start"), {}).get("loadgroup"))
         open_items: dict[str, dict[str, Any]] = {}
         canonical_of: dict[str, str] = {}
@@ -1114,14 +1144,16 @@ def reduce_journals(
             if kind == "nested-launch":
                 launches.append(str(record.get("token")))
             elif kind == "collection-manifest":
-                if record["source"] == "node" and info["role"] == "controller":
+                if record["source"] == "node" and info["role"] == "controller" and run is None:
                     node_manifests[str(record["source_worker"])] = record["raw_ids"]
-                elif record["source"] == "session" and tracked:
-                    has_manifest = True
-                    own_manifests[info["worker"] or info["role"]] = record["raw_ids"]
+                elif record["source"] == "session" and reconcile:
                     for raw_id, identity in zip(record["raw_ids"], record["identities"], strict=True):
-                        identity_of.setdefault(raw_id, identity)
-                        collected.setdefault(identity["canonical_id"])
+                        identity_of.setdefault((run, raw_id), identity)
+                    if root:
+                        has_manifest = True
+                        own_manifests[info["worker"] or info["role"]] = record["raw_ids"]
+                        for identity in record["identities"]:
+                            collected.setdefault(identity["canonical_id"])
             elif (
                 kind == "worker-down"
                 and record.get("has_error")
@@ -1130,13 +1162,14 @@ def reduce_journals(
             ):
                 errors.append((key, entry))
                 if kind == "worker-down":
-                    crashed_workers.add(str(record.get("down_worker")))
+                    crashed_workers.add((run, str(record.get("down_worker"))))
             elif kind == "phase":
                 if record.get("outcome") == "failed":
                     failures.append((key, entry))
                 if record["when"] == "???":  # the controller's report of a worker that died in this item
-                    crashed_ids.add(record["nodeid"])
-                elif tracked:
+                    crashed_ids.add((run, record["nodeid"]))
+                    entry["nested_run"] = run
+                elif reconcile:
                     current = open_items.get(record["nodeid"])
                     if current is None:
                         problems.add(
@@ -1144,43 +1177,47 @@ def reduce_journals(
                             "a phase report came when no such item was running",
                             nodeid=record["nodeid"],
                             file=name,
+                            **extra,
                         )
                     else:
                         current["phases"].append((record["when"], record["outcome"]))
-            elif kind == "item-start" and tracked:
+            elif kind == "item-start" and reconcile:
                 group = record.get("requested_group")
                 canonical = canonical_of[record["nodeid"]] = canonical_id(record["nodeid"], group)
-                item = items.setdefault(canonical, {"started": 0, "ended": 0, "workers": [], "group": group})
-                item["started"] += 1
-                item["workers"].append(info["worker"] or info["role"])
+                if root:
+                    item = items.setdefault(canonical, {"started": 0, "ended": 0, "workers": [], "group": group})
+                    item["started"] += 1
+                    item["workers"].append(info["worker"] or info["role"])
+                    if record.get("effective_group"):
+                        groups.setdefault(record["effective_group"], set()).add(info["worker"] or info["role"])
+                    if record.get("suffix_missing") and loadgroup:
+                        problems.add(
+                            "suffix-missing",
+                            "a group member has no @group suffix in its node id",
+                            nodeid=record["nodeid"],
+                            file=name,
+                        )
                 if record["nodeid"] in open_items:  # started again before it ended
-                    unfinished.append(
-                        (name, info["role"], info["worker"], record["nodeid"], open_items[record["nodeid"]]["phases"])
-                    )
+                    again = open_items[record["nodeid"]]["phases"]
+                    unfinished.append((name, info["role"], info["worker"], run, record["nodeid"], again))
                 open_items[record["nodeid"]] = {"phases": [], "canonical": canonical}
-                if record.get("effective_group"):
-                    groups.setdefault(record["effective_group"], set()).add(info["worker"] or info["role"])
-                if record.get("suffix_missing") and loadgroup:
-                    problems.add(
-                        "suffix-missing",
-                        "a group member has no @group suffix in its node id",
-                        nodeid=record["nodeid"],
-                        file=name,
-                    )
-            elif kind == "item-end" and tracked:
+            elif kind == "item-end" and reconcile:
                 current = open_items.pop(record["nodeid"], None)
-                if record["nodeid"] in canonical_of:
+                if root and record["nodeid"] in canonical_of:
                     items[canonical_of[record["nodeid"]]]["ended"] += 1
-                found_problem = _phase_problem(current["phases"]) if current is not None and require_phases else None
+                found_problem = _phase_check(current["phases"], require_phases) if current is not None else None
                 if found_problem is not None:
-                    problems.add(found_problem[0], found_problem[1], nodeid=current["canonical"], file=name)
+                    problems.add(found_problem[0], found_problem[1], nodeid=current["canonical"], file=name, **extra)
         for nodeid, current in open_items.items():
-            unfinished.append((name, info["role"], info["worker"], nodeid, current["phases"]))
-        if tracked and not has_manifest:
+            unfinished.append((name, info["role"], info["worker"], run, nodeid, current["phases"]))
+        if root and not has_manifest:
             problems.add("manifest-missing", "the process wrote no collection manifest", file=name)
 
-    for name, role, worker, nodeid, phases in unfinished:
-        recorded = nodeid in crashed_ids or (worker is not None and worker in crashed_workers)
+    for name, role, worker, run, nodeid, phases in unfinished:
+        recorded = (run, nodeid) in crashed_ids or (worker is not None and (run, worker) in crashed_workers)
+        extra = {} if run is None else {"nested_run": run}
+        if phases and not require_phases:
+            problems.add("phase-in-no-body-probe", _phase_check(phases, False)[1], nodeid=nodeid, file=name, **extra)
         problems.add(
             "item-unfinished",
             "an item started and never ended",
@@ -1188,16 +1225,19 @@ def reduce_journals(
             file=name,
             phases_seen=[when for when, _ in phases],
             crash_recorded=recorded,
+            **extra,
         )
         if role == "worker" and not recorded:
             problems.add(
                 "crash-unrecorded",
                 "a worker's item never ended and no crash record names it or its worker",
                 nodeid=nodeid,
+                **extra,
             )
     for _key, failed in failures:
         if failed["when"] == "???":
-            failed["resolved"] = identity_of.get(failed["nodeid"])  # the join to the manifest, for a crash report
+            # the join to the manifest of the same run, for a crash report that has no item behind it
+            failed["resolved"] = identity_of.get((failed.pop("nested_run", None), failed["nodeid"]))
 
     for group, workers in sorted(groups.items()):
         if len(workers) > 1:
@@ -1224,7 +1264,13 @@ def reduce_journals(
             only_collected=only_collected,
             only_reference=only_expected,
         )
-    if any(p["role"] == "controller" for p in processes):
+    has_controller = any(p["role"] == "controller" and not p["nested_token"] for p in processes)
+    if root_workers and not has_controller:
+        problems.add(
+            "controller-missing",
+            "worker journals show an xdist run, and there is no controller journal (nor its node manifests)",
+        )
+    if has_controller:
         for worker, own in sorted(own_manifests.items()):
             if worker != "serial" and node_manifests.get(worker) != own:
                 problems.add(
