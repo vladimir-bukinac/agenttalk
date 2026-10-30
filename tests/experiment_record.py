@@ -96,14 +96,17 @@ characters) ends where this text puts the `...` and starts a recognised value, a
 ends the same value, the whole form becomes the same `<env:NAME>`, counted in the redactions.  Whole values and
 shortened forms are both looked for in the ORIGINAL text, so a value that is the start of another cannot hide the
 other's shortened form; spans that overlap become one replacement (the label of the longest), spans that only touch stay
-two.  When several values fit one form, each is matched and the masked stretch is the union of their spans.  The
-search is bounded: each `...` looks only at the 256 characters around it, and only at places where a
+two.  When several values fit one form, each is matched and the masked stretch is the union of their spans.  A lone
+piece is masked as well: pytest shortens the repr of a list or dict, so a value first in it shows only its head before
+the `...` and a value last shows only its tail after it; a stretch of at least 8 characters that ends at a `...` and
+starts a recognised value, or starts right after a `...` and ends one, becomes that value's `<env:NAME>`.  The search is
+bounded: each `...` looks only at the 256 characters around it, and only at places where a
 recognised value begins, so a 64 KiB text full of `...` is cleaned in about a second at worst (tests allow 5).
 LIMITS, stated plainly: only environment values and those four folders are recognised.
   * Values shorter than 8 characters cannot be recognised and are stored as they are.
   * A value shown in another spelling (escaped quotes or non-ASCII characters in a Python repr) is stored.
   * A value pytest shortens is recognised only by its first and last characters; a form with a piece under 4
-    characters stays as it is.
+    characters stays as it is, and so does a lone head or tail under 8 characters.
   * Node ids are kept exactly as pytest makes them (a value used in a parametrize id is stored), because the
     reducer joins on them.
   * Secrets that come from anywhere else (a file, a prompt, a network reply) cannot be recognised.
@@ -226,6 +229,26 @@ def _pattern(needles: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(n) for n in needles), re.IGNORECASE if ignorecase else 0)
 
 
+def _identity(value: str) -> str:
+    return value
+
+
+def _folder(ignorecase: bool):
+    return str.casefold if ignorecase else _identity
+
+
+@functools.lru_cache(maxsize=8)
+def _tail_index(ordered: tuple[str, ...], ignorecase: bool) -> dict[str, list[tuple[str, int]]]:
+    """{the first MIN_SECRET_LENGTH characters of a possible lone tail: [(value, where that tail starts in it)]}, for
+    tails of at most SHORTENED_WINDOW characters; for each value the longest tail comes first."""
+    fold = _folder(ignorecase)
+    index: dict[str, list[tuple[str, int]]] = {}
+    for needle in ordered:
+        for where in range(max(0, len(needle) - SHORTENED_WINDOW), len(needle) - MIN_SECRET_LENGTH + 1):
+            index.setdefault(fold(needle[where : where + MIN_SECRET_LENGTH]), []).append((needle, where))
+    return index
+
+
 @functools.lru_cache(maxsize=8)
 def _heads_pattern(heads: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
     """Finds, at every position (overlapping), the first MIN_SHORTENED_PIECE characters of some value."""
@@ -235,15 +258,18 @@ def _heads_pattern(heads: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
 def _shortened_spans(
     text: str, ordered: tuple[str, ...], found: dict[str, str], ignorecase: bool
 ) -> list[tuple[int, int, str]]:
-    """(start, end, label) of each `head...tail` in `text` that is one recognised value shown shortened.
+    """(start, end, label) of each `head...tail` in `text` that is one recognised value shown shortened, and of each
+    lone head or lone tail of one.
 
     pytest cuts a long compared value to its first and last characters with "..." between them, so neither piece is
     the whole value. Both pieces must be at least MIN_SHORTENED_PIECE characters, `head` must be a prefix and `tail`
     a suffix of the same value, each within SHORTENED_WINDOW characters of the "...". A head can only start where
-    some value begins, so only those places are tried for each "..."."""
+    some value begins, so only those places are tried for each "...". When pytest cuts the repr of a list or dict
+    instead, only one piece of the value shows: a stretch of at least MIN_SECRET_LENGTH characters ending at a "..."
+    that starts a value, or starting right after one that ends a value, is a span of its own."""
     if "..." not in text:
         return []
-    fold = str.casefold if ignorecase else (lambda value: value)
+    fold = _folder(ignorecase)
     by_head: dict[str, list[str]] = {}
     for needle in ordered:
         if len(needle) >= 2 * MIN_SHORTENED_PIECE:
@@ -253,34 +279,52 @@ def _shortened_spans(
     heads = tuple({needle[:MIN_SHORTENED_PIECE] for group in by_head.values() for needle in group})
     starts = [(match.start(), fold(match.group(1))) for match in _heads_pattern(heads, ignorecase).finditer(text)]
     positions = [start for start, _ in starts]
+    tails = _tail_index(ordered, ignorecase)
     spans: list[tuple[int, int, str]] = []
     position = text.find("...")
     while position != -1:
         first = bisect.bisect_left(positions, position - SHORTENED_WINDOW)
         last = bisect.bisect_right(positions, position - MIN_SHORTENED_PIECE)
         spans.extend(_shortened_spans_at(text, position, starts[first:last], by_head, found, fold))
+        spans.extend(_lone_tail_spans(text, position + 3, tails, found, fold))
         position = text.find("...", position + 3)
     return spans
 
 
 def _shortened_spans_at(text, position, candidates, by_head, found, fold):
-    """A span for every recognised value that fits the "..." at `position`, each from its longest head and its
-    longest tail. Several values can fit one form and show different lengths of the tail, so none is left out;
-    the spans are merged afterwards."""
+    """The spans for the "..." at `position`: for every recognised value that fits, one from its longest head and
+    longest tail. Several values can fit one form and show different lengths of the tail, so none is left out; the
+    spans are merged afterwards. The longest head of a value that is MIN_SECRET_LENGTH characters or more is a lone
+    head and a span of its own."""
     spans = []
-    seen = set()
+    whole = set()
+    lone_starts = set()
     right = text[position + 3 : position + 3 + SHORTENED_WINDOW]
     for start, key in candidates:
         head = text[start:position]
         for needle in by_head[key]:
-            if needle in seen or len(head) > len(needle) - MIN_SHORTENED_PIECE:
+            if len(head) > len(needle) or fold(head) != fold(needle[: len(head)]):
                 continue
-            if fold(head) != fold(needle[: len(head)]):
-                continue
-            seen.add(needle)  # candidates run from the longest head, so this is the longest head of this value
-            tail = _longest_tail(right, needle, fold)
-            if tail:
-                spans.append((start, position + 3 + tail, found[needle]))
+            if len(head) >= MIN_SECRET_LENGTH and start not in lone_starts:
+                lone_starts.add(start)
+                spans.append((start, position, found[needle]))
+            if needle not in whole and len(head) <= len(needle) - MIN_SHORTENED_PIECE:
+                whole.add(needle)  # candidates run from the longest head, so this is the longest head of this value
+                tail = _longest_tail(right, needle, fold)
+                if tail:
+                    spans.append((start, position + 3 + tail, found[needle]))
+    return spans
+
+
+def _lone_tail_spans(text, start, index, found, fold):
+    """A span for every recognised value whose last MIN_SECRET_LENGTH or more characters are the text from `start`."""
+    spans = []
+    seen = set()
+    for needle, where in index.get(fold(text[start : start + MIN_SECRET_LENGTH]), ()):
+        size = len(needle) - where
+        if needle not in seen and fold(text[start : start + size]) == fold(needle[where:]):
+            seen.add(needle)  # the longest tail of this value comes first
+            spans.append((start, start + size, found[needle]))
     return spans
 
 

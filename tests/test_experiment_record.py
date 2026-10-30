@@ -1467,6 +1467,8 @@ def test_the_docstring_states_the_limits_of_the_cleaning(er):
     assert "a 64 kib text full of `...` is cleaned" in flat
     assert "the masked stretch is the union of their spans" in flat
     assert "crafted on purpose to overlap or compete" in flat
+    assert "a lone piece is masked as well" in flat
+    assert "a lone head or tail under 8 characters" in flat
     assert "the probe jobs run without secrets" in flat
 
 
@@ -1600,6 +1602,7 @@ texts = {
     "ellipses": "..." * (size // 3),
     "shortened forms": form * (size // len(form)),
     "heads without tails": (os.environ["P3_S_TIME00"][:11] + "... ") * (size // 16),
+    "tails without heads": ("..." + os.environ["P3_S_TIME00"][-11:] + " ") * (size // 15),
 }
 seconds = {}
 for name, text in texts.items():
@@ -1625,7 +1628,7 @@ def test_a_long_text_full_of_ellipses_is_cleaned_within_a_small_time_limit(tmp_p
     )
     assert done.returncode == 0, done.stderr
     seconds = json.loads(done.stdout.strip().splitlines()[-1])
-    assert set(seconds) == {"dots", "ellipses", "shortened forms", "heads without tails"}
+    assert set(seconds) == {"dots", "ellipses", "shortened forms", "heads without tails", "tails without heads"}
     slow = {name: taken for name, taken in seconds.items() if taken > CLEAN_TIME_LIMIT}
     assert not slow, f"cleaning took longer than {CLEAN_TIME_LIMIT} seconds: {slow}"
 
@@ -1700,3 +1703,105 @@ def test_the_union_of_matches_reaches_the_journal_of_a_real_run(project, er, tmp
     phases = phases_of(rec)
     assert "<env:P3_S_CB64>" in phases[("test_raise", "call")]["error_text"]
     assert phases[("test_skip", "call")]["reason"] == "Skipped: <env:P3_S_CB64>"
+
+
+# --- fix round 5: N1 a lone head or a lone tail of one value ------------------------------------------------------
+
+LONE_VALUE = LONG_SENTINELS["P3_S_LONG64"]
+LONE_NEIGHBOUR = "a-long-neighbouring-item-0123456789"
+
+LONE_TESTS = """
+import os
+
+VALUE = os.environ["P3_S_ONE"]
+NEIGHBOUR = "a-long-neighbouring-item-0123456789"
+
+
+def test_list_value_first():
+    assert [VALUE, NEIGHBOUR] == ["x"]
+
+
+def test_list_value_last():
+    assert [NEIGHBOUR, VALUE] == ["x"]
+
+
+def test_dict_value_as_the_first_key():
+    assert {VALUE: 1, "z": NEIGHBOUR} == {"x": 1}
+
+
+def test_dict_value_last():
+    assert {"z": NEIGHBOUR, "k": VALUE} == {"x": 1}
+"""
+
+
+def test_a_lone_head_or_tail_of_one_value_in_a_real_run_is_masked(project, er, tmp_path, monkeypatch):
+    # N1 (P1, round 6): pytest shortens the container's repr, so a value first in a list shows only its head before the
+    # '...', and a value last shows only its tail after it. The cleaner used to need both pieces.
+    monkeypatch.setenv("P3_S_ONE", LONE_VALUE)
+    project.makepyfile(test_lone=LONE_TESTS)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec)
+
+    decoded = "\n".join(
+        value for recs in read_journals(rec).values() for r in recs for value in r.values() if isinstance(value, str)
+    )
+    raw = journal_bytes(rec).decode("utf-8")
+    leaked = [w for w in windows_of(LONE_VALUE) if w in decoded or w in raw]
+    assert not leaked, f"pieces of the value reached the journal: {sorted(leaked)[:3]}"
+    phases = phases_of(rec)
+    for name in ("list_value_first", "list_value_last", "dict_value_as_the_first_key", "dict_value_last"):
+        assert "<env:P3_S_ONE>" in phases[(f"test_{name}", "call")]["error_text"], name
+
+
+@pytest.mark.parametrize(
+    ("template", "expected"),
+    [
+        ("['{head}...m-0123456789']", "['<env:P3_S_ONE>...m-0123456789']"),  # the value first: only its head shows
+        ("['a-long-lea...{tail}']", "['a-long-lea...<env:P3_S_ONE>']"),  # the value last: only its tail shows
+        ("{{'{head}...m-0123456789': 1}}", "{{'<env:P3_S_ONE>...m-0123456789': 1}}"),
+        ("{{'z': 'a-long-lea...{tail}'}}", "{{'z': 'a-long-lea...<env:P3_S_ONE>'}}"),
+    ],
+)
+def test_a_lone_head_or_tail_of_one_value_is_masked_by_the_cleaner(er, tmp_path, monkeypatch, template, expected):
+    monkeypatch.setenv("P3_S_ONE", LONE_VALUE)
+    text = template.format(head=LONE_VALUE[:11], tail=LONE_VALUE[-11:])
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(text)
+        reason = recorder.reason_fields(text)
+    finally:
+        recorder.close()
+    want = expected.format()
+    assert fields["error_text"] == want
+    assert fields["error_redactions"] == 1
+    assert (reason["reason"], reason["reason_redactions"]) == (want, 1)
+    assert fields["error_digest"] == hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("template", "unchanged"),
+    [
+        ("{h7}...rest", True),  # a piece under 8 characters stays as it is (the stated limit)
+        ("{h8}...rest", False),
+        ("rest...{t7}", True),
+        ("rest...{t8}", False),
+        ("{m11}...rest", True),  # a stretch from the middle of the value is not its start
+        ("rest...{m11}", True),  # nor its end
+        ("{h11} ...rest", True),  # the ellipsis must touch the piece
+        ("rest... {t11}", True),
+    ],
+)
+def test_a_lone_piece_needs_eight_characters_and_must_be_a_start_or_an_end(
+    er, tmp_path, monkeypatch, template, unchanged
+):
+    monkeypatch.setenv("P3_S_ONE", LONE_VALUE)
+    v = LONE_VALUE
+    given = template.format(h7=v[:7], h8=v[:8], t7=v[-7:], t8=v[-8:], m11=v[20:31], h11=v[:11], t11=v[-11:])
+    recorder, _ = _recorder(er, tmp_path)
+    try:
+        fields = recorder.error_fields(given)
+    finally:
+        recorder.close()
+    assert (fields["error_text"] == given) is unchanged, fields["error_text"]
+    assert fields["error_redactions"] == (0 if unchanged else 1)
