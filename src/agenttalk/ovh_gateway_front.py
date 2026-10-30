@@ -612,8 +612,9 @@ class GatewayFront:
         With a `listener` (a socket the caller has already bound and is listening on, which keeps the port held
         from bind to serving), the server uses that socket and does not bind. From the moment of the call the
         server owns the listener: `server_close()` closes it, and every refusal below closes it too, so a
-        refused hand-over leaks nothing. Where the platform cannot report whether the listener listens (macOS answers
-        ENOPROTOOPT), the hand-over calls `listen` on it instead of asking; any other error still closes it."""
+        refused hand-over leaks nothing (except the running server's own socket, handed again: it stays open).
+        Where the platform cannot report whether the listener listens (macOS answers ENOPROTOOPT), the hand-over
+        calls `listen` on it instead of asking; any other error still closes it."""
         server = None
         try:
             if self._server is not None:
@@ -664,8 +665,9 @@ class GatewayFront:
         except BaseException:
             if server is not None and server.socket is not listener:
                 server.socket.close()  # the constructor's own spare socket
-            if listener is not None:
-                listener.close()
+            serving = self._server.socket if self._server is not None else None
+            if listener is not None and listener is not serving:
+                listener.close()  # but never the running server's own socket, handed again by mistake
             raise
 
     def internal_liveliness(self) -> bool:

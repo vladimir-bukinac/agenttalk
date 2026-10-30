@@ -540,6 +540,39 @@ def test_running_front_keeps_the_handed_over_port_from_bind_to_teardown(tmp_path
     assert listener.close_count == 1
 
 
+def test_a_refused_hand_over_of_the_running_servers_own_socket_does_not_close_it(tmp_path) -> None:
+    """`make_server(listener=<the socket the running server serves on>)` is refused ('already exists'), and the
+    cleanup of that refusal must not close the live socket: the front keeps serving and the one close is its own."""
+    listener, _port = held_listener()
+    with FakeUpstream() as upstream:
+        with RunningFront(tmp_path, upstream, listener=listener) as running:
+            with pytest.raises(gateway.GatewayConfigError, match="already exists"):
+                running.front.make_server(listener=running.server.socket)
+
+            assert listener.close_count == 0
+            assert listener.fileno() != -1
+            assert running.front._server is running.server
+            status, _body = running.request()
+            assert status == 200
+    assert listener.close_count == 1
+
+
+def test_a_refused_hand_over_of_another_socket_while_a_server_exists_still_closes_that_socket(tmp_path) -> None:
+    listener, _port = held_listener()
+    other, _other_port = held_listener()
+    with FakeUpstream() as upstream:
+        with RunningFront(tmp_path, upstream, listener=listener) as running:
+            with pytest.raises(gateway.GatewayConfigError, match="already exists"):
+                running.front.make_server(listener=other)
+
+            assert other.close_count == 1
+            assert listener.close_count == 0
+            status, _body = running.request()
+            assert status == 200
+    assert listener.close_count == 1
+    assert other.close_count == 1
+
+
 def test_start_held_front_holds_its_port_without_any_opt_in(tmp_path) -> None:
     """The proof of the repair that really runs: the helper the LiteLLM conformance test uses (that test skips
     without its opt-in) starts the front here against a fake upstream, and makes the same four checks."""
