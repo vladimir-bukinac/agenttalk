@@ -175,6 +175,17 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   row give), bad-field also for an event kind outside the schema (EVENT_KINDS) and for a
                   process-start whose worker id or nested token does not fit its role (a nested process needs a
                   token; a worker needs its id; a serial or controller process has neither),
+                  journal-too-many-records (more lines than MAX_JOURNAL_RECORDS in one journal, or than
+                  MAX_TOTAL_RECORDS across the journals: counted before the journal is split, so a file of newline
+                  bytes costs nothing; none of it is read), manifest-identity-mismatch (a session manifest pairs a raw
+                  id with an identity that does not follow from it: the canonical id is the raw id minus its group
+                  suffix, the effective group is the requested group exactly when the suffix is there),
+                  item-not-in-manifest (an item started that its own process's session manifest never listed),
+                  manifest-duplicate-id (a manifest lists a raw id twice, or two raw ids with one canonical id),
+                  item-end-outside-item (an item-end with no running item: it is not counted either),
+                  exit-status-mismatch (the exit-status event and the completion trailer disagree; the trailer
+                  carries the exit status, required, and a trailer status other than 0 or 1 is an error on its own,
+                  so first_error can be the trailer),
                   multiple-root-runs (more than one root serial journal, more than one root controller, or one
                   worker id twice: stale evidence from an earlier run in a reused folder cannot be told from this
                   run's) and mixed-root-topology (a root serial run and a root xdist run in one folder),
@@ -248,8 +259,10 @@ Limits of the reducer
 It reads the journals of one plain record folder (a link or a reparse point is refused, the folder and each
 journal alike, and a journal must still be the same file after it is opened): at most 512 journals and 256 MiB
 of journal bytes together, checked before any is parsed (MAX_JOURNALS, MAX_TOTAL_JOURNAL_BYTES), and 64 MiB for
-one journal.  More is refused with input-too-large, not read; parsed records take several times their bytes in
-memory, which is why the total is bounded.
+one journal; and at most 500,000 lines in one journal and 1,000,000 together (MAX_JOURNAL_RECORDS,
+MAX_TOTAL_RECORDS), counted with the bytes in hand and before the split.  More is refused with
+input-too-large or journal-too-many-records, not read; parsed records take several times their bytes in memory,
+which is why the totals are bounded.
 
 The folder protection.  The record folder is opened ONCE and that held object is the baseline: its device, file
 id and mode, and on Windows its own final path (GetFinalPathNameByHandleW of the handle, never a second lookup
@@ -303,6 +316,8 @@ MAX_HANDOFF_BYTES = 4096
 MAX_JOURNAL_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_JOURNAL_BYTES = 256 * 1024 * 1024
 MAX_JOURNALS = 512
+MAX_JOURNAL_RECORDS = 500_000
+MAX_TOTAL_RECORDS = 1_000_000
 MAX_PROBLEMS_PER_KIND = 20
 DIGEST_ALGORITHM = "sha256"
 MIN_SECRET_LENGTH = 8
@@ -1019,6 +1034,8 @@ class _Problems:
 
 # The record folder being reduced, verified once by `reduce_journals` and held while its journals are opened.
 _FOLDER: contextvars.ContextVar[Any] = contextvars.ContextVar("experiment_record_folder", default=None)
+# The records the journals of one reduction may still hold together (MAX_TOTAL_RECORDS counts down as they are read).
+_RECORDS_LEFT: contextvars.ContextVar[list[int] | None] = contextvars.ContextVar("experiment_record_left", default=None)
 _HAS_DIR_FD = hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd and os.stat in os.supports_dir_fd
 
 
@@ -1240,6 +1257,20 @@ def _read_journal_in(folder: _Folder, path: Path, problems: _Problems) -> list[d
     if len(data) > MAX_JOURNAL_BYTES:
         problems.add("journal-too-large", f"the journal is over {MAX_JOURNAL_BYTES} bytes", file=path.name)
         return None
+    # The number of lines is counted BEFORE anything is split or parsed: a file of newline bytes passes the byte limits,
+    # and a record (even an unusable one) costs far more than the byte it came from.
+    budget = _RECORDS_LEFT.get()  # [records still allowed across the journals of this reduction], or None
+    cap = MAX_JOURNAL_RECORDS if budget is None else min(MAX_JOURNAL_RECORDS, budget[0])
+    lines_in_file = data.count(b"\n")
+    if lines_in_file > cap:
+        problems.add(
+            "journal-too-many-records",
+            f"the journal has {lines_in_file} lines; at most {cap} more records are read ({MAX_JOURNAL_RECORDS} per "
+            f"journal, {MAX_TOTAL_RECORDS} together), and none of it was",
+            file=path.name,
+            lines=lines_in_file,
+        )
+        return None
     # Split the BYTES on newline first and decode each complete line alone: a writer that died inside a multibyte
     # character leaves bad bytes only in the last, unterminated piece, and every complete line before it is kept.
     lines = data.split(b"\n")
@@ -1267,6 +1298,8 @@ def _read_journal_in(folder: _Folder, path: Path, problems: _Problems) -> list[d
             found.append(unusable)
             continue
         found.append(record)
+    if budget is not None:
+        budget[0] -= len(found)
     return found
 
 
@@ -1360,7 +1393,7 @@ _EVENT_FIELDS = {
     "worker-down": {"has_error": (_is_bool, True), "down_worker": (_is_text, False), "error_text": (_is_text, False)},
     "nested-launch": {"token": (_is_text, True)},
     "exit-status": {"exitstatus": (_is_int, True)},
-    "trailer": {"complete": (_is_bool, True), "records": (_is_int, True), "exitstatus": (_is_int, False)},
+    "trailer": {"complete": (_is_bool, True), "records": (_is_int, True), "exitstatus": (_is_int, True)},
 }
 
 
@@ -1423,6 +1456,46 @@ def _phase_problem(phases: list[tuple[str, str]]) -> tuple[str, str] | None:
     if missing:
         return "phase-missing", f"no {', '.join(missing)} phase was recorded"
     return None
+
+
+def _identity_fits(raw: str, identity: dict[str, Any]) -> bool:
+    """The identity a session manifest pairs with `raw` follows from it: the canonical id is the raw id minus its
+    group suffix, and the effective group is the requested group exactly when the raw id ends with its suffix."""
+    group = identity["requested_group"]
+    suffixed = bool(group) and raw.endswith("@" + group)
+    return identity["canonical_id"] == canonical_id(raw, group) and identity["effective_group"] == (
+        group if suffixed else None
+    )
+
+
+def _check_manifest_ids(record: dict[str, Any], name: str, problems: _Problems, extra: dict[str, Any]) -> None:
+    """A manifest lists each id once; a session manifest pairs each raw id with an identity that follows from it."""
+    raw_ids = record["raw_ids"]
+    named = [raw for raw, count in Counter(raw_ids).items() if count > 1]
+    if record["source"] == "session":
+        for raw, identity in zip(raw_ids, record["identities"], strict=True):
+            if not _identity_fits(raw, identity):
+                problems.add(
+                    "manifest-identity-mismatch",
+                    "the identity paired with a raw id is not the one that raw id gives",
+                    nodeid=raw,
+                    file=name,
+                    **extra,
+                )
+        named += [
+            canonical
+            for canonical, count in Counter(i["canonical_id"] for i in record["identities"]).items()
+            if count > 1 and canonical not in named
+        ]
+    for nodeid in named:
+        problems.add(
+            "manifest-duplicate-id",
+            "the manifest lists this id more than once, so one start cannot account for it",
+            nodeid=nodeid,
+            file=name,
+            source=record["source"],
+            **extra,
+        )
 
 
 def _identity_difference(expected: dict[str, Any], record: dict[str, Any]) -> str | None:
@@ -1511,7 +1584,11 @@ def reduce_journals(
     anchor, paths = _journal_paths(Path(folder), problems)
     token = _FOLDER.set(anchor)  # every journal is opened against the one folder that was verified
     try:
-        journals = [(path, _read_journal(path, problems)) for path in paths]
+        budget_token = _RECORDS_LEFT.set([MAX_TOTAL_RECORDS])
+        try:
+            journals = [(path, _read_journal(path, problems)) for path in paths]
+        finally:
+            _RECORDS_LEFT.reset(budget_token)
     finally:
         _FOLDER.reset(token)
         if anchor is not None:
@@ -1575,6 +1652,12 @@ def reduce_journals(
                 "trailer-count-mismatch",
                 f"the trailer counts {trailer['records']} records before it; there are {len(recs) - 1}",
                 file=path.name,
+            )
+        if trailer is not None and any(
+            r["kind"] == "exit-status" and r.get("exitstatus") != trailer.get("exitstatus") for r in recs
+        ):
+            problems.add(
+                "exit-status-mismatch", "the exit-status event and the completion trailer disagree", file=path.name
             )
 
     roots = [
@@ -1650,6 +1733,7 @@ def reduce_journals(
             if kind == "nested-launch":
                 launches.append(str(record.get("token")))
             elif kind == "collection-manifest":
+                _check_manifest_ids(record, name, problems, extra)
                 if record["source"] == "node" and controller_journal:
                     node_manifests[run][str(record["source_worker"])] = record["raw_ids"]
                 elif record["source"] == "session" and reconcile:
@@ -1669,7 +1753,7 @@ def reduce_journals(
                 kind == "worker-down"
                 and record.get("has_error")
                 or kind in ("collection-error", "internal-error")
-                or (kind == "exit-status" and record.get("exitstatus") not in (0, 1))
+                or (kind in ("exit-status", "trailer") and record.get("exitstatus") not in (0, 1))
             ):
                 errors.append((key, entry))
                 if kind == "worker-down":
@@ -1702,6 +1786,14 @@ def reduce_journals(
                                 **extra,
                             )
             elif kind == "item-start" and reconcile:
+                if has_manifest and record["nodeid"] not in own_identity:
+                    problems.add(
+                        "item-not-in-manifest",
+                        "an item started that this process's own collection manifest never listed",
+                        nodeid=record["nodeid"],
+                        file=name,
+                        **extra,
+                    )
                 group = record.get("requested_group")
                 canonical = canonical_of[record["nodeid"]] = canonical_id(record["nodeid"], group)
                 differs = _identity_difference(
@@ -1740,9 +1832,18 @@ def reduce_journals(
                 }
             elif kind == "item-end" and reconcile:
                 current = open_items.pop(record["nodeid"], None)
-                if root and record["nodeid"] in canonical_of:
+                if current is None:
+                    problems.add(
+                        "item-end-outside-item",
+                        "an item ended that was not running",
+                        nodeid=record["nodeid"],
+                        file=name,
+                        **extra,
+                    )
+                    continue
+                if root:
                     items[canonical_of[record["nodeid"]]]["ended"] += 1
-                found_problem = _phase_check(current["phases"], require_phases) if current is not None else None
+                found_problem = _phase_check(current["phases"], require_phases)
                 if found_problem is not None:
                     problems.add(found_problem[0], found_problem[1], nodeid=current["canonical"], file=name, **extra)
         for nodeid, current in open_items.items():

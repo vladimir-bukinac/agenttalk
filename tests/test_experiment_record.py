@@ -4175,3 +4175,233 @@ def test_an_item_start_not_in_the_manifest_still_has_its_canonical_id_checked_ag
     summary = er.reduce_journals(tmp_path, ["t.py::a"])
 
     assert "item-identity-mismatch" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+# --- round 16: the connector's fourth review (five threads on fb060644) -------------------------------------------
+
+
+def journal_record_count(path):
+    return len([line for line in Path(path).read_text(encoding="utf-8").split("\n") if line])
+
+
+# thread 4430325801 (P1): the number of records is capped before the journal is split
+
+
+def test_a_journal_with_more_lines_than_the_cap_is_refused_before_it_is_split(er, tmp_path, monkeypatch):
+    monkeypatch.setattr(er, "MAX_JOURNAL_RECORDS", 20)
+    (tmp_path / "journal-serial-11-1000.jsonl").write_bytes(b"\n" * 21)
+
+    summary = er.reduce_journals(tmp_path)
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "journal-too-many-records"]
+    assert problem["file"] == "journal-serial-11-1000.jsonl" and "20" in problem["detail"]
+    assert kinds(summary["problems"]) == {"journal-too-many-records"}  # no line was looked at, so no bad-line either
+    assert summary["accepted"] is False and summary["status"] == "incomplete"
+
+
+def test_a_journal_of_exactly_the_cap_is_read_and_one_record_more_is_refused(er, tmp_path, monkeypatch):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    count = journal_record_count(path)
+
+    monkeypatch.setattr(er, "MAX_JOURNAL_RECORDS", count)
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"] is True
+    monkeypatch.setattr(er, "MAX_JOURNAL_RECORDS", count - 1)
+    refused = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "journal-too-many-records" in kinds(refused["problems"]) and refused["accepted"] is False
+
+
+def test_the_journals_together_may_not_hold_more_records_than_the_total_cap(er, tmp_path, monkeypatch):
+    first = write_journal(tmp_path, "controller", 10)
+    second = write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a", None)])
+    total = journal_record_count(first) + journal_record_count(second)
+
+    monkeypatch.setattr(er, "MAX_TOTAL_RECORDS", total)
+    assert "journal-too-many-records" not in kinds(er.reduce_journals(tmp_path)["problems"])
+    monkeypatch.setattr(er, "MAX_TOTAL_RECORDS", total - 1)
+    refused = er.reduce_journals(tmp_path)
+
+    (problem,) = [p for p in refused["problems"] if p["kind"] == "journal-too-many-records"]
+    assert problem["file"] == second.name and refused["accepted"] is False
+
+
+def test_a_journal_of_newlines_over_the_default_cap_is_refused_without_a_record_per_line(er, tmp_path):
+    import tracemalloc
+
+    (tmp_path / "journal-serial-11-1000.jsonl").write_bytes(b"\n" * (er.MAX_JOURNAL_RECORDS + 100_000))
+    tracemalloc.start()
+    try:
+        summary = er.reduce_journals(tmp_path)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+    assert "journal-too-many-records" in kinds(summary["problems"]) and summary["accepted"] is False
+    # the read buffer (64 MiB, allocated up front) is the whole of it; a record per line would add ~250 bytes each
+    assert peak < 128 * 1024 * 1024, peak
+
+
+def test_the_record_caps_leave_room_for_a_real_run(er):
+    # about 5 records per item (start, three phases, end) plus the manifests: a 12,000-item run is far below the cap
+    assert er.MAX_JOURNAL_RECORDS >= 12_000 * 5 * 5 and er.MAX_TOTAL_RECORDS >= er.MAX_JOURNAL_RECORDS
+
+
+# thread 4430325805 (P2): a manifest identity is bound to its own raw id, and a start must be in its own manifest
+
+
+def test_a_manifest_whose_raw_id_disagrees_with_its_identity_is_not_accepted(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::b", None)])
+    tamper(path, "collection-manifest", raw_ids=["t.py::a"])  # the identity still says t.py::b
+
+    summary = er.reduce_journals(tmp_path, ["t.py::b"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "manifest-identity-mismatch"]
+    assert problem["nodeid"] == "t.py::a" and summary["accepted"] is False
+
+
+@pytest.mark.parametrize(
+    "identity",
+    [
+        {"canonical_id": "t.py::a", "param_id": None, "requested_group": "g1", "effective_group": None},
+        {"canonical_id": "t.py::a", "param_id": None, "requested_group": None, "effective_group": "g1"},
+        {"canonical_id": "t.py::a@g1", "param_id": None, "requested_group": "g1", "effective_group": "g1"},
+    ],
+    ids=["group-suffix-not-seen", "effective-without-request", "canonical-keeps-suffix"],
+)
+def test_a_manifest_identity_whose_groups_do_not_follow_from_its_raw_id_is_not_accepted(er, tmp_path, identity):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a@g1", "g1")])
+    tamper(path, "collection-manifest", identities=[identity])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "manifest-identity-mismatch" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+def test_an_item_start_for_an_id_its_own_manifest_never_listed_is_not_accepted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], collected=[("t.py::other", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "item-not-in-manifest"]
+    assert problem["nodeid"] == "t.py::a" and summary["accepted"] is False
+
+
+def test_a_grouped_member_whose_identity_follows_from_its_raw_id_is_accepted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a@g1", "g1"), ("t.py::b", None)])
+
+    assert er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])["accepted"] is True
+
+
+# thread 4430325808 (P2): a nonzero exit status in the completion trailer is an error on its own
+
+
+@pytest.mark.parametrize("status", [2, 3, 4, 5])
+def test_a_trailer_with_an_exit_status_other_than_ok_or_tests_failed_is_an_error(er, tmp_path, status):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    tamper(path, "trailer", exitstatus=status)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False and summary["first_error"]["kind"] == "trailer"
+    assert summary["first_error"]["exitstatus"] == status
+
+
+@pytest.mark.parametrize("status", [0, 1])
+def test_a_trailer_with_status_zero_or_one_is_not_an_error(er, tmp_path, status):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    tamper(path, "trailer", exitstatus=status)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is True and summary["first_error"] is None
+
+
+def test_a_trailer_without_an_exit_status_is_a_bad_field(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    tamper(path, "trailer", exitstatus=...)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False and "bad-field" in kinds(summary["problems"])
+
+
+def test_an_exit_status_event_and_a_trailer_that_disagree_are_not_accepted(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("exit-status", {"exitstatus": 0})])
+    tamper(path, "trailer", exitstatus=1)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "exit-status-mismatch" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+def test_an_exit_status_event_and_a_trailer_that_agree_on_an_error_give_the_earlier_one_as_first(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("exit-status", {"exitstatus": 2})])
+    tamper(path, "trailer", exitstatus=2)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["first_error"]["kind"] == "exit-status" and "exit-status-mismatch" not in kinds(summary["problems"])
+
+
+# thread 4430325811 (P2): an item end needs an active item
+
+
+def test_a_second_item_end_for_one_start_is_not_accepted_and_is_not_counted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("item-end", {"nodeid": "t.py::a"})])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "item-end-outside-item"]
+    assert problem["nodeid"] == "t.py::a" and summary["items"]["t.py::a"]["ended"] == 1
+    assert summary["accepted"] is False
+
+
+def test_an_item_end_for_an_item_that_never_started_is_not_accepted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("item-end", {"nodeid": "t.py::ghost"})])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "item-end-outside-item" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+# thread 4430325814 (P2): an id is listed once in a manifest
+
+
+def test_the_same_raw_id_twice_in_one_session_manifest_is_not_accepted(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], collected=[("t.py::a", None), ("t.py::a", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "manifest-duplicate-id"]
+    assert problem["nodeid"] == "t.py::a" and summary["accepted"] is False
+
+
+def test_two_raw_ids_with_one_canonical_id_in_one_manifest_are_not_accepted(er, tmp_path):
+    rows = [("t.py::a@g1", "g1"), ("t.py::a", None)]
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], collected=rows)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "manifest-duplicate-id" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+def test_the_same_raw_id_twice_in_a_controllers_node_manifest_is_not_accepted(er, tmp_path):
+    node = manifest_fields([("t.py::a", None), ("t.py::a", None)], source="node", source_worker="gw0")
+    write_journal(tmp_path, "controller", 10, extra=[("collection-manifest", node)])
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "manifest-duplicate-id" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+def test_the_docstring_names_every_problem_kind_round_sixteen_added(er):
+    for kind in (
+        "journal-too-many-records",
+        "manifest-identity-mismatch",
+        "item-not-in-manifest",
+        "manifest-duplicate-id",
+        "item-end-outside-item",
+        "exit-status-mismatch",
+    ):
+        assert kind in er.__doc__, kind
