@@ -204,7 +204,9 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   process its journals name as their `parent_pid`: reachable means launched, through such records, from
                   a root process), duplicate-id also per nested run (an item started twice in one nested run, with
                   `nested_run`), suffix-missing derived from the node id and the requested group (a persisted
-                  `suffix_missing` that disagrees is an item-identity-mismatch), folder-unreadable also when the held
+                  `suffix_missing` that disagrees is an item-identity-mismatch; this is checked for every process that
+                  runs items, a nested run's too, by the writer's rule: an empty group name is a group),
+                  folder-unreadable also when the held
                   folder cannot be listed,
                   manifest-disagreement (the controller's manifest for a worker is missing or differs from the
                   worker's own), collection-mismatch (the collected canonical ids differ from `expected_ids`),
@@ -392,6 +394,11 @@ def canonical_id(raw_id: str, requested_group: str | None) -> str:
         if raw_id.endswith(suffix):
             return raw_id[: -len(suffix)]
     return raw_id
+
+
+def _suffix_missing(raw_id: str, requested_group: str | None) -> bool:
+    """The writer's rule exactly: a group was requested (an empty name counts) and the node id does not end with it."""
+    return requested_group is not None and not raw_id.endswith("@" + requested_group)
 
 
 def _encode(text: str) -> bytes:
@@ -1477,7 +1484,7 @@ def _identity_fits(raw: str, identity: dict[str, Any]) -> bool:
     """The identity a session manifest pairs with `raw` follows from it: the canonical id is the raw id minus its
     group suffix, and the effective group is the requested group exactly when the raw id ends with its suffix."""
     group = identity["requested_group"]
-    suffixed = bool(group) and raw.endswith("@" + group)
+    suffixed = group is not None and raw.endswith("@" + group)
     return identity["canonical_id"] == canonical_id(raw, group) and identity["effective_group"] == (
         group if suffixed else None
     )
@@ -1827,28 +1834,31 @@ def reduce_journals(
                 if run is not None:
                     nested_started[run].add(canonical)
                     nested_starts[(run, canonical)] += 1
+                # Derived from the node id and the requested group, never trusted from the persisted flag; for every
+                # process that runs items, the root run's and each nested run's.
+                missing = _suffix_missing(record["nodeid"], group)
+                if "suffix_missing" in record and record["suffix_missing"] != missing:
+                    problems.add(
+                        "item-identity-mismatch",
+                        "the item's suffix_missing is not the one its node id and requested group give",
+                        nodeid=record["nodeid"],
+                        file=name,
+                        **extra,
+                    )
+                if missing and loadgroup:
+                    problems.add(
+                        "suffix-missing",
+                        "a group member has no @group suffix in its node id",
+                        nodeid=record["nodeid"],
+                        file=name,
+                        **extra,
+                    )
                 if root:
                     item = items.setdefault(canonical, {"started": 0, "ended": 0, "workers": [], "group": group})
                     item["started"] += 1
                     item["workers"].append(info["worker"] or info["role"])
                     if record.get("effective_group"):
                         groups.setdefault(record["effective_group"], set()).add(info["worker"] or info["role"])
-                    # Derived from the node id and the requested group, never trusted from the persisted flag.
-                    missing = bool(group) and not record["nodeid"].endswith("@" + group)
-                    if "suffix_missing" in record and record["suffix_missing"] != missing:
-                        problems.add(
-                            "item-identity-mismatch",
-                            "the item's suffix_missing is not the one its node id and requested group give",
-                            nodeid=record["nodeid"],
-                            file=name,
-                        )
-                    if missing and loadgroup:
-                        problems.add(
-                            "suffix-missing",
-                            "a group member has no @group suffix in its node id",
-                            nodeid=record["nodeid"],
-                            file=name,
-                        )
                 if record["nodeid"] in open_items:  # started again before it ended
                     again = open_items[record["nodeid"]]["phases"]
                     unfinished.append((name, info["role"], info["worker"], run, record["nodeid"], again))

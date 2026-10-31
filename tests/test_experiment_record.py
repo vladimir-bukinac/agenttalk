@@ -119,9 +119,11 @@ def records(rec, kind):
 def identity_fields(raw, group):
     """The identity a recorder writes for an item: the canonical id (the raw id minus its `@group` suffix), no
     parameter id (these hand-made ids have none) and the requested and effective group."""
-    suffixed = bool(group) and raw.endswith("@" + group)
+    suffixed = group is not None and raw.endswith("@" + group)
     return {
-        "canonical_id": raw[: -len(group) - 1] if suffixed else raw,
+        "canonical_id": raw[: -len(group) - 1]
+        if suffixed and group
+        else raw,  # the writer strips a non-empty name only
         "param_id": None,
         "requested_group": group,
         "effective_group": group if suffixed else None,
@@ -134,7 +136,7 @@ def item_start_fields(raw, group):
         "nodeid": raw,
         "requested_group": group,
         "effective_group": fields["effective_group"],
-        "suffix_missing": bool(group) and fields["effective_group"] is None,
+        "suffix_missing": group is not None and fields["effective_group"] is None,
         "canonical_id": fields["canonical_id"],
         "param_id": None,
     }
@@ -4913,3 +4915,95 @@ def test_the_docstring_names_the_round_nineteen_problem_kinds(er):
         "nested-run-unreachable",
     ):
         assert kind in er.__doc__, kind
+
+
+# --- round 20: the suffix check covers every reconciled process; the empty group name follows the writer -----------
+
+
+def _nested_suffix_run(tmp_path, topology, raw, persisted="natural"):
+    """A root launcher and one complete nested loadgroup run whose only item has requested group g and node id `raw`."""
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=_launch(NESTED_TOKEN))
+    row = (raw, "g")
+    if topology == "serial":
+        path = write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, starts=[row])
+    else:
+        nodes = [("collection-manifest", manifest_fields([row], "node", "gw0"))]
+        write_journal(tmp_path, "nested", 12, nested_token=NESTED_TOKEN, extra=nodes)
+        path = write_journal(tmp_path, "worker", 13, worker="gw0", nested_token=NESTED_TOKEN, starts=[row])
+    if persisted != "natural":
+        damaged(path, "item-start", suffix_missing=persisted)
+
+
+@pytest.mark.parametrize("persisted", [False, None, True], ids=["flag-false", "flag-omitted", "flag-true"])
+@pytest.mark.parametrize("topology", ["serial", "worker"])
+def test_n1_a_nested_item_missing_its_group_suffix_is_refused_like_a_root_item(er, tmp_path, topology, persisted):
+    _nested_suffix_run(tmp_path, topology, "n.py::x", persisted)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    problem = next(p for p in summary["problems"] if p["kind"] == "suffix-missing")
+    assert problem["nested_run"] == NESTED_TOKEN and problem["nodeid"] == "n.py::x"
+    assert summary["accepted"] is False
+
+
+@pytest.mark.parametrize("topology", ["serial", "worker"])
+def test_n1_a_nested_item_with_its_group_suffix_is_accepted(er, tmp_path, topology):
+    _nested_suffix_run(tmp_path, topology, "n.py::x@g")
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["problems"] == [] and summary["accepted"] is True
+
+
+@pytest.mark.parametrize("topology", ["serial", "worker"])
+def test_n1_a_nested_persisted_flag_that_contradicts_the_node_id_is_refused(er, tmp_path, topology):
+    _nested_suffix_run(tmp_path, topology, "n.py::x@g", persisted=True)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    problem = next(p for p in summary["problems"] if p["kind"] == "item-identity-mismatch")
+    assert problem["nested_run"] == NESTED_TOKEN
+
+
+EMPTY_GROUP = """
+import pytest
+
+pytestmark = pytest.mark.xdist_group("")
+
+
+def test_x():
+    assert True
+"""
+
+
+def test_n2_a_real_serial_run_with_an_empty_group_name_is_accepted(project, er, tmp_path):
+    # The writer says suffix_missing = requested_group is not None and effective_group is None, so "" counts as a group.
+    project.makepyfile(test_mod=EMPTY_GROUP)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec).assert_outcomes(passed=1)
+
+    (start,) = [r for _, r in records(rec, "item-start")]
+    assert (start["requested_group"], start["effective_group"], start["suffix_missing"]) == ("", None, True)
+    summary = er.reduce_journals(rec, expected)
+    assert summary["accepted"], summary["problems"]
+
+
+def test_n2_an_empty_group_name_in_a_hand_made_journal_follows_the_same_rule(er, tmp_path):
+    quiet, loud = tmp_path / "quiet", tmp_path / "loud"
+    quiet.mkdir()
+    loud.mkdir()
+    write_journal(quiet, "serial", 11, starts=[("t.py::a", "")], loadgroup=False)
+    assert er.reduce_journals(quiet, ["t.py::a"])["problems"] == []
+    write_journal(loud, "serial", 11, starts=[("t.py::a", "")], loadgroup=True)
+    assert "suffix-missing" in kinds(er.reduce_journals(loud, ["t.py::a"])["problems"])
+
+
+def test_n2_the_manifest_check_also_treats_an_empty_group_name_as_a_group(er, tmp_path):
+    # raw id ending in "@" with the requested group "": the writer's effective group is "" and the canonical id is whole
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a@", "")], loadgroup=False)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a@"])
+
+    assert summary["problems"] == [], summary["problems"]
