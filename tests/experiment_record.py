@@ -194,6 +194,18 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   run's) and mixed-root-topology (a root serial run and a root xdist run in one folder),
                   multiple-nested-runs (the same rule per nested token: two `nested` journals, or one worker id
                   twice, under one token; it carries `nested_run`),
+                  workers-collected-differently (the workers of one run did not all collect the same ordered list,
+                  raw ids and identities: xdist gives them one common collection; per run, with `nested_run`),
+                  crash-report-outside-controller (a "???" crash report in a serial or worker journal: only a
+                  controller writes one, and only a controller's report excuses an unfinished item),
+                  crash-report-unknown-item (a controller's "???" report for an id none of its node manifests lists),
+                  worker-evidence-missing (a root controller journal and neither a worker journal nor a node manifest),
+                  nested-run-unreachable (a nested run whose launch record is not in a reachable run, or not from the
+                  process its journals name as their `parent_pid`: reachable means launched, through such records, from
+                  a root process), duplicate-id also per nested run (an item started twice in one nested run, with
+                  `nested_run`), suffix-missing derived from the node id and the requested group (a persisted
+                  `suffix_missing` that disagrees is an item-identity-mismatch), folder-unreadable also when the held
+                  folder cannot be listed,
                   manifest-disagreement (the controller's manifest for a worker is missing or differs from the
                   worker's own), collection-mismatch (the collected canonical ids differ from `expected_ids`),
                   never-started (collected but never started: the run stopped before it; checked for every
@@ -1565,6 +1577,10 @@ def _journal_paths(folder: Path, problems: _Problems) -> tuple[_Folder | None, l
             anchor.close()
             return None, []
         return anchor, paths
+    except OSError as error:  # EACCES, EIO, ...: a named refusal, like the stat and open failures
+        anchor.close()
+        problems.add("folder-unreadable", f"the record folder is held but its entries could not be listed: {error}")
+        return None, []
     except BaseException:
         anchor.close()  # owned from the moment it was opened: any exception during the listing releases it
         raise
@@ -1698,7 +1714,12 @@ def reduce_journals(
     # An item that started and never ended: (journal, role, worker, nested run or None, raw id, phases seen).
     unfinished: list[tuple[str, str, str | None, str | None, str, list[tuple[str, str]]]] = []
     crashed_workers: set[tuple[str | None, str]] = set()  # (nested run or None, worker id) with a worker-down error
-    crashed_ids: set[tuple[str | None, str]] = set()  # (nested run or None, raw id) of a "???" crash report
+    crashed_ids: set[tuple[str | None, str]] = set()  # (nested run or None, raw id) of a controller's "???" report
+    crash_reports: list[tuple[str | None, str, str, bool]] = []  # (nested run, raw id, journal, from a controller)
+    own_sessions: dict[str | None, dict[str, str]] = defaultdict(dict)  # run -> worker id -> its session manifest
+    launched_by: dict[str, list[tuple[str | None, Any]]] = defaultdict(list)  # token -> (launching run, its pid)
+    nested_parents: dict[str, set[Any]] = defaultdict(set)  # nested run -> the parent_pid its journals name
+    nested_starts: Counter[tuple[str, str]] = Counter()  # (nested run, canonical id) -> item starts
     collected: dict[str, None] = {}  # canonical ids, in the order they first appear in a manifest
     identity_of: dict[tuple[str | None, str], dict[str, Any]] = {}  # (nested run, raw id) -> identity, from manifests
     # Per run (None: the root run; else the nested run's token): worker id -> the raw ids its own manifest lists, and
@@ -1715,6 +1736,8 @@ def reduce_journals(
         if info["nested_token"]:
             journaled.add(info["nested_token"])
         run = info["nested_token"] or None  # the nested run this journal belongs to; None for the root run
+        if run is not None:
+            nested_parents[run].add(next((r for r in recs if r["kind"] == "process-start"), {}).get("parent_pid"))
         # Every process that runs items is reconciled, nested ones too, run by run; only the root run's items feed
         # the collection, the groups and the join with the serial reference.
         reconcile = info["role"] in ("serial", "worker", "nested")
@@ -1738,6 +1761,7 @@ def reduce_journals(
             entry = {**record, "file": name}
             if kind == "nested-launch":
                 launches.append(str(record.get("token")))
+                launched_by[str(record.get("token"))].append((run, info["pid"]))
             elif kind == "collection-manifest":
                 _check_manifest_ids(record, name, problems, extra)
                 if record["source"] == "node" and controller_journal:
@@ -1749,6 +1773,9 @@ def reduce_journals(
                     has_manifest = True
                     if info["role"] == "worker":
                         own_manifests[run][str(info["worker"])] = record["raw_ids"]
+                        own_sessions[run][str(info["worker"])] = json.dumps(
+                            [record["raw_ids"], record["identities"]], sort_keys=True
+                        )
                     if root:
                         for identity in record["identities"]:
                             collected.setdefault(identity["canonical_id"])
@@ -1768,7 +1795,9 @@ def reduce_journals(
                 if record.get("outcome") == "failed":
                     failures.append((key, entry))
                 if record["when"] == "???":  # the controller's report of a worker that died in this item
-                    crashed_ids.add((run, record["nodeid"]))
+                    crash_reports.append((run, record["nodeid"], name, controller_journal))
+                    if controller_journal:  # only a controller's report can excuse an item that never ended
+                        crashed_ids.add((run, record["nodeid"]))
                     entry["nested_run"] = run
                 elif reconcile:
                     current = open_items.get(record["nodeid"])
@@ -1797,13 +1826,23 @@ def reduce_journals(
                 canonical = canonical_of[record["nodeid"]] = canonical_id(record["nodeid"], group)
                 if run is not None:
                     nested_started[run].add(canonical)
+                    nested_starts[(run, canonical)] += 1
                 if root:
                     item = items.setdefault(canonical, {"started": 0, "ended": 0, "workers": [], "group": group})
                     item["started"] += 1
                     item["workers"].append(info["worker"] or info["role"])
                     if record.get("effective_group"):
                         groups.setdefault(record["effective_group"], set()).add(info["worker"] or info["role"])
-                    if record.get("suffix_missing") and loadgroup:
+                    # Derived from the node id and the requested group, never trusted from the persisted flag.
+                    missing = bool(group) and not record["nodeid"].endswith("@" + group)
+                    if "suffix_missing" in record and record["suffix_missing"] != missing:
+                        problems.add(
+                            "item-identity-mismatch",
+                            "the item's suffix_missing is not the one its node id and requested group give",
+                            nodeid=record["nodeid"],
+                            file=name,
+                        )
+                    if missing and loadgroup:
                         problems.add(
                             "suffix-missing",
                             "a group member has no @group suffix in its node id",
@@ -1933,6 +1972,33 @@ def reduce_journals(
                 else "the process wrote no collection manifest"
             )
             problems.add("manifest-missing", detail, file=name, nested_run=run)
+    listed = {run: {raw for ids in nodes.values() for raw in ids} for run, nodes in node_manifests.items()}
+    for run, nodeid, name, from_controller in crash_reports:
+        extra = {} if run is None else {"nested_run": run}
+        if not from_controller:
+            problems.add(
+                "crash-report-outside-controller",
+                "a crash report is written only by a controller; this journal is not one",
+                nodeid=nodeid,
+                file=name,
+                **extra,
+            )
+        elif nodeid not in listed.get(run, ()):
+            problems.add(
+                "crash-report-unknown-item",
+                "the controller reports a crash in an item that none of its node manifests lists",
+                nodeid=nodeid,
+                file=name,
+                **extra,
+            )
+    for (run, canonical), count in sorted(nested_starts.items()):
+        if count > 1:
+            problems.add("duplicate-id", f"started {count} times", nodeid=canonical, nested_run=run)
+    if None in controller_runs and None not in worker_runs and not node_manifests.get(None):
+        problems.add(
+            "worker-evidence-missing",
+            "a controller journal shows an xdist run, and there is neither a worker journal nor a node manifest",
+        )
     for run in sorted(worker_runs | set(node_manifests), key=lambda r: r or ""):
         extra = {} if run is None else {"nested_run": run}
         if run in worker_runs and run not in controller_runs:
@@ -1943,6 +2009,13 @@ def reduce_journals(
             )
             continue
         own, nodes = own_manifests.get(run, {}), node_manifests.get(run, {})
+        if len(set(own_sessions.get(run, {}).values())) > 1:  # xdist workers collect one common ordered list
+            problems.add(
+                "workers-collected-differently",
+                "the workers of this run did not all collect the same ordered list of items",
+                workers=sorted(own_sessions[run]),
+                **extra,
+            )
         for worker, ids in sorted(own.items()):
             if nodes.get(worker) != ids:
                 problems.add(
@@ -1962,6 +2035,27 @@ def reduce_journals(
         for canonical in nested_collected[run]:
             if canonical not in nested_started[run]:
                 problems.add("never-started", "collected but never started", nodeid=canonical, nested_run=run)
+    # A nested run is reachable when a launch record in a reachable run, written by the very process its journals name
+    # as their parent, launched its token; the root run is reachable by definition.
+    reachable: set[str | None] = {None}
+    grown = True
+    while grown:
+        grown = False
+        for token in sorted(journaled - reachable):
+            parents = nested_parents[token]
+            if parents and all(
+                any(pid is not None and pid == parent and run in reachable for run, pid in launched_by.get(token, ()))
+                for parent in parents
+            ):
+                reachable.add(token)
+                grown = True
+    for token in sorted((journaled & set(launched_by)) - reachable):
+        problems.add(
+            "nested-run-unreachable",
+            "no root process launched this nested run: the launch record is not in a reachable run, or is not from "
+            "the process its journals name as their parent",
+            token=token,
+        )
     unlaunched = journaled - set(launches)
     for token in sorted(unlaunched):
         problems.add("nested-journal-unlaunched", "a nested journal has no launch record", token=token)
