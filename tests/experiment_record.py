@@ -1857,7 +1857,7 @@ def reduce_journals(
                     item = items.setdefault(canonical, {"started": 0, "ended": 0, "workers": [], "group": group})
                     item["started"] += 1
                     item["workers"].append(info["worker"] or info["role"])
-                    if record.get("effective_group"):
+                    if record.get("effective_group") is not None:  # the writer's rule: an empty name is a group
                         groups.setdefault(record["effective_group"], set()).add(info["worker"] or info["role"])
                 if record["nodeid"] in open_items:  # started again before it ended
                     again = open_items[record["nodeid"]]["phases"]

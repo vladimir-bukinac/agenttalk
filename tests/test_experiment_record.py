@@ -5007,3 +5007,36 @@ def test_n2_the_manifest_check_also_treats_an_empty_group_name_as_a_group(er, tm
     summary = er.reduce_journals(tmp_path, ["t.py::a@"])
 
     assert summary["problems"] == [], summary["problems"]
+
+
+def _group_run(tmp_path, group, *, one_worker):
+    """A controller and workers that all collected two members of `group` (node ids ending in its suffix); with two
+    workers each runs one member, with one worker it runs both."""
+    rows = [(f"t.py::a@{group}", group), (f"t.py::b@{group}", group)]
+    workers = {"gw0": rows} if one_worker else {"gw0": rows[:1], "gw1": rows[1:]}
+    nodes = [("collection-manifest", manifest_fields(rows, "node", w)) for w in workers]
+    write_journal(tmp_path, "controller", 10, extra=nodes)
+    for number, (worker, started) in enumerate(workers.items(), start=11):
+        write_journal(tmp_path, "worker", number, worker=worker, starts=started, collected=rows)
+    return [raw for raw, _ in rows]
+
+
+@pytest.mark.parametrize("group", ["g", ""], ids=["named-group", "empty-group"])
+def test_r21_members_of_a_group_that_ran_on_two_workers_are_a_split_whatever_the_group_name(er, tmp_path, group):
+    # the empty name is a group too (the writer's rule): aggregation used a truthiness test and dropped it
+    expected = [er.canonical_id(r, group) for r in _group_run(tmp_path, group, one_worker=False)]
+
+    summary = er.reduce_journals(tmp_path, expected)
+
+    assert "group-split" in kinds(summary["problems"]) and summary["accepted"] is False
+    assert summary["groups"] == {group: ["gw0", "gw1"]}
+
+
+@pytest.mark.parametrize("group", ["g", ""], ids=["named-group", "empty-group"])
+def test_r21_members_of_a_group_on_one_worker_are_accepted_and_the_group_is_listed(er, tmp_path, group):
+    expected = [er.canonical_id(r, group) for r in _group_run(tmp_path, group, one_worker=True)]
+
+    summary = er.reduce_journals(tmp_path, expected)
+
+    assert summary["problems"] == [] and summary["accepted"] is True
+    assert summary["groups"] == {group: ["gw0"]}
