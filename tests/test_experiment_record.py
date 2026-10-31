@@ -774,7 +774,7 @@ def test_an_ordinary_nested_run_never_inherits_the_handoff(project, er, tmp_path
 
 def test_a_launch_without_a_nested_journal_is_a_failure_never_compliance(er, tmp_path):
     write_journal(
-        tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("nested-launch", {"token": "0123456789abcdef"})]
+        tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("nested-launch", {"token": "0000000000000001"})]
     )
     summary = er.reduce_journals(tmp_path, ["t.py::a"])
     assert "nested-journal-missing" in kinds(summary["problems"])
@@ -791,7 +791,7 @@ def test_nested_sessions_seen_elsewhere_but_not_journaled_are_a_failure(er, tmp_
 
 def test_a_nested_journal_nobody_launched_is_flagged(er, tmp_path):
     write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
-    write_journal(tmp_path, "nested", 12, nested_token="fedcba9876543210")
+    write_journal(tmp_path, "nested", 12, nested_token="0000000000000002")
     summary = er.reduce_journals(tmp_path, ["t.py::a"])
     assert "nested-journal-unlaunched" in kinds(summary["problems"])
     assert summary["accepted"] is False
@@ -809,13 +809,13 @@ def test_the_helper_without_a_recorder_hands_off_nothing_and_drops_a_stale_entry
     "value, message",
     [
         ("not json", "is not valid JSON"),
-        (json.dumps({"v": 1, "dir": "rel", "token": "0123456789abcdef", "parent_pid": 1}), "needs an absolute folder"),
+        (json.dumps({"v": 1, "dir": "rel", "token": "0000000000000001", "parent_pid": 1}), "needs an absolute folder"),
         (
-            json.dumps({"v": 1, "dir": "ABSOLUTE-MISSING", "token": "0123456789abcdef", "parent_pid": 1}),
+            json.dumps({"v": 1, "dir": "ABSOLUTE-MISSING", "token": "0000000000000001", "parent_pid": 1}),
             "not an existing",
         ),
         (json.dumps({"v": 1, "dir": "ABSOLUTE-OK", "token": "../../escape", "parent_pid": 1}), "has a bad token"),
-        (json.dumps({"v": 2, "dir": "ABSOLUTE-OK", "token": "0123456789abcdef", "parent_pid": 1}), "not a version 1"),
+        (json.dumps({"v": 2, "dir": "ABSOLUTE-OK", "token": "0000000000000001", "parent_pid": 1}), "not a version 1"),
         ("x" * 5000, "is too long"),
     ],
     ids=["not-json", "relative-dir", "missing-dir", "bad-token", "bad-version", "too-long"],
@@ -1453,7 +1453,7 @@ def test_a_record_with_a_damaged_field_is_reported_and_the_rest_is_kept(er, tmp_
         ("worker-down", {"down_worker": "gw0", "has_error": True, "error_text": "x"}),
         ("collection-error", {"nodeid": "c.py", "error_text": "boom"}),
         ("exit-status", {"exitstatus": 1}),
-        ("nested-launch", {"token": "0123456789abcdef"}),
+        ("nested-launch", {"token": "0000000000000001"}),
     ]
     path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)], extra=extra)
     damaged(path, kind, **changes)
@@ -2534,7 +2534,7 @@ def test_a_nested_run_whose_phase_lines_were_never_written_is_not_accepted(proje
     assert summary["accepted"] is False
 
 
-NESTED_TOKEN = "0123456789abcdef"
+NESTED_TOKEN = "0000000000000001"
 
 
 def test_nested_journals_are_reconciled_per_run_and_their_ids_stay_out_of_the_root_collection(er, tmp_path):
@@ -3303,7 +3303,7 @@ def test_the_held_folder_is_released_when_the_listing_fails(er, tmp_path, monkey
 
 # --- fix round 13: the connector's second review (five threads on dddf037b) -------------------------------------
 
-TOKEN2 = "fedcba9876543210"
+TOKEN2 = "0000000000000002"
 
 
 def _launch(*tokens):
@@ -3703,7 +3703,7 @@ def test_a_real_nested_two_worker_child_inside_a_recorded_two_worker_run_is_acce
 # --- round 15: the connector's third review (seven threads on 75e82ca6) -----------------------------------------
 
 
-TOKEN = "0123456789abcdef"
+TOKEN = "0000000000000001"
 
 
 def tamper(path, kind, nth=0, **changes):
@@ -4188,7 +4188,7 @@ def test_a_plain_entry_is_counted_by_its_own_size(er, tmp_path):
 
 
 def test_a_handoff_with_a_bad_run_id_is_a_usage_error_and_a_good_one_is_read(er):
-    handoff = {"v": 1, "dir": str(Path(__file__).resolve().parent), "token": "0123456789abcdef", "parent_pid": 1}
+    handoff = {"v": 1, "dir": str(Path(__file__).resolve().parent), "token": "0000000000000001", "parent_pid": 1}
 
     assert er._read_handoff(json.dumps({**handoff, "run_id": "r-1"}))["run_id"] == "r-1"
     assert er._read_handoff(json.dumps(handoff))["run_id"] is None
@@ -4542,7 +4542,7 @@ def test_an_item_started_before_the_manifest_with_another_identity_than_its_row_
 
 # --- round 18: an exemption from the manifest is proven, not assumed (thread 4430325805, codex-rev N1) -------------
 
-NESTED_TOKEN = "0123456789abcdef"
+NESTED_TOKEN = "0000000000000001"
 
 
 def nested_xdist_run(tmp_path, controller_items=()):
