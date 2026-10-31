@@ -52,7 +52,8 @@ Event kinds and their fields
 process-start     first record.  started_ms (int); python, pytest (version strings); dist (the `--dist` value) and
                   loadgroup (bool: group suffixes are expected in node ids); plugins (sorted list of the names of
                   the plugins loaded in this process, without conftest paths and without unnamed plugins: the D06
-                  inventory); nested_token and parent_pid (for a nested run and its workers, else null).
+                  inventory); nested_token and parent_pid (for a nested run and its workers, else null); run_id (the
+                  `--experiment-record-run` id of the run, passed to its workers and to a nested run, else null).
 collection-finish count (items collected), raw_ids_sha256 (SHA-256 over the raw ids joined by "\\n"),
                   digest_algorithm ("sha256").  Not written by an xdist controller.
 collection-manifest  the ordered collected identities: source ("session" or "node"), source_worker (the worker id a
@@ -138,7 +139,7 @@ Handle journals like test logs.  The probe jobs run without secrets (plan sectio
 
 The reducer
 -----------
-`reduce_journals(folder, expected_ids=None, nested_seen=None, *, require_phases=True)` returns a dict:
+`reduce_journals(folder, expected_ids=None, nested_seen=None, *, require_phases=True, run_id=None)` returns a dict:
 
 schema            2.
 status            "complete" when every journal ends with its trailer, else "incomplete".
@@ -165,6 +166,15 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   controller-missing (worker journals of a run and no controller journal: its node manifests
                   and crash records cannot be there either; a nested xdist run's controller journal has the role
                   "nested", and the check is made per run token),
+                  run-mismatch (only when `run_id` is given: a journal whose process-start has another run id, or none:
+                  it is evidence of an earlier run in a reused folder, for example when the new invocation died
+                  before `pytest_configure` and wrote nothing), folder-unreadable (the record folder exists but
+                  cannot be examined, for example a permission error: only a missing folder is silent),
+                  phase-identity-mismatch (a phase's canonical_id, param_id or group is not its running item's) and
+                  item-identity-mismatch (an item-start whose identity is not what its node id and its own manifest
+                  row give), bad-field also for an event kind outside the schema (EVENT_KINDS) and for a
+                  process-start whose worker id or nested token does not fit its role (a nested process needs a
+                  token; a worker needs its id; a serial or controller process has neither),
                   multiple-root-runs (more than one root serial journal, more than one root controller, or one
                   worker id twice: stale evidence from an earlier run in a reused folder cannot be told from this
                   run's) and mixed-root-topology (a root serial run and a root xdist run in one folder),
@@ -211,6 +221,19 @@ journal size, which settles the margin.
 
 Nested pytest runs
 ------------------
+Stale journals.  A record folder may be reused, and a new invocation can die before it writes anything (an early
+conftest or option failure), leaving the previous run's complete journal as the only one.  An empty-folder rule at
+launch cannot help, because the launch never gets that far; so the caller gives the run an id
+(`--experiment-record-run=ID`, 1 to 64 letters, digits, dots, dashes or underscores) and passes the same id to
+`reduce_journals(..., run_id=ID)`, which refuses (`run-mismatch`) every journal of another run.  The id is copied to
+the workers (xdist `workerinput`) and to a nested run (the handoff).  Without `run_id` the reducer cannot tell.
+
+Recording through PYTEST_ADDOPTS.  `--experiment-record` and `--experiment-record-run` may be given in PYTEST_ADDOPTS.
+Once the recorder is registered it removes both from this process's PYTEST_ADDOPTS (the other options stay; the
+variable is deleted if nothing else was in it), so an ordinary pytest child, which inherits the environment, does not
+record: only an explicit handoff makes a nested run.  Limit: an option given through an `@file` or an ini `addopts`
+cannot be removed from there.
+
 A nested run is recorded only through an explicit handoff that the recorder alone sets, for the one process it
 starts: `nested_environment(env)` returns a copy of `env` with `HANDOFF_ENV` (a JSON object with v, dir, token,
 parent_pid) and writes a `nested-launch` record.  The recorder never puts the variable into its own environment, and
@@ -256,6 +279,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import stat
 import sys
 import tempfile
@@ -270,6 +294,7 @@ import pytest
 SCHEMA_VERSION = 2
 HANDOFF_VERSION = 1
 OPTION = "--experiment-record"
+RUN_OPTION = "--experiment-record-run"
 PLUGIN_NAME = "agenttalk-experiment-record"
 HANDOFF_ENV = "AGENTTALK_EXPERIMENT_RECORD_HANDOFF"
 MAX_ERROR_TEXT = 64 * 1024
@@ -292,6 +317,23 @@ PHASE_NAMES = ("setup", "call", "teardown", "???")
 PHASE_OUTCOMES = ("passed", "failed", "skipped")
 
 _TOKEN = re.compile(r"[0-9a-f]{16}")
+_RUN_ID = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# Every event kind the schema writes; a record of any other kind is a damaged record, never skipped.
+EVENT_KINDS = (
+    "process-start",
+    "collection-finish",
+    "collection-manifest",
+    "item-start",
+    "phase",
+    "item-end",
+    "collection-error",
+    "internal-error",
+    "worker-down",
+    "nested-launch",
+    "exit-status",
+    "trailer",
+)
+IDENTITY_FIELDS = ("canonical_id", "param_id", "requested_group", "effective_group")
 _ACTIVE: Recorder | None = None
 
 
@@ -302,6 +344,14 @@ def add_option(parser: pytest.Parser) -> None:
         default=None,
         metavar="DIR",
         help="record what this run did in durable per-process journals in DIR (outside every basetemp)",
+    )
+    parser.addoption(
+        RUN_OPTION,
+        dest="experiment_record_run",
+        default=None,
+        metavar="ID",
+        help="the id of this run (1 to 64 letters, digits, dots, dashes, underscores), written into every journal so "
+        "that the reducer can tell this run's journals from an earlier run's in a reused folder",
     )
 
 
@@ -571,6 +621,7 @@ class Recorder:
         token: str | None,
         parent_pid: int | None,
         distributed: bool = False,
+        run_id: str | None = None,
     ) -> None:
         self.config = config
         self.distributed = distributed  # an xdist controller: the workers' journals hold the phases
@@ -579,6 +630,7 @@ class Recorder:
         self.worker = worker
         self.token = token
         self.parent_pid = parent_pid
+        self.run_id = run_id
         self.pid = os.getpid()
         self.started_ms = int(time.time() * 1000)
         self.seq = 0
@@ -651,6 +703,7 @@ class Recorder:
             plugins=self._plugins(),
             nested_token=self.token,
             parent_pid=self.parent_pid,
+            run_id=self.run_id,
         )
 
     def _plugins(self) -> list[str]:
@@ -763,6 +816,7 @@ class Recorder:
         node.workerinput["experiment_record_dir"] = str(self.directory)
         node.workerinput["experiment_record_token"] = self.token
         node.workerinput["experiment_record_parent_pid"] = self.parent_pid
+        node.workerinput["experiment_record_run"] = self.run_id
 
     # -- finish -----------------------------------------------------------------------------------------------
 
@@ -783,7 +837,14 @@ class Recorder:
         token = secrets.token_hex(8)
         self.append("nested-launch", token=token)
         env[HANDOFF_ENV] = json.dumps(
-            {"v": HANDOFF_VERSION, "dir": str(self.directory), "token": token, "parent_pid": self.pid}, sort_keys=True
+            {
+                "v": HANDOFF_VERSION,
+                "dir": str(self.directory),
+                "token": token,
+                "parent_pid": self.pid,
+                "run_id": self.run_id,
+            },
+            sort_keys=True,
         )
         return env
 
@@ -850,7 +911,50 @@ def _read_handoff(text: str) -> dict[str, Any]:
         raise pytest.UsageError(f"{HANDOFF_ENV} needs an absolute folder")
     if not isinstance(parent, int) or isinstance(parent, bool):
         raise pytest.UsageError(f"{HANDOFF_ENV} has a bad parent_pid")
+    data["run_id"] = _checked_run_id(data.get("run_id"), HANDOFF_ENV)
     return data
+
+
+def _checked_run_id(value: Any, source: str) -> str | None:
+    """The run id, or None when there is none; a value that is not 1 to 64 safe characters is a usage error."""
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _RUN_ID.fullmatch(value):
+        raise pytest.UsageError(f"{source}: the run id must be 1 to 64 letters, digits, dots, dashes or underscores")
+    return value
+
+
+def _without_record_options(text: str) -> str:
+    """PYTEST_ADDOPTS text without the recording options (`--experiment-record` and `--experiment-record-run`, with
+    or without `=`), so that a process started with the same environment is an ordinary one.  Other options are
+    kept; text that cannot be split, or that holds neither option, is returned exactly as it was."""
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        return text
+    kept: list[str] = []
+    skip_value = False
+    for word in words:
+        if skip_value:
+            skip_value = False
+        elif word in (OPTION, RUN_OPTION):
+            skip_value = True
+        elif not word.startswith((OPTION + "=", RUN_OPTION + "=")):
+            kept.append(word)
+    return text if kept == words else shlex.join(kept)
+
+
+def _scrub_inherited_options() -> None:
+    """Take the recording options out of this process's PYTEST_ADDOPTS: it is how a person turns recording on for the
+    root run, and every ordinary pytest child would otherwise inherit it and write a second root.  A nested run is
+    recorded only through the explicit handoff."""
+    for name in [n for n in os.environ if n.upper() == "PYTEST_ADDOPTS"]:
+        cleaned = _without_record_options(os.environ[name])
+        if cleaned != os.environ[name]:
+            if cleaned:
+                os.environ[name] = cleaned
+            else:
+                del os.environ[name]
 
 
 def configure(config: pytest.Config) -> Recorder | None:
@@ -863,7 +967,7 @@ def configure(config: pytest.Config) -> Recorder | None:
     handoff_text = None
     for name in [n for n in os.environ if n.upper() == HANDOFF_ENV]:
         handoff_text = os.environ.pop(name)  # a recorded process never passes the handoff on by accident
-    token = parent = None
+    token = parent = run_id = None
     if workerinput is not None:
         if not workerinput.get("experiment_record_dir"):
             return None
@@ -872,18 +976,22 @@ def configure(config: pytest.Config) -> Recorder | None:
         )
         role, worker, distributed = "worker", str(workerinput["workerid"]), False
         token, parent = workerinput.get("experiment_record_token"), workerinput.get("experiment_record_parent_pid")
+        run_id = _checked_run_id(workerinput.get("experiment_record_run"), "xdist workerinput")
     elif handoff_text is not None:  # a valid handoff decides the role, whatever option was inherited with it
         data = _read_handoff(handoff_text)
         directory = _checked_directory(config, data["dir"], create=False, source=HANDOFF_ENV)
-        role, worker, token, parent = "nested", None, data["token"], data["parent_pid"]
+        role, worker, token, parent, run_id = "nested", None, data["token"], data["parent_pid"], data["run_id"]
         distributed = bool(getattr(config.option, "numprocesses", None))
     elif config.option.experiment_record:
         directory = _checked_directory(config, config.option.experiment_record, create=True, source=OPTION)
+        run_id = _checked_run_id(config.option.experiment_record_run, RUN_OPTION)
         numprocesses = getattr(config.option, "numprocesses", None)
         role, worker, distributed = ("controller" if numprocesses else "serial"), None, bool(numprocesses)
+    elif config.option.experiment_record_run:
+        raise pytest.UsageError(f"{RUN_OPTION} needs {OPTION}")
     else:
         return None
-    recorder = Recorder(config, directory, role, worker, token, parent, distributed)
+    recorder = Recorder(config, directory, role, worker, token, parent, distributed, run_id)
     try:
         config.pluginmanager.register(recorder, PLUGIN_NAME)
         recorder.start()
@@ -891,6 +999,7 @@ def configure(config: pytest.Config) -> Recorder | None:
         recorder.close()
         raise
     _ACTIVE = recorder
+    _scrub_inherited_options()  # a child of this process is ordinary unless it is handed off explicitly
     return recorder
 
 
@@ -1019,8 +1128,11 @@ class _Folder:
     def verify(cls, path: Path, problems: _Problems) -> _Folder | None:
         try:
             info = os.lstat(path)
-        except OSError:
+        except (FileNotFoundError, NotADirectoryError):
             return None  # nothing there: nothing to read
+        except OSError as error:  # it is there but cannot be examined: unreadable evidence is never silence
+            problems.add("folder-unreadable", f"the record folder could not be examined: {error}")
+            return None
         plain = "the record folder must be a plain folder, not a link or a reparse point"
         if not stat.S_ISDIR(info.st_mode) or _is_reparse_point(info):
             problems.add("folder-not-plain", plain)
@@ -1211,6 +1323,12 @@ _EVENT_FIELDS = {
         "loadgroup": (_is_bool, False),
         "nested_token": (_is_text_or_null, False),
         "plugins": (_is_plugin_list, False),
+        "run_id": (lambda v: v is None or (isinstance(v, str) and _RUN_ID.fullmatch(v) is not None), False),
+    },
+    "collection-finish": {
+        "count": (_is_int, True),
+        "raw_ids_sha256": (_is_text, True),
+        "digest_algorithm": (_is_text, True),
     },
     "collection-manifest": {
         "source": (lambda v: v in ("session", "node"), True),
@@ -1246,8 +1364,27 @@ _EVENT_FIELDS = {
 }
 
 
+def _role_problem(record: dict[str, Any]) -> str | None:
+    """The first process-start field that does not fit the process's role, or None.  A worker names itself and may
+    carry a nested token (a worker of a nested run); a nested process always has a valid token; a serial or
+    controller process has neither a worker id nor a token.  Topology is decided from these fields, so a process
+    that fits no role must not get as far as being classified."""
+    worker, token = record.get("worker"), record.get("nested_token")
+    if record["role"] == "worker":
+        if not worker:
+            return "worker"
+        return None if token is None or _TOKEN.fullmatch(token) else "nested_token"
+    if worker is not None:
+        return "worker"
+    if record["role"] == "nested":
+        return None if token is not None and _TOKEN.fullmatch(token) else "nested_token"
+    return None if token is None else "nested_token"
+
+
 def _field_problem(record: dict[str, Any]) -> str | None:
     """The name of the first damaged field of `record`, or None."""
+    if record["kind"] not in EVENT_KINDS:
+        return "kind"
     for fields in (_COMMON_FIELDS, _EVENT_FIELDS.get(record["kind"], {})):
         for name, (check, required) in fields.items():
             if name not in record:
@@ -1255,6 +1392,8 @@ def _field_problem(record: dict[str, Any]) -> str | None:
                     return name
             elif not check(record[name]):
                 return name
+    if record["kind"] == "process-start":
+        return _role_problem(record)
     if record["kind"] == "collection-manifest":
         if record["count"] != len(record["raw_ids"]):
             return "count"
@@ -1286,6 +1425,14 @@ def _phase_problem(phases: list[tuple[str, str]]) -> tuple[str, str] | None:
     return None
 
 
+def _identity_difference(expected: dict[str, Any], record: dict[str, Any]) -> str | None:
+    """The first identity field of `record` that is not what `expected` says (a missing field counts as null)."""
+    for key in IDENTITY_FIELDS:
+        if record.get(key) != expected.get(key):
+            return key
+    return None
+
+
 def _phase_check(phases: list[tuple[str, str]], require_phases: bool) -> tuple[str, str] | None:
     """The phase problem of an item, if any. A no-body probe (`require_phases` off) must have NO phase at all, so any
     phase it reports is a problem of its own kind (a body ran by mistake, or the phases are not a probe's)."""
@@ -1295,6 +1442,22 @@ def _phase_check(phases: list[tuple[str, str]], require_phases: bool) -> tuple[s
         whens = [when for when, _ in phases]
         return "phase-in-no-body-probe", f"a probe run that runs no test bodies reported phases {whens}"
     return None
+
+
+def _listed_by_path(folder: Path) -> tuple[list[Path], int]:
+    """The journal names in `folder` and their total size, from the ENTRIES themselves (`lstat`): a link or a reparse
+    point is listed but never followed, so a target that is unavailable, or whose size is not the entry's, cannot
+    block the reducer or decide a limit; the open that comes later refuses the entry."""
+    paths = [folder / name for name in sorted(os.listdir(folder)) if fnmatch.fnmatch(name, "journal-*.jsonl")]
+    total = 0
+    for path in paths:
+        try:
+            info = os.lstat(path)
+        except OSError:
+            continue  # reported when the journal is opened
+        if not _is_reparse_point(info):
+            total += info.st_size
+    return paths, total
 
 
 def _journal_paths(folder: Path, problems: _Problems) -> tuple[_Folder | None, list[Path]]:
@@ -1314,12 +1477,7 @@ def _journal_paths(folder: Path, problems: _Problems) -> tuple[_Folder | None, l
                 except OSError:
                     pass  # reported when the journal is opened
         else:  # Windows: the names come from the path; every open is checked against the held handle
-            paths = sorted(folder.glob("journal-*.jsonl"))
-            for path in paths:
-                try:
-                    total += path.stat().st_size
-                except OSError:
-                    pass
+            paths, total = _listed_by_path(folder)
         if len(paths) > MAX_JOURNALS or total > MAX_TOTAL_JOURNAL_BYTES:
             problems.add(
                 "input-too-large",
@@ -1342,8 +1500,11 @@ def reduce_journals(
     nested_seen: int | None = None,
     *,
     require_phases: bool = True,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Join the journals in `folder` (see the module docstring for the result)."""
+    if run_id is not None and not (isinstance(run_id, str) and _RUN_ID.fullmatch(run_id)):
+        raise ValueError("run_id must be 1 to 64 letters, digits, dots, dashes or underscores")
     problems = _Problems()
     processes: list[dict[str, Any]] = []
     loaded: list[tuple[str, dict[str, Any], list[dict[str, Any]]]] = []
@@ -1368,6 +1529,7 @@ def reduce_journals(
                     "plugins": None,
                     "exitstatus": None,
                     "nested_token": None,
+                    "run_id": None,
                 }
             )
             continue
@@ -1385,9 +1547,17 @@ def reduce_journals(
             "plugins": (start or {}).get("plugins"),
             "exitstatus": (trailer or {}).get("exitstatus"),
             "nested_token": (start or {}).get("nested_token"),
+            "run_id": (start or {}).get("run_id"),
         }
         processes.append(info)
         loaded.append((path.name, info, recs))
+        if run_id is not None and info["run_id"] != run_id:
+            problems.add(
+                "run-mismatch",
+                f"the journal belongs to run {info['run_id']!r}, not to the run {run_id!r} that is being reduced: "
+                "it is evidence of an earlier run",
+                file=path.name,
+            )
         if [r["seq"] for r in recs] != list(range(1, len(recs) + 1)):
             problems.add("sequence-gap", "the sequence numbers are not 1, 2, 3, ...", file=path.name)
         if start is None or recs[0] is not start:
@@ -1472,6 +1642,7 @@ def reduce_journals(
         loadgroup = bool(next((r for r in recs if r["kind"] == "process-start"), {}).get("loadgroup"))
         open_items: dict[str, dict[str, Any]] = {}
         canonical_of: dict[str, str] = {}
+        own_identity: dict[str, dict[str, Any]] = {}  # raw id -> identity, from this journal's own session manifest
         has_manifest = False
         for record in recs:
             kind, key = record["kind"], (float(record.get("t_wall", 0)), name, record["seq"])
@@ -1484,6 +1655,7 @@ def reduce_journals(
                 elif record["source"] == "session" and reconcile:
                     for raw_id, identity in zip(record["raw_ids"], record["identities"], strict=True):
                         identity_of.setdefault((run, raw_id), identity)
+                        own_identity.setdefault(raw_id, identity)
                     has_manifest = True
                     if info["role"] == "worker":
                         own_manifests[run][str(info["worker"])] = record["raw_ids"]
@@ -1520,9 +1692,29 @@ def reduce_journals(
                         )
                     else:
                         current["phases"].append((record["when"], record["outcome"]))
+                        differs = _identity_difference(current["identity"], record)
+                        if differs is not None:
+                            problems.add(
+                                "phase-identity-mismatch",
+                                f"the phase's {differs} is not the {differs} of the item that is running",
+                                nodeid=record["nodeid"],
+                                file=name,
+                                **extra,
+                            )
             elif kind == "item-start" and reconcile:
                 group = record.get("requested_group")
                 canonical = canonical_of[record["nodeid"]] = canonical_id(record["nodeid"], group)
+                differs = _identity_difference(
+                    {**own_identity.get(record["nodeid"], record), "canonical_id": canonical}, record
+                )
+                if differs is not None:
+                    problems.add(
+                        "item-identity-mismatch",
+                        f"the item's {differs} is not the one its node id and manifest row give",
+                        nodeid=record["nodeid"],
+                        file=name,
+                        **extra,
+                    )
                 if run is not None:
                     nested_started[run].add(canonical)
                 if root:
@@ -1541,7 +1733,11 @@ def reduce_journals(
                 if record["nodeid"] in open_items:  # started again before it ended
                     again = open_items[record["nodeid"]]["phases"]
                     unfinished.append((name, info["role"], info["worker"], run, record["nodeid"], again))
-                open_items[record["nodeid"]] = {"phases": [], "canonical": canonical}
+                open_items[record["nodeid"]] = {
+                    "phases": [],
+                    "canonical": canonical,
+                    "identity": {key: record.get(key) for key in IDENTITY_FIELDS},
+                }
             elif kind == "item-end" and reconcile:
                 current = open_items.pop(record["nodeid"], None)
                 if root and record["nodeid"] in canonical_of:

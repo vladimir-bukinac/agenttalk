@@ -2663,11 +2663,12 @@ def test_a_journal_that_lstat_shows_as_a_reparse_point_is_refused_on_every_syste
     path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
     assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"], "the journal is fine before the attribute is set"
     first_only = looks == "first-look-only"
+    listing = 0 if er._HAS_DIR_FD else 1  # where names come from the path, the listing's own look comes first
 
     _lstat_that(
         monkeypatch,
         path.name,
-        lambda fields, call: {**fields, "st_file_attributes": 1024 * (call == 1 or not first_only)},
+        lambda fields, call: {**fields, "st_file_attributes": 1024 * (call == 1 + listing or not first_only)},
     )
 
     summary = er.reduce_journals(tmp_path, ["t.py::a"])
@@ -2677,7 +2678,10 @@ def test_a_journal_that_lstat_shows_as_a_reparse_point_is_refused_on_every_syste
 
 def test_a_journal_that_becomes_a_reparse_point_while_it_is_opened_is_refused(er, tmp_path, monkeypatch):
     path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
-    _lstat_that(monkeypatch, path.name, lambda fields, call: {**fields, "st_file_attributes": 1024 * (call > 1)})
+    listing = 0 if er._HAS_DIR_FD else 1  # where names come from the path, the listing's own look comes first
+    _lstat_that(
+        monkeypatch, path.name, lambda fields, call: {**fields, "st_file_attributes": 1024 * (call > 1 + listing)}
+    )
 
     summary = er.reduce_journals(tmp_path, ["t.py::a"])
 
@@ -3647,3 +3651,527 @@ def test_a_real_nested_two_worker_child_inside_a_recorded_two_worker_run_is_acce
     roles = sorted((p["role"], p["worker"], bool(p["nested_token"])) for p in summary["processes"])
     assert roles.count(("worker", "gw0", True)) == 1 and roles.count(("worker", "gw0", False)) == 1
     assert ("controller", None, False) in roles and ("nested", None, True) in roles
+
+
+# --- round 15: the connector's third review (seven threads on 75e82ca6) -----------------------------------------
+
+
+TOKEN = "0123456789abcdef"
+
+
+def tamper(path, kind, nth=0, **changes):
+    """Rewrite the `nth` record of `kind` in a hand-made journal with `changes` (a value of `...` removes the key)."""
+    lines = Path(path).read_text(encoding="utf-8").split("\n")
+    seen = -1
+    for number, line in enumerate(lines):
+        if not line:
+            continue
+        record = json.loads(line)
+        if record["kind"] != kind:
+            continue
+        seen += 1
+        if seen == nth:
+            for key, value in changes.items():
+                if value is ...:
+                    record.pop(key, None)
+                else:
+                    record[key] = value
+            lines[number] = json.dumps(record)
+            break
+    Path(path).write_text("\n".join(lines), encoding="utf-8")
+
+
+# thread 4429622268 (P1): a stale journal from an earlier run must not be accepted as this run's
+
+
+def test_a_complete_journal_of_another_run_is_not_accepted_as_this_runs(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    tamper(path, "process-start", run_id="old-run")
+
+    stale = er.reduce_journals(tmp_path, ["t.py::a"], run_id="new-run")
+    same = er.reduce_journals(tmp_path, ["t.py::a"], run_id="old-run")
+
+    assert stale["accepted"] is False and "run-mismatch" in kinds(stale["problems"])
+    assert same["accepted"] is True, same["problems"]
+
+
+def test_a_journal_with_no_run_id_does_not_match_a_run_that_asked_for_one(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"], run_id="new-run")
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "run-mismatch"]
+    assert summary["accepted"] is False and problem["file"] == "journal-serial-11-1000.jsonl"
+
+
+def test_without_a_run_id_the_reducer_behaves_as_before(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    tamper(path, "process-start", run_id="whatever")
+
+    assert er.reduce_journals(tmp_path, ["t.py::a"])["accepted"] is True
+
+
+@pytest.mark.parametrize("bad", ["", "has space", "a" * 65, 5, "../x"])
+def test_a_malformed_run_id_is_refused_by_the_reducer(er, tmp_path, bad):
+    with pytest.raises(ValueError, match="run_id"):
+        er.reduce_journals(tmp_path, run_id=bad)
+
+
+def test_an_early_failure_of_the_new_invocation_leaves_the_old_journal_unaccepted(project, er, tmp_path):
+    project.makepyfile(test_mod=GROUPED)
+    rec = tmp_path / "rec"
+    run_serial(project, rec, "--experiment-record-run=first").assert_outcomes(passed=3)
+    expected = collected_ids(project)
+    assert er.reduce_journals(rec, expected, run_id="first")["accepted"] is True
+
+    # the second invocation never reaches pytest_configure (it dies on an unknown option), so it writes nothing
+    broken = project.runpytest_subprocess(f"--experiment-record={rec}", "--experiment-record-run=second", "--nonsense")
+    summary = er.reduce_journals(rec, expected, run_id="second")
+
+    assert broken.ret != 0
+    assert summary["accepted"] is False and "run-mismatch" in kinds(summary["problems"])
+
+
+def test_the_run_id_reaches_the_workers_and_a_nested_run(project, er, tmp_path):
+    project.makepyfile(test_mod=GROUPED)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec, "--experiment-record-run=r-2").assert_outcomes(passed=3)
+
+    starts = [r for _, r in records(rec, "process-start")]
+    assert {r["role"] for r in starts} == {"controller", "worker"} and {r["run_id"] for r in starts} == {"r-2"}
+    assert er.reduce_journals(rec, collected_ids(project), run_id="r-2")["accepted"] is True
+
+
+def test_the_run_id_reaches_a_nested_run_through_the_handoff(project, er, tmp_path):
+    project.makepyfile(test_parent=NESTED_PARENT)
+    rec = tmp_path / "rec"
+
+    run_serial(project, rec, "-k", "test_with_the_helper", "--experiment-record-run=r-3").assert_outcomes(passed=1)
+
+    assert {r["run_id"] for _, r in records(rec, "process-start")} == {"r-3"}
+    summary = er.reduce_journals(rec, ["test_parent.py::test_with_the_helper"], run_id="r-3")
+    assert summary["accepted"], summary["problems"]
+
+
+def test_a_nested_journal_of_another_run_is_not_accepted(er, tmp_path):
+    root = write_journal(
+        tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("nested-launch", {"token": TOKEN})]
+    )
+    nested = write_journal(tmp_path, "nested", 12, nested_token=TOKEN, starts=[("n.py::b", None)])
+    tamper(root, "process-start", run_id="r-4")
+    tamper(nested, "process-start", run_id="elsewhere")
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"], run_id="r-4")
+
+    assert summary["accepted"] is False
+    assert [p["file"] for p in summary["problems"] if p["kind"] == "run-mismatch"] == [nested.name]
+
+
+@pytest.mark.parametrize("bad", ["", "has space", "a" * 65])
+def test_a_malformed_run_id_option_is_a_usage_error(project, tmp_path, bad):
+    project.makepyfile(test_mod=GROUPED)
+
+    result = run_serial(project, tmp_path / "rec", f"--experiment-record-run={bad}")
+
+    assert result.ret != 0 and "run id" in "\n".join(result.outlines + result.errlines)
+
+
+def test_a_run_id_with_no_record_folder_is_a_usage_error(project):
+    project.makepyfile(test_mod=GROUPED)
+
+    result = project.runpytest_subprocess("--experiment-record-run=r-5")
+
+    assert result.ret != 0 and "--experiment-record" in "\n".join(result.outlines + result.errlines)
+
+
+# thread 4429622271 (P2): recording asked for through PYTEST_ADDOPTS must not be inherited by ordinary children
+
+
+def test_a_run_recorded_through_addopts_does_not_make_ordinary_children_record(project, er, tmp_path, monkeypatch):
+    project.makepyfile(test_parent=NESTED_PARENT)
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--experiment-record={rec.as_posix()}")
+
+    project.runpytest_subprocess("-k", "test_without_the_helper").assert_outcomes(passed=1)
+
+    assert [r["role"] for _, r in records(rec, "process-start")] == ["serial"]
+    summary = er.reduce_journals(rec, ["test_parent.py::test_without_the_helper"])
+    assert summary["accepted"], summary["problems"]
+
+
+def test_an_explicit_handoff_still_records_when_recording_was_asked_for_through_addopts(
+    project, er, tmp_path, monkeypatch
+):
+    project.makepyfile(test_parent=NESTED_PARENT)
+    rec = tmp_path / "rec"
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--experiment-record={rec.as_posix()}")
+
+    project.runpytest_subprocess("-k", "test_with_the_helper").assert_outcomes(passed=1)
+
+    assert sorted(r["role"] for _, r in records(rec, "process-start")) == ["nested", "serial"]
+    assert er.reduce_journals(rec, ["test_parent.py::test_with_the_helper"])["accepted"] is True
+
+
+ADDOPTS_PARENT = """
+import os
+
+
+def test_the_other_options_are_kept():
+    assert os.environ["PYTEST_ADDOPTS"] == "-p no:cacheprovider -q"
+"""
+
+
+def test_only_the_recording_options_are_removed_from_addopts(project, tmp_path, monkeypatch):
+    project.makepyfile(test_parent=ADDOPTS_PARENT)
+    rec = tmp_path / "rec"
+    monkeypatch.setenv(
+        "PYTEST_ADDOPTS", f"-p no:cacheprovider --experiment-record={rec.as_posix()} -q --experiment-record-run=x"
+    )
+
+    project.runpytest_subprocess().assert_outcomes(passed=1)
+
+
+def test_addopts_that_held_only_recording_options_is_removed(project, tmp_path, monkeypatch):
+    project.makepyfile(test_parent="import os\n\n\ndef test_gone():\n    assert 'PYTEST_ADDOPTS' not in os.environ\n")
+    monkeypatch.setenv("PYTEST_ADDOPTS", f"--experiment-record {(tmp_path / 'rec').as_posix()}")
+
+    project.runpytest_subprocess().assert_outcomes(passed=1)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("--experiment-record=/r", ""),
+        ("--experiment-record /r", ""),
+        ("-q --experiment-record /r -x", "-q -x"),
+        ("-q --experiment-record=/r --experiment-record-run=a -x", "-q -x"),
+        ("--experiment-record-run a -q", "-q"),
+        ("--experiment-record '/a b/r' -q", "-q"),
+        ("-k 'not --experiment-record' -q", "-k 'not --experiment-record' -q"),
+        ("--experiment-recorder=x -q", "--experiment-recorder=x -q"),
+        ("-q", "-q"),
+    ],
+)
+def test_the_recording_options_are_taken_out_of_addopts_and_nothing_else(er, text, expected):
+    assert er._without_record_options(text) == expected
+
+
+def test_addopts_with_unbalanced_quotes_is_left_exactly_as_it_was(er):
+    assert er._without_record_options("-k 'oops --experiment-record=/r") == "-k 'oops --experiment-record=/r"
+
+
+# thread 4429622273 (P2): an unknown event kind is a damaged record
+
+
+def test_a_mistyped_event_kind_is_a_bad_field_and_cannot_hide_a_nested_launch(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("nested-launc", {"token": TOKEN})])
+    write_journal(tmp_path, "nested", 12, nested_token=TOKEN, starts=[("n.py::b", None)])
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False
+    assert any(p["kind"] == "bad-field" and "kind" in p["detail"] for p in summary["problems"])
+
+
+def test_collection_finish_is_a_known_kind_with_checked_fields(er, tmp_path):
+    finish = ("collection-finish", {"count": 1, "raw_ids_sha256": "0" * 64, "digest_algorithm": "sha256"})
+    (tmp_path / "ok").mkdir()
+    (tmp_path / "bad").mkdir()
+    write_journal(tmp_path / "ok", "serial", 11, starts=[("t.py::a", None)], extra=[finish])
+    write_journal(
+        tmp_path / "bad", "serial", 11, starts=[("t.py::a", None)], extra=[("collection-finish", {"count": "1"})]
+    )
+
+    assert er.reduce_journals(tmp_path / "ok", ["t.py::a"])["accepted"] is True
+    summary = er.reduce_journals(tmp_path / "bad", ["t.py::a"])
+    assert summary["accepted"] is False and "bad-field" in kinds(summary["problems"])
+
+
+def test_every_kind_the_recorder_writes_is_in_the_known_set(er):
+    written = set(re.findall(r'self\.append\(\s*"([a-z-]+)"', Path(er.__file__).read_text(encoding="utf-8")))
+    assert written <= set(er.EVENT_KINDS) and set(er.EVENT_KINDS) <= written | {"nested-launch"}
+
+
+# thread 4429622276 (P2): role-appropriate identity fields
+
+
+@pytest.mark.parametrize(
+    ("role", "changes", "field"),
+    [
+        pytest.param("nested", {"nested_token": ...}, "nested_token", id="nested-without-token"),
+        pytest.param("nested", {"nested_token": None}, "nested_token", id="nested-null-token"),
+        pytest.param("nested", {"nested_token": "xyz"}, "nested_token", id="nested-bad-token"),
+        pytest.param("nested", {"worker": "gw0"}, "worker", id="nested-with-worker"),
+        pytest.param("worker", {"worker": None}, "worker", id="worker-without-id"),
+        pytest.param("worker", {"worker": ""}, "worker", id="worker-empty-id"),
+        pytest.param("worker", {"nested_token": "xyz"}, "nested_token", id="worker-bad-token"),
+        pytest.param("serial", {"worker": "gw0"}, "worker", id="serial-with-worker"),
+        pytest.param("serial", {"nested_token": TOKEN}, "nested_token", id="serial-with-token"),
+        pytest.param("controller", {"worker": "gw0"}, "worker", id="controller-with-worker"),
+        pytest.param("controller", {"nested_token": TOKEN}, "nested_token", id="controller-with-token"),
+    ],
+)
+def test_a_process_whose_identity_does_not_fit_its_role_is_a_bad_field(er, tmp_path, role, changes, field):
+    kwargs = {"worker": "gw0"} if role == "worker" else {}
+    if role == "nested":
+        kwargs["nested_token"] = TOKEN
+    path = write_journal(tmp_path, role, 11, starts=[("t.py::a", None)] if role != "controller" else (), **kwargs)
+    tamper(path, "process-start", **changes)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"] if role != "controller" else None)
+
+    assert summary["accepted"] is False
+    assert any(p["kind"] == "bad-field" and field in p["detail"] for p in summary["problems"])
+
+
+def test_a_nested_journal_without_a_token_cannot_slip_through_with_an_empty_session(er, tmp_path):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    path = write_journal(tmp_path, "nested", 12, nested_token=TOKEN)
+    tamper(path, "process-start", nested_token=...)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False
+
+
+def test_the_roles_that_fit_their_fields_are_accepted(er, tmp_path):
+    write_journal(tmp_path, "controller", 10)
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a", None)])
+    write_journal(tmp_path, "worker", 12, worker="gw1", starts=[("t.py::b", None)])
+    summary = er.reduce_journals(tmp_path, ["t.py::a", "t.py::b"])
+    assert "bad-field" not in kinds(summary["problems"])
+
+
+# thread 4429622280 (P2): a phase and its item agree on who the item is
+
+
+@pytest.mark.parametrize(
+    ("changes", "field"),
+    [
+        ({"canonical_id": "t.py::other"}, "canonical_id"),
+        ({"param_id": "p1"}, "param_id"),
+        ({"requested_group": "g9"}, "requested_group"),
+        ({"effective_group": "g9"}, "effective_group"),
+    ],
+)
+def test_a_phase_with_another_identity_than_its_item_is_not_accepted(er, tmp_path, changes, field):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases={"t.py::a": [("setup", "failed")]})
+    tamper(path, "phase", nth=0, **changes)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"], require_phases=False)
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "phase-identity-mismatch"]
+    assert field in problem["detail"] and summary["accepted"] is False
+
+
+def test_a_failed_phase_with_a_false_identity_is_not_reported_as_accepted(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], phases={"t.py::a": [("setup", "failed")]})
+    tamper(path, "phase", nth=0, canonical_id="t.py::liar")
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False and "phase-identity-mismatch" in kinds(summary["problems"])
+
+
+def test_a_crash_report_with_no_item_identity_is_not_a_mismatch(er, tmp_path):
+    write_journal(
+        tmp_path,
+        "controller",
+        10,
+        extra=[
+            (
+                "phase",
+                {
+                    **phase_fields("t.py::a", None, "???", "failed"),
+                    "canonical_id": None,
+                    "param_id": None,
+                    "requested_group": None,
+                    "effective_group": None,
+                },
+            )
+        ],
+    )
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert "phase-identity-mismatch" not in kinds(summary["problems"])
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"canonical_id": "t.py::liar"}, {"param_id": "p1"}, {"effective_group": "g9"}],
+)
+def test_an_item_start_that_disagrees_with_its_manifest_row_is_not_accepted(er, tmp_path, changes):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    tamper(path, "item-start", **changes)
+    tamper(path, "phase", nth=0, **changes)
+    tamper(path, "phase", nth=1, **changes)
+    tamper(path, "phase", nth=2, **changes)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False and "item-identity-mismatch" in kinds(summary["problems"])
+
+
+def test_an_item_start_whose_canonical_id_does_not_follow_from_its_node_id_is_not_accepted(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", "g1")])
+    tamper(path, "item-start", requested_group="g2", effective_group="g2")
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "item-identity-mismatch" in kinds(summary["problems"])
+
+
+# thread 4429622285 (P2): the Windows inventory looks at the entry itself
+
+
+def test_the_inventory_without_a_directory_descriptor_never_follows_an_entry(er, tmp_path, monkeypatch):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    write_journal(tmp_path, "serial", 12, starts=[("t.py::b", None)])
+    followed = []
+    real = Path.stat
+
+    def spy(self, *args, **kwargs):
+        followed.append(self.name)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", spy)
+
+    paths, total = er._listed_by_path(tmp_path)
+
+    assert [p.name for p in paths] == ["journal-serial-11-1000.jsonl", "journal-serial-12-1000.jsonl"]
+    assert total > 0 and not any(name.startswith("journal-") for name in followed)
+
+
+def test_an_entry_that_is_a_link_does_not_count_the_size_of_its_target(er, tmp_path, monkeypatch):
+    target = tmp_path / "elsewhere.bin"
+    target.write_bytes(b"x" * 10_000)
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    try:
+        os.symlink(target, rec / "journal-serial-1-1.jsonl")
+    except (OSError, NotImplementedError):
+        pytest.skip("this account cannot create symbolic links")
+
+    paths, total = er._listed_by_path(rec)
+
+    assert [p.name for p in paths] == ["journal-serial-1-1.jsonl"] and total < 4096
+
+
+# thread 4429622288 (P2): a record folder that cannot be examined is named, not silent
+
+
+def test_a_record_folder_whose_lstat_fails_for_another_reason_is_a_named_problem(er, tmp_path, monkeypatch):
+    rec = tmp_path / "rec"
+    rec.mkdir()
+    real = os.lstat
+
+    def refuse(path, *args, **kwargs):
+        if os.fspath(path) == os.fspath(rec):
+            raise PermissionError(13, "Permission denied")
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", refuse)
+
+    summary = er.reduce_journals(rec)
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "folder-unreadable"]
+    assert "Permission denied" in problem["detail"] and summary["accepted"] is False
+
+
+@pytest.mark.parametrize("make", ["missing", "under-a-file"])
+def test_a_record_folder_that_is_simply_not_there_is_still_just_incomplete(er, tmp_path, make):
+    if make == "missing":
+        rec = tmp_path / "nothing"
+    else:
+        (tmp_path / "file").write_text("x", encoding="utf-8")
+        rec = tmp_path / "file" / "rec"
+
+    summary = er.reduce_journals(rec)
+
+    assert summary["problems"] == [] and summary["status"] == "incomplete" and summary["accepted"] is False
+
+
+@pytest.mark.skipif(
+    hasattr(os, "O_DIRECTORY") and os.open in os.supports_dir_fd, reason="the inventory by path is the Windows branch"
+)
+def test_reduce_journals_on_windows_never_follows_a_journal_entry_to_size_it(er, tmp_path, monkeypatch):
+    write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    followed = []
+    real = Path.stat
+
+    def spy(self, *args, **kwargs):
+        followed.append(self.name)
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", spy)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"], summary["problems"]
+    assert not any(name.startswith("journal-") for name in followed)
+
+
+def test_the_inventory_by_path_uses_neither_stat_nor_a_link_size(er, tmp_path, monkeypatch):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    plain = path.stat().st_size
+    seen = []
+    real = os.stat
+
+    def spy(target, *args, **kwargs):
+        seen.append(Path(target).name)
+        return real(target, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", spy)
+    _lstat_that(monkeypatch, path.name, lambda fields, call: {**fields, "st_file_attributes": 1024, "st_size": 10**9})
+
+    paths, total = er._listed_by_path(tmp_path)
+
+    assert [p.name for p in paths] == [path.name] and total == 0 and plain > 0
+    assert path.name not in seen
+
+
+def test_a_plain_entry_is_counted_by_its_own_size(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+
+    paths, total = er._listed_by_path(tmp_path)
+
+    assert paths == [path] and total == path.stat().st_size
+
+
+def test_a_handoff_with_a_bad_run_id_is_a_usage_error_and_a_good_one_is_read(er):
+    handoff = {"v": 1, "dir": str(Path(__file__).resolve().parent), "token": "0123456789abcdef", "parent_pid": 1}
+
+    assert er._read_handoff(json.dumps({**handoff, "run_id": "r-1"}))["run_id"] == "r-1"
+    assert er._read_handoff(json.dumps(handoff))["run_id"] is None
+    for bad in ("", "has space", "a" * 65, 5, ["x"]):
+        with pytest.raises(pytest.UsageError, match="run id"):
+            er._read_handoff(json.dumps({**handoff, "run_id": bad}))
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"count": "1"}, {"count": ...}, {"raw_ids_sha256": 5}, {"raw_ids_sha256": ...}, {"digest_algorithm": None}],
+    ids=["count-text", "count-missing", "digest-number", "digest-missing", "algorithm-null"],
+)
+def test_each_field_of_collection_finish_is_checked_on_its_own(er, tmp_path, changes):
+    finish = {"count": 1, "raw_ids_sha256": "0" * 64, "digest_algorithm": "sha256"}
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], extra=[("collection-finish", finish)])
+    tamper(path, "collection-finish", **changes)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is False and "bad-field" in kinds(summary["problems"])
+
+
+def test_an_item_start_not_in_the_manifest_still_has_its_canonical_id_checked_against_its_node_id(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], collected=[("t.py::other", None)])
+    tamper(path, "item-start", canonical_id="t.py::liar")
+    tamper(path, "phase", nth=0, canonical_id="t.py::liar")
+    tamper(path, "phase", nth=1, canonical_id="t.py::liar")
+    tamper(path, "phase", nth=2, canonical_id="t.py::liar")
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert "item-identity-mismatch" in kinds(summary["problems"]) and summary["accepted"] is False
