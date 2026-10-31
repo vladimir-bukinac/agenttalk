@@ -398,12 +398,12 @@ def _pattern(needles: tuple[str, ...], ignorecase: bool) -> re.Pattern[str]:
     return re.compile("|".join(re.escape(n) for n in needles), re.IGNORECASE if ignorecase else 0)
 
 
-def _identity(value: str) -> str:
+def _same_text(value: str) -> str:
     return value
 
 
 def _folder(ignorecase: bool):
-    return str.casefold if ignorecase else _identity
+    return str.casefold if ignorecase else _same_text
 
 
 @functools.lru_cache(maxsize=8)

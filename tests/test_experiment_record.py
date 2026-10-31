@@ -1580,6 +1580,53 @@ def test_the_shortened_form_needs_both_pieces_of_one_value(er, tmp_path, monkeyp
     assert fields["error_redactions"] == (0 if unchanged else 1)
 
 
+_RUNNER_PATH = (
+    "/opt/hostedtoolcache/Python/3.12.15/x64/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+)
+
+
+def _needles_with_a_long_path(value):
+    """The needles of a Linux runner: the sentinel, the whole PATH and its parts, labelled as the recorder does."""
+    found = {value: "<env:P3_S_LONG32>", _RUNNER_PATH: "<env:PATH>"}
+    for part in _RUNNER_PATH.split(":"):
+        if len(part) >= 8:
+            found.setdefault(part, "<env:PATH>")
+    return tuple(sorted(found, key=lambda needle: (-len(needle), needle))), found
+
+
+@pytest.mark.parametrize("ignorecase", [False, True], ids=["case-kept-posix", "case-folded-windows"])
+def test_the_text_folder_is_the_same_function_on_every_os(er, ignorecase):
+    # CI round 19, part A: a second module-level `_identity` (for stat results) replaced the text folder's, so with
+    # ignorecase False (Linux and macOS) every comparison saw the same constant and every value matched everything.
+    fold = er._folder(ignorecase)
+    assert fold("Ab9zA9") == ("ab9za9" if ignorecase else "Ab9zA9")
+    assert fold("Ab9zA9") != fold("other")
+
+
+@pytest.mark.parametrize("ignorecase", [False, True], ids=["case-kept-posix", "case-folded-windows"])
+@pytest.mark.parametrize(
+    ("template", "masked"),
+    [
+        ("{h3}...{t3}", False),  # pieces under 4 characters are not recognised
+        ("{h4}...{t4}", True),
+        ("{h4}...{o4}", False),
+        ("Loading...", False),
+        ("{h4} ... {t4}", False),
+        ("[{h12}...", True),  # a lone head of 12 characters
+        ("...{t12}]", True),  # a lone tail of 12 characters
+    ],
+)
+def test_a_shortened_form_is_matched_the_same_way_with_a_long_path_in_the_environment(er, ignorecase, template, masked):
+    value = LONG_SENTINELS["P3_S_LONG32"]
+    ordered, found = _needles_with_a_long_path(value)
+    text = template.format(
+        h3=value[:3], t3=value[-3:], h4=value[:4], t4=value[-4:], o4="zzzz", h12=value[:12], t12=value[-12:]
+    )
+    spans = er._shortened_spans(text, ordered, found, ignorecase)
+    assert bool(spans) is masked, spans
+    assert {label for _, _, label in spans} <= ({"<env:P3_S_LONG32>"} if masked else set()), spans
+
+
 def test_a_huge_integer_as_the_time_is_a_bad_field_not_a_crash(er, tmp_path):
     # CX3 rest: math.isfinite(10**400) raises OverflowError; the whole summary was lost.
     path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None), ("t.py::b", None)])
