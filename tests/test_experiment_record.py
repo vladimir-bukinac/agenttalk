@@ -121,9 +121,7 @@ def identity_fields(raw, group):
     parameter id (these hand-made ids have none) and the requested and effective group."""
     suffixed = group is not None and raw.endswith("@" + group)
     return {
-        "canonical_id": raw[: -len(group) - 1]
-        if suffixed and group
-        else raw,  # the writer strips a non-empty name only
+        "canonical_id": raw[: -len(group) - 1] if suffixed else raw,
         "param_id": None,
         "requested_group": group,
         "effective_group": group if suffixed else None,
@@ -5001,12 +4999,13 @@ def test_n2_an_empty_group_name_in_a_hand_made_journal_follows_the_same_rule(er,
 
 
 def test_n2_the_manifest_check_also_treats_an_empty_group_name_as_a_group(er, tmp_path):
-    # raw id ending in "@" with the requested group "": the writer's effective group is "" and the canonical id is whole
+    # a raw id ending in "@" with the requested group "": the effective group is "" and the canonical id drops the "@"
     write_journal(tmp_path, "serial", 11, starts=[("t.py::a@", "")], loadgroup=False)
 
-    summary = er.reduce_journals(tmp_path, ["t.py::a@"])
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
 
     assert summary["problems"] == [], summary["problems"]
+    assert list(summary["items"]) == ["t.py::a"]
 
 
 def _group_run(tmp_path, group, *, one_worker):
@@ -5040,3 +5039,48 @@ def test_r21_members_of_a_group_on_one_worker_are_accepted_and_the_group_is_list
 
     assert summary["problems"] == [] and summary["accepted"] is True
     assert summary["groups"] == {group: ["gw0"]}
+
+
+EMPTY_GROUP_TWO = """
+import pytest
+
+pytestmark = pytest.mark.xdist_group("")
+
+
+def test_x():
+    assert True
+
+
+def test_y():
+    assert True
+"""
+
+
+def test_r22_a_real_two_worker_run_with_an_empty_group_name_joins_the_serial_collection(project, er, tmp_path):
+    # xdist names these items `test_mod.py::test_x@`; the canonical id is the serial collection's id without it
+    project.makepyfile(test_mod=EMPTY_GROUP_TWO)
+    expected = collected_ids(project)
+    rec = tmp_path / "rec"
+
+    run_parallel(project, rec).assert_outcomes(passed=2)
+
+    raw = sorted(r["nodeid"] for _, r in records(rec, "item-start"))
+    assert raw == sorted(f"{i}@" for i in expected)
+    summary = er.reduce_journals(rec, expected)
+    assert summary["accepted"], summary["problems"]
+    assert sorted(summary["items"]) == sorted(expected)
+
+
+@pytest.mark.parametrize(
+    ("raw", "group", "canonical"),
+    [
+        ("t.py::a@", "", "t.py::a"),
+        ("t.py::a@g", "g", "t.py::a"),
+        ("t.py::a", "", "t.py::a"),
+        ("t.py::a@g", "other", "t.py::a@g"),
+        ("t.py::a@g", None, "t.py::a@g"),
+        ("t.py::x[a@b]", "", "t.py::x[a@b]"),
+    ],
+)
+def test_r22_canonical_id_removes_the_suffix_exactly_when_it_equals_the_requested_group(er, raw, group, canonical):
+    assert er.canonical_id(raw, group) == canonical

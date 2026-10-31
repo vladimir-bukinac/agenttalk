@@ -388,8 +388,8 @@ def add_option(parser: pytest.Parser) -> None:
 
 
 def canonical_id(raw_id: str, requested_group: str | None) -> str:
-    """The raw id minus xdist's `@<group>` suffix, removed only when it equals the requested group."""
-    if requested_group:
+    """The raw id minus xdist's `@<group>` suffix, removed only when it equals the requested group (empty name too)."""
+    if requested_group is not None:
         suffix = "@" + requested_group
         if raw_id.endswith(suffix):
             return raw_id[: -len(suffix)]
