@@ -180,7 +180,8 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   bytes costs nothing; none of it is read), manifest-identity-mismatch (a session manifest pairs a raw
                   id with an identity that does not follow from it: the canonical id is the raw id minus its group
                   suffix, the effective group is the requested group exactly when the suffix is there),
-                  item-not-in-manifest (an item started that its own process's session manifest never listed),
+                  item-not-in-manifest (an item started that its own process's session manifest never listed,
+                  wherever the start and the manifest stand in the journal: both are known before it is judged),
                   manifest-duplicate-id (a manifest lists a raw id twice, or two raw ids with one canonical id),
                   item-end-outside-item (an item-end with no running item: it is not counted either),
                   exit-status-mismatch (the exit-status event and the completion trailer disagree; the trailer
@@ -1726,6 +1727,7 @@ def reduce_journals(
         open_items: dict[str, dict[str, Any]] = {}
         canonical_of: dict[str, str] = {}
         own_identity: dict[str, dict[str, Any]] = {}  # raw id -> identity, from this journal's own session manifest
+        started: list[dict[str, Any]] = []  # the item-start records, judged against that manifest after the loop
         has_manifest = False
         for record in recs:
             kind, key = record["kind"], (float(record.get("t_wall", 0)), name, record["seq"])
@@ -1786,27 +1788,9 @@ def reduce_journals(
                                 **extra,
                             )
             elif kind == "item-start" and reconcile:
-                if has_manifest and record["nodeid"] not in own_identity:
-                    problems.add(
-                        "item-not-in-manifest",
-                        "an item started that this process's own collection manifest never listed",
-                        nodeid=record["nodeid"],
-                        file=name,
-                        **extra,
-                    )
+                started.append(record)
                 group = record.get("requested_group")
                 canonical = canonical_of[record["nodeid"]] = canonical_id(record["nodeid"], group)
-                differs = _identity_difference(
-                    {**own_identity.get(record["nodeid"], record), "canonical_id": canonical}, record
-                )
-                if differs is not None:
-                    problems.add(
-                        "item-identity-mismatch",
-                        f"the item's {differs} is not the one its node id and manifest row give",
-                        nodeid=record["nodeid"],
-                        file=name,
-                        **extra,
-                    )
                 if run is not None:
                     nested_started[run].add(canonical)
                 if root:
@@ -1846,6 +1830,30 @@ def reduce_journals(
                 found_problem = _phase_check(current["phases"], require_phases)
                 if found_problem is not None:
                     problems.add(found_problem[0], found_problem[1], nodeid=current["canonical"], file=name, **extra)
+        # Both the manifest and the starts are known now, so where in the journal each stands does not matter.
+        for record in started:
+            nodeid = record["nodeid"]
+            if has_manifest and nodeid not in own_identity:
+                problems.add(
+                    "item-not-in-manifest",
+                    "an item started that this process's own collection manifest never listed",
+                    nodeid=nodeid,
+                    file=name,
+                    **extra,
+                )
+            expected = {
+                **own_identity.get(nodeid, record),
+                "canonical_id": canonical_id(nodeid, record.get("requested_group")),
+            }
+            differs = _identity_difference(expected, record)
+            if differs is not None:
+                problems.add(
+                    "item-identity-mismatch",
+                    f"the item's {differs} is not the one its node id and manifest row give",
+                    nodeid=nodeid,
+                    file=name,
+                    **extra,
+                )
         for nodeid, current in open_items.items():
             unfinished.append((name, info["role"], info["worker"], run, nodeid, current["phases"]))
         if root and not has_manifest:

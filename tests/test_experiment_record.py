@@ -4405,3 +4405,89 @@ def test_the_docstring_names_every_problem_kind_round_sixteen_added(er):
         "exit-status-mismatch",
     ):
         assert kind in er.__doc__, kind
+
+
+# --- round 17: the manifest check does not depend on where the records stand (thread 4430325805, claude-rev F1) ---
+
+
+def edit_records(path, change):
+    """Rewrite a hand-made journal: `change` gets the list of records (dicts, trailer last) and returns the new list;
+    the sequence numbers and the trailer's count are then made right again."""
+    records = [json.loads(line) for line in Path(path).read_text(encoding="utf-8").split("\n") if line]
+    records = change(records)
+    for number, record in enumerate(records, 1):
+        record["seq"] = number
+    records[-1]["records"] = len(records) - 1
+    Path(path).write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+
+
+def item_block(raw, group=None, **identity_changes):
+    """The five records of one finished item (start, three phases, end), as a hand-made journal writes them."""
+    base = {"v": 2, "role": "serial", "worker": None, "pid": 11, "t_wall": 1500.0, "t_mono": 1.0}
+    block = [("item-start", {**item_start_fields(raw, group), **identity_changes})]
+    block += [("phase", {**phase_fields(raw, group, w, "passed"), **identity_changes}) for w in PHASE_ORDER]
+    block.append(("item-end", {"nodeid": raw}))
+    return [{**base, "kind": kind, **fields} for kind, fields in block]
+
+
+PHASE_ORDER = ("setup", "call", "teardown")
+
+
+def after_process_start_and_before_manifest(records, block):
+    return records[:1] + block + records[1:]
+
+
+def after_manifest(records, block):
+    manifest = next(n for n, r in enumerate(records) if r["kind"] == "collection-manifest")
+    return records[: manifest + 1] + block + records[manifest + 1 :]
+
+
+def test_a_ghost_item_started_before_the_manifest_is_refused_without_expected_ids(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    edit_records(path, lambda r: after_process_start_and_before_manifest(r, item_block("t.py::ghost")))
+
+    summary = er.reduce_journals(tmp_path)
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "item-not-in-manifest"]
+    assert problem["nodeid"] == "t.py::ghost" and summary["accepted"] is False
+
+
+def test_a_ghost_item_started_after_the_manifest_is_refused_too(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    edit_records(path, lambda r: after_manifest(r, item_block("t.py::ghost")))
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert kinds(summary["problems"]) == {"item-not-in-manifest"} and summary["accepted"] is False
+
+
+def test_an_item_the_manifest_lists_is_accepted_wherever_it_stands_among_the_records(er, tmp_path):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)], collected=[("t.py::a", None)])
+
+    def move_the_item_before_the_manifest(records):
+        manifest = next(n for n, r in enumerate(records) if r["kind"] == "collection-manifest")
+        item = [r for r in records if r["kind"] in ("item-start", "phase", "item-end")]
+        rest = [r for r in records if r["kind"] not in ("item-start", "phase", "item-end")]
+        return rest[:manifest] + item + rest[manifest:]
+
+    edit_records(path, move_the_item_before_the_manifest)
+
+    summary = er.reduce_journals(tmp_path, ["t.py::a"])
+
+    assert summary["accepted"] is True, summary["problems"]
+
+
+@pytest.mark.parametrize("field", ["canonical_id", "param_id", "effective_group"])
+def test_an_item_started_before_the_manifest_with_another_identity_than_its_row_is_refused(er, tmp_path, field):
+    path = write_journal(tmp_path, "serial", 11, starts=[("t.py::a", None)])
+    value = {"canonical_id": "t.py::liar", "param_id": "p1", "effective_group": "g9"}[field]
+
+    def replace_the_item(records):
+        rest = [r for r in records if r["kind"] not in ("item-start", "phase", "item-end")]
+        return after_process_start_and_before_manifest(rest, item_block("t.py::a", **{field: value}))
+
+    edit_records(path, replace_the_item)
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert "item-identity-mismatch" in kinds(summary["problems"]) and summary["accepted"] is False
