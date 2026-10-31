@@ -4491,3 +4491,89 @@ def test_an_item_started_before_the_manifest_with_another_identity_than_its_row_
     summary = er.reduce_journals(tmp_path)
 
     assert "item-identity-mismatch" in kinds(summary["problems"]) and summary["accepted"] is False
+
+
+# --- round 18: an exemption from the manifest is proven, not assumed (thread 4430325805, codex-rev N1) -------------
+
+NESTED_TOKEN = "0123456789abcdef"
+
+
+def nested_xdist_run(tmp_path, controller_items=()):
+    """A recorded serial run that launched one nested xdist run: a real worker with its session manifest, and the
+    nested controller (role "nested") with the node manifest and NO session manifest, running `controller_items`."""
+    write_journal(
+        tmp_path, "serial", 11, starts=[("root.py::a", None)], extra=[("nested-launch", {"token": NESTED_TOKEN})]
+    )
+    write_journal(tmp_path, "worker", 12, worker="gw0", nested_token=NESTED_TOKEN, starts=[("child.py::a", None)])
+    node = manifest_fields([("child.py::a", None)], source="node", source_worker="gw0")
+    return write_journal(
+        tmp_path,
+        "nested",
+        13,
+        nested_token=NESTED_TOKEN,
+        manifest=False,
+        starts=[(raw, None) for raw in controller_items],
+        extra=[("collection-manifest", node)],
+    )
+
+
+def test_a_nested_xdist_controller_that_runs_no_item_needs_no_session_manifest(er, tmp_path):
+    nested_xdist_run(tmp_path)
+
+    summary = er.reduce_journals(tmp_path)
+
+    assert summary["accepted"] is True, summary["problems"]
+
+
+def test_a_nested_controller_with_no_session_manifest_that_runs_an_uncollected_item_is_refused(er, tmp_path):
+    path = nested_xdist_run(tmp_path, controller_items=["child.py::ghost_never_collected"])
+
+    summary = er.reduce_journals(tmp_path)
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "manifest-missing"]
+    assert (
+        problem["file"] == path.name and problem["nested_run"] == NESTED_TOKEN and "started items" in problem["detail"]
+    )
+    assert summary["accepted"] is False
+
+
+def test_a_nested_controller_with_no_session_manifest_that_runs_a_listed_item_is_refused_too(er, tmp_path):
+    # even an item that the workers did list: the controller itself said nothing about what it collected
+    path = nested_xdist_run(tmp_path, controller_items=["child.py::a"])
+
+    summary = er.reduce_journals(tmp_path, ["root.py::a"])
+
+    assert any(p["kind"] == "manifest-missing" and p["file"] == path.name for p in summary["problems"])
+    assert summary["accepted"] is False
+
+
+def test_a_nested_controller_that_wrote_a_session_manifest_listing_what_it_ran_is_judged_like_any_nested_run(
+    er, tmp_path
+):
+    write_journal(
+        tmp_path, "serial", 11, starts=[("root.py::a", None)], extra=[("nested-launch", {"token": NESTED_TOKEN})]
+    )
+    write_journal(tmp_path, "nested", 13, nested_token=NESTED_TOKEN, starts=[("child.py::a", None)])
+
+    assert er.reduce_journals(tmp_path, ["root.py::a"])["accepted"] is True
+
+
+def test_a_root_xdist_controller_that_starts_an_item_is_refused(er, tmp_path):
+    write_journal(tmp_path, "controller", 10, starts=[("t.py::a", None)], manifest=False)
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a", None)])
+
+    summary = er.reduce_journals(tmp_path)
+
+    (problem,) = [p for p in summary["problems"] if p["kind"] == "controller-ran-items"]
+    assert problem["file"] == "journal-controller-10-1000.jsonl" and summary["accepted"] is False
+
+
+def test_a_root_xdist_controller_that_starts_no_item_is_not_refused(er, tmp_path):
+    write_journal(tmp_path, "controller", 10)
+    write_journal(tmp_path, "worker", 11, worker="gw0", starts=[("t.py::a", None)])
+
+    assert "controller-ran-items" not in kinds(er.reduce_journals(tmp_path)["problems"])
+
+
+def test_the_docstring_names_the_two_refusals_round_eighteen_added(er):
+    assert "controller-ran-items" in er.__doc__ and "started items" in er.__doc__

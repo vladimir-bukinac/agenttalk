@@ -161,7 +161,9 @@ problems          a list of {"kind", "detail", ...}; at most 20 per kind are lis
                   report for that node id exists), crash-unrecorded (an unfinished item of a worker that no crash
                   record explains), suffix-missing, group-split, duplicate-id, missing-id, unexpected-id,
                   nested-journal-missing, nested-journal-unlaunched, and the evidence checks:
-                  manifest-missing (a serial or worker process wrote no collection manifest; also a nested serial
+                  controller-ran-items (a root xdist controller journal holds an item-start: it runs no item),
+                  manifest-missing (a serial or worker process wrote no collection manifest, and any process that
+                  started items without one, a nested xdist controller included; also a nested serial
                   run or a nested worker, then with `nested_run`: absent evidence is never read as none),
                   controller-missing (worker journals of a run and no controller journal: its node manifests
                   and crash records cannot be there either; a nested xdist run's controller journal has the role
@@ -1707,7 +1709,8 @@ def reduce_journals(
     controller_runs: set[str | None] = set()  # runs with a controller journal (a nested one has the role "nested")
     nested_collected: dict[str, dict[str, None]] = defaultdict(dict)  # nested run -> canonical ids in its manifests
     nested_started: dict[str, set[str]] = defaultdict(set)  # nested run -> canonical ids that started
-    unmanifested: list[tuple[str, str, str]] = []  # (nested run, role, journal) of a nested process with no manifest
+    # (nested run, role, journal, started any item) of a nested process with no manifest
+    unmanifested: list[tuple[str, str, str, bool]] = []
     for name, info, recs in loaded:
         if info["nested_token"]:
             journaled.add(info["nested_token"])
@@ -1728,6 +1731,7 @@ def reduce_journals(
         canonical_of: dict[str, str] = {}
         own_identity: dict[str, dict[str, Any]] = {}  # raw id -> identity, from this journal's own session manifest
         started: list[dict[str, Any]] = []  # the item-start records, judged against that manifest after the loop
+        ran_as_controller = False  # a root controller journal that holds an item-start
         has_manifest = False
         for record in recs:
             kind, key = record["kind"], (float(record.get("t_wall", 0)), name, record["seq"])
@@ -1814,6 +1818,8 @@ def reduce_journals(
                     "canonical": canonical,
                     "identity": {key: record.get(key) for key in IDENTITY_FIELDS},
                 }
+            elif kind == "item-start":  # not reconciled: only the root controller gets here, and it runs no item
+                ran_as_controller = True
             elif kind == "item-end" and reconcile:
                 current = open_items.pop(record["nodeid"], None)
                 if current is None:
@@ -1859,7 +1865,11 @@ def reduce_journals(
         if root and not has_manifest:
             problems.add("manifest-missing", "the process wrote no collection manifest", file=name)
         elif run is not None and reconcile and not has_manifest:
-            unmanifested.append((run, info["role"], name))
+            unmanifested.append((run, info["role"], name, bool(started)))
+        if ran_as_controller:
+            problems.add(
+                "controller-ran-items", "an xdist controller started an item: it runs none", file=name, **extra
+            )
 
     for name, role, worker, run, nodeid, phases in unfinished:
         recorded = (run, nodeid) in crashed_ids or (worker is not None and (run, worker) in crashed_workers)
@@ -1912,11 +1922,17 @@ def reduce_journals(
             only_collected=only_collected,
             only_reference=only_expected,
         )
-    # A nested serial run and a nested worker must have written a manifest; the "nested" journal of a nested xdist
-    # run is its controller, which collects nothing (like the root controller) and needs none.
-    for run, role, name in unmanifested:
-        if role == "worker" or run not in worker_runs:
-            problems.add("manifest-missing", "the process wrote no collection manifest", file=name, nested_run=run)
+    # A nested serial run and a nested worker must have written a manifest. The "nested" journal of a nested xdist run
+    # is its controller, which collects nothing and needs none ONLY while it starts no item: a controller that ran
+    # items without saying what it collected is refused like any other process.
+    for run, role, name, ran in unmanifested:
+        if role == "worker" or run not in worker_runs or ran:
+            detail = (
+                "the process started items but wrote no collection manifest"
+                if ran
+                else "the process wrote no collection manifest"
+            )
+            problems.add("manifest-missing", detail, file=name, nested_run=run)
     for run in sorted(worker_runs | set(node_manifests), key=lambda r: r or ""):
         extra = {} if run is None else {"nested_run": run}
         if run in worker_runs and run not in controller_runs:
