@@ -7071,3 +7071,70 @@ def test_a_repeated_acknowledgement_and_gc_keep_the_acknowledged_state_and_do_no
     record = lanes.load_lanes(Store(root))["lanes"]["twicerel"]
     assert record["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED
     assert _branch_exists(root, "lane/twicerel")                       # the acknowledgement is not proof of anything
+
+
+# --- #668 round 2: a folder that appears, a saved token that is only history, an error text that is not a link --------
+
+
+@pytest.mark.parametrize("kind", ["relative", "absolute"])
+def test_a_folder_that_appears_after_the_first_look_is_refused_before_anything_is_saved(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, kind: str) -> None:
+    """R668-01. The folder is absent at the first look and there at the next: checked resolution succeeds for an
+    existing folder, so it proves nothing. The entry is looked at again just before the record is saved."""
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "appears")
+    if kind == "absolute":
+        _set_lane_fields(root, "appears", worktree_path=str(real))
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    real_look, looks = cli._lane_entry_present, []
+
+    def look(path):
+        looks.append(path)
+        answer = real_look(path)
+        if len(looks) == 1:
+            Path(path).mkdir(parents=True)                    # the folder comes back right after the first answer
+        return answer
+
+    monkeypatch.setattr(cli, "_lane_entry_present", look)
+    code, _out, err = _ack(root, "appears", capsys)
+    assert code == 2 and "still exists" in err and "Nothing was changed" in err
+    assert len(looks) >= 2 and lanes.lanes_path(store).read_bytes() == before and real.exists()
+
+
+def test_an_old_location_that_is_now_a_link_to_this_repository_is_still_a_moved_repository(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """R668-02. The saved canonical token names the folder the repository used to be in. Resolved again, it follows a
+    link made there since and reads as the current folder: the saved token is history, compared as it is."""
+    (tmp_path / "store").mkdir()
+    root, base = _repo(tmp_path / "store")
+    saved, real = _old_relative_lane(root, base, "oldlink")
+    old = tmp_path / "oldrepo"
+    token = lanes.canonical_host_path(old / ".worktrees" / real.name)    # as it was recorded, before the link existed
+    _set_lane_fields(root, "oldlink", worktree_toplevel_canonical=token)
+    _link_to(old, root)                                                   # and now `oldrepo` leads to this repository
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "oldlink", capsys)
+    assert code == 2 and "the lane records" in err and "moved repository" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+def test_an_error_text_that_names_a_link_is_not_a_link_the_catch_all_stays_generic(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """R668-03. Only the resolver's own reason establishes a link; a permission error whose file name happens to read
+    like that reason is just a permission error."""
+    root, base = _repo(tmp_path)
+    _old_relative_lane(root, base, "namedlink")
+    phrase = "a link or junction is on the way"
+
+    def denied(value):
+        raise PermissionError(errno.EACCES, "Access denied", phrase)
+
+    monkeypatch.setattr(lanes, "canonical_host_path_checked", denied)
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "namedlink", capsys)
+    assert code == 2 and "could not prove this path absent" in err
+    assert "never remove or replace an existing link blindly" not in err and "lanes.json" not in err
+    assert lanes.lanes_path(store).read_bytes() == before
