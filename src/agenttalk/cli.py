@@ -4691,12 +4691,29 @@ def _lane_ack_folder(store, lane_id: str, wt: str, lane: dict) -> tuple[str, str
     return path, None
 
 
+def _lane_ack_there(lane: dict, wt: str) -> str | None:
+    """The refusal when the worktree folder is there (or cannot be looked at), else None."""
+    try:
+        if not _lane_entry_present(Path(wt)):
+            return None
+    except (OSError, ValueError):
+        return (f"agenttalk lane abandon: whether the worktree folder {wt!r} is there could not be established "
+                "(it cannot be looked at); nothing was changed.\n")
+    if lane.get("worktree_state") == lane_mod.STATUS_CLEANUP_ACKNOWLEDGED:
+        # Plain `lane abandon` deliberately does nothing for an acknowledged lane: no advice here.
+        return (f"agenttalk lane abandon: the worktree folder {wt!r} exists again, although this lane's missing "
+                "worktree was acknowledged earlier. Nothing was changed; inspect the folder by hand before doing "
+                "anything with it.\n")
+    return (f"agenttalk lane abandon: the worktree folder {wt!r} still exists, so there is nothing to acknowledge; "
+            "`lane abandon` without the option removes a worktree normally. Nothing was changed.\n")
+
+
 def _lane_ack_unproved(error: BaseException) -> str:
     """What to do when a path could not be proved absent. Link advice only where a link is the established cause."""
     if isinstance(error, FileNotFoundError):
         return ("the folder that should hold it is missing: restore the verified intended ordinary folder and run "
                 "this again; never remove or replace an existing link blindly")
-    if "a link or junction is on the way" in str(error):
+    if "a link or junction is on the way" in str(getattr(error, "strerror", "")):  # the reason, not a file name
         return ("this path cannot be proved absent through a link or junction on the way: inspect it, and never "
                 "remove or replace an existing link blindly. If the record itself is wrong, it needs a repair: "
                 "`worktree_path` of this lane in `.agenttalk/state/lanes.json`")
@@ -6527,25 +6544,9 @@ def cmd_lane(args: argparse.Namespace) -> int:
                     if problem:
                         sys.stderr.write(problem)
                         return 2
-                    try:
-                        wt_there = _lane_entry_present(Path(wt))
-                    except (OSError, ValueError):
-                        sys.stderr.write(
-                            f"agenttalk lane abandon: whether the worktree folder {wt!r} is there could not be "
-                            "established (it cannot be looked at); nothing was changed.\n")
-                        return 2
-                    if wt_there:
-                        if lane.get("worktree_state") == lane_mod.STATUS_CLEANUP_ACKNOWLEDGED:
-                            # Plain `lane abandon` deliberately does nothing for an acknowledged lane: no advice here.
-                            sys.stderr.write(
-                                f"agenttalk lane abandon: the worktree folder {wt!r} exists again, although this "
-                                "lane's missing worktree was acknowledged earlier. Nothing was changed; inspect the "
-                                "folder by hand before doing anything with it.\n")
-                        else:
-                            sys.stderr.write(
-                                f"agenttalk lane abandon: the worktree folder {wt!r} still exists, so there is "
-                                "nothing to acknowledge; `lane abandon` without the option removes a worktree "
-                                "normally. Nothing was changed.\n")
+                    problem = _lane_ack_there(lane, wt)
+                    if problem:
+                        sys.stderr.write(problem)
                         return 2
                     try:
                         token = lane_mod.canonical_host_path_checked(wt)
@@ -6556,12 +6557,16 @@ def cmd_lane(args: argparse.Namespace) -> int:
                             f"{_lane_ack_unproved(error)}. Nothing was changed.\n")
                         return 2
                     recorded = lane.get("worktree_toplevel_canonical")
-                    if wt != stored and token != lane_mod.canonical_host_path(recorded):
+                    if wt != stored and token != recorded:  # the saved token is history: compared, never resolved again
                         sys.stderr.write(_lane_ack_unmatched(lane_id, stored, wt, recorded))
                         return 2
                     in_use = _lane_worktree_launch_use(store, {**lane, "worktree_path": wt})
                     if in_use is not None:
                         sys.stderr.write(f"agenttalk lane abandon: {in_use}; nothing was changed.\n")
+                        return 2
+                    problem = _lane_ack_there(lane, wt)  # resolving a path proves nothing about absence: look once more
+                    if problem:
+                        sys.stderr.write(problem)
                         return 2
                     if lane.get("worktree_state") != lane_mod.STATUS_CLEANUP_ACKNOWLEDGED:
                         lane["worktree_cleanup_acknowledged_at"] = datetime.now(timezone.utc).strftime(
