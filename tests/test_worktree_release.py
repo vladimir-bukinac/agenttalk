@@ -594,6 +594,17 @@ def test_relative_lane_still_protects_its_checkout(estate, tmp_path, monkeypatch
     assert (wt / "source.txt").exists()
 
 
+def test_an_absolute_lane_path_still_protects_its_checkout(estate):
+    """#668: new lanes always store an absolute path (also when made with a relative worktrees root)."""
+    repo, wt, cfg = estate
+    state = repo / ".agenttalk/state"
+    state.mkdir()
+    (state / "lanes.json").write_text(json.dumps({"lanes": {"held": {"status": "active", "worktree_path": str(wt)}}}))
+    code, text = run(cfg, wt)
+    assert code != 0 and "held" in text and "lanes.json" in text, text
+    assert (wt / "source.txt").exists()
+
+
 def test_bare_repository_in_cache_is_kept(estate):
     repo, wt, cfg = estate
     bare = wt / "__pycache__" / "backup.git"
