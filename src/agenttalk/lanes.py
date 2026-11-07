@@ -600,8 +600,14 @@ def deliveries_dir(store):
 
 
 def worktrees_root(store, configured: str | None = None):
+    """Where new lane worktrees go. A relative `--worktrees-root` is relative to the store root, never to the folder the
+    command runs in, and is stored in resolved (absolute) form. This only picks a folder to create: whether it is a
+    sound place is checked by the caller."""
     from pathlib import Path
-    return Path(configured) if configured else store.root / WORKTREE_DEFAULT_DIRNAME
+    if not configured:
+        return store.root / WORKTREE_DEFAULT_DIRNAME
+    path = Path(configured)
+    return path if path.is_absolute() else Path(os.path.realpath(store.root / path))
 
 
 def _integrity_secret_path(store):

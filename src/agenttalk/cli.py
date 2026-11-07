@@ -25,7 +25,7 @@ import webbrowser
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, DecimalException
 from fractions import Fraction
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from agenttalk import __version__
 from agenttalk import avatars as avatar_mod
@@ -4658,6 +4658,51 @@ def _lane_entry_present(path: Path) -> bool:
         return False
 
 
+_LANE_OWN_PATH_UNRESOLVED = ("the lane's own worktree path cannot be resolved, so it cannot be compared with the "
+                             "launch records")
+
+
+def _lane_ack_unmatched(lane_id: str, saved: str, path: str, recorded: object) -> str:
+    return (f"agenttalk lane abandon: lane {lane_id!r}: the saved worktree path {saved!r} would be {path!r}, but the "
+            f"lane records {recorded!r} as its checkout, so that cannot be shown to be the same folder (a moved "
+            "repository is one likely cause). Nothing was changed; inspect the actual checkout and its Git "
+            "registration before any repair.\n")
+
+
+def _lane_ack_folder(store, lane_id: str, wt: str, lane: dict) -> tuple[str, str | None]:
+    """The folder the acknowledgement looks at, and why it cannot be named (None when it can). An absolute saved path
+    is used as saved. A plainly relative one (no drive, no root) is joined to the store root as saved, never
+    normalized. One with `..` is refused, because which folder it names depends on links, and so is one the lane has no
+    recorded checkout folder for."""
+    if lane_mod._windows_path_is_absolute(wt) if os.name == "nt" else os.path.isabs(wt):
+        return wt, None
+    saved = PurePath(wt)
+    if saved.drive or saved.root:
+        return wt, (f"agenttalk lane abandon: the stored worktree path {wt!r} is not absolute, so whether that folder "
+                    "is gone depends on where the command runs; nothing was changed.\n")
+    if ".." in saved.parts:
+        return wt, (f"agenttalk lane abandon: lane {lane_id!r}: the saved worktree path {wt!r} contains '..', so which "
+                    "folder it names depends on links and cannot be proved. Nothing was changed; inspect the actual "
+                    "checkout and its Git registration before any repair.\n")
+    path = os.path.join(store.root, wt)
+    recorded = lane.get("worktree_toplevel_canonical")
+    if not isinstance(recorded, str) or not recorded:
+        return path, _lane_ack_unmatched(lane_id, wt, path, recorded)
+    return path, None
+
+
+def _lane_ack_unproved(error: BaseException) -> str:
+    """What to do when a path could not be proved absent. Link advice only where a link is the established cause."""
+    if isinstance(error, FileNotFoundError):
+        return ("the folder that should hold it is missing: restore the verified intended ordinary folder and run "
+                "this again; never remove or replace an existing link blindly")
+    if "a link or junction is on the way" in str(error):
+        return ("this path cannot be proved absent through a link or junction on the way: inspect it, and never "
+                "remove or replace an existing link blindly. If the record itself is wrong, it needs a repair: "
+                "`worktree_path` of this lane in `.agenttalk/state/lanes.json`")
+    return f"could not prove this path absent ({error}); inspect it"
+
+
 def _lane_is_plain_file(path: Path) -> bool:
     """True for a regular file (a link to one counts), and for an entry that is gone by now; False for anything else
     (a directory, a link to one, a device or pipe). Raises on a failure other than "not found", and on a link that
@@ -6477,14 +6522,14 @@ def cmd_lane(args: argparse.Namespace) -> int:
                             f"agenttalk lane abandon: lane {lane_id!r} has no worktree to acknowledge; "
                             "nothing was changed.\n")
                         return 2
-                    if not (lane_mod._windows_path_is_absolute(wt) if os.name == "nt" else os.path.isabs(wt)):
-                        sys.stderr.write(
-                            f"agenttalk lane abandon: the stored worktree path {wt!r} is not absolute, so whether "
-                            "that folder is gone depends on where the command runs; nothing was changed.\n")
+                    stored = wt
+                    wt, problem = _lane_ack_folder(store, lane_id, stored, lane)
+                    if problem:
+                        sys.stderr.write(problem)
                         return 2
                     try:
                         wt_there = _lane_entry_present(Path(wt))
-                    except OSError:
+                    except (OSError, ValueError):
                         sys.stderr.write(
                             f"agenttalk lane abandon: whether the worktree folder {wt!r} is there could not be "
                             "established (it cannot be looked at); nothing was changed.\n")
@@ -6502,7 +6547,19 @@ def cmd_lane(args: argparse.Namespace) -> int:
                                 "nothing to acknowledge; `lane abandon` without the option removes a worktree "
                                 "normally. Nothing was changed.\n")
                         return 2
-                    in_use = _lane_worktree_launch_use(store, lane)
+                    try:
+                        token = lane_mod.canonical_host_path_checked(wt)
+                    except (OSError, ValueError) as error:
+                        sys.stderr.write(
+                            f"agenttalk lane abandon: lane {lane_id!r}: "
+                            f"{_lane_unknown(_LANE_OWN_PATH_UNRESOLVED)}; "
+                            f"{_lane_ack_unproved(error)}. Nothing was changed.\n")
+                        return 2
+                    recorded = lane.get("worktree_toplevel_canonical")
+                    if wt != stored and token != lane_mod.canonical_host_path(recorded):
+                        sys.stderr.write(_lane_ack_unmatched(lane_id, stored, wt, recorded))
+                        return 2
+                    in_use = _lane_worktree_launch_use(store, {**lane, "worktree_path": wt})
                     if in_use is not None:
                         sys.stderr.write(f"agenttalk lane abandon: {in_use}; nothing was changed.\n")
                         return 2
@@ -6513,8 +6570,9 @@ def cmd_lane(args: argparse.Namespace) -> int:
                     lane["worktree_state"] = lane_mod.STATUS_CLEANUP_ACKNOWLEDGED
                     lane.pop("worktree_cleanup_error", None)
                     lane_mod.save_lanes(store, data)
-                    print(f"abandoned lane {lane_id}; its missing worktree is recorded as acknowledged, not verified. "
-                          f"{_LANE_WRAP_NOT_DETECTED}")
+                    taken = f" (stored as {stored}, taken as {wt})" if wt != stored else ""
+                    print(f"abandoned lane {lane_id}{taken}; its missing worktree is recorded as acknowledged, not "
+                          f"verified. {_LANE_WRAP_NOT_DETECTED}")
                     return 0
                 lane["status"] = lane_mod.STATUS_ABANDONED
                 if lane.get("worktree_state") == lane_mod.STATUS_CLEANUP_ACKNOWLEDGED:
@@ -17390,7 +17448,9 @@ def build_parser() -> argparse.ArgumentParser:
             "removes a checkout and never deletes a branch, cannot be combined with --delete-branch, and "
             "is refused while the worktree folder exists; a later abandon or `lane gc` does not take it as "
             "proof that the branch is unused. The worktree is also kept while a launch uses it, or when that "
-            "cannot be established. " + _LANE_WRAP_NOT_DETECTED
+            "cannot be established. A relative saved path is read as relative to the store root, as saved; one with "
+            "'..', or one agenttalk could not prove this path absent for (a link on the way, a missing parent, a "
+            "folder it cannot look at), is refused with advice and nothing is changed. " + _LANE_WRAP_NOT_DETECTED
         ),
     )
     labandon.add_argument("--id", required=True)
@@ -17401,7 +17461,8 @@ def build_parser() -> argparse.ArgumentParser:
     labandon.add_argument("--acknowledge-missing-worktree", action="store_true",
                           help="Finish the bookkeeping for a lane whose worktree is already gone: records your "
                                "acknowledgement, not a check. Never removes a checkout or deletes a branch. "
-                               + _LANE_WRAP_NOT_DETECTED)
+                               "A relative saved path is read as relative to the store root; a path agenttalk "
+                               "could not prove this path absent for is refused. " + _LANE_WRAP_NOT_DETECTED)
     labandon.set_defaults(func=cmd_lane)
 
     lgc = lsub.add_parser(

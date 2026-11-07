@@ -104,6 +104,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A lane made with a relative `--worktrees-root` can now be finished once its checkout is gone (#668).**
+  `lane abandon --acknowledge-missing-worktree` refused such a lane ("not absolute"), because a
+  relative path means different folders in different places. Now `lane assign` resolves a relative
+  `--worktrees-root` against the store root and saves the full path, so new lanes are fine from any
+  folder. For lanes saved earlier with a relative path, the acknowledgement reads the saved path as
+  saved, joined to the store root, and settles the lane only if that exact folder is absent, every
+  step of the path was checked, and it is the folder the lane recorded at assign. The saved record
+  is not rewritten. It still refuses, and says what to do and that nothing was changed, when the
+  saved path contains `..`, when the lane recorded no folder or a different one (for example after
+  the repository was moved), when the folder is there, or when absence cannot be proved (a missing
+  parent, a link on the way, a folder that cannot be looked at). Nothing here removes a checkout or
+  deletes a branch. One limit: a lane in a repository that was moved after it was made is recorded as
+  a person's word, as default lanes already are. Technical: `lanes.worktrees_root`;
+  `_lane_ack_folder` and the acknowledge branch of `lane abandon` in `cli.py`.
+
 - **A lane whose worktree is already gone can now be finished by an explicit acknowledgement (#654).**
   `lane abandon` removes a lane's worktree first and saves the lane record afterwards. When the save
   failed, a retry saved the lane as abandoned with its worktree cleanup marked "pending" for good,
