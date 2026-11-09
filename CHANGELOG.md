@@ -273,6 +273,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the installation, not protection against tampering; a process the agent leaves running keeps the
   lane in use.
 
+- **`lane check` and `lane deliver` judge what a delivery really writes (#671).** Before, a lane that
+  merged its own target branch was held with `out_of_bounds_path` for files the target had changed,
+  and a lane that undid a target change, or whose edit a target rename carried outside the lane,
+  could be waved through. Now the lane is compared with its one merge base with the target, and the
+  paths Git's own merge result would write on the current target are judged too. What you will
+  notice: a lane that only merged its target is no longer held for the target's files; a lane whose
+  edit the target moved outside the lane is held, naming the real destination, and the remedy is to
+  merge the target and move the edit, widen the lane, or ask for the move to be reversed; a lane
+  that undoes a target change is held on that file. When the lane and its target have several merge
+  bases, the new hold `ambiguous_merge_base` says to merge the current target into the lane and
+  check again. A delivery interrupted under the old rule is refused at its final re-check with
+  "terminal evaluation differs from the prepared GO snapshot"; retry the delivery. A saved
+  delivery's `changed_paths` can now name where a target rename moved the lane's edit. Existing
+  JSON gains one new `code` value and no new fields.
+
 - **Frozen Windows test environments include candidate dependencies in every role that installs it (#666, #688).**
   Host, runtime and wheel-test roots now include the project's static runtime dependencies;
   the build role remains separate. Before, host and wheel-test could omit a dependency and
