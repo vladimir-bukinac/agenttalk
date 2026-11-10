@@ -53,8 +53,10 @@ def _728_worker(root, action, pause, reached, resume, done, result, original_id,
                 real = module._atomic_write_text
 
                 def write(path, text):
-                    if Path(path) == s.config_path:
+                    if Path(path) == s.config_path and pause == "before-session":
                         wait()
+                    if Path(path).suffix == ".cursor" and pause == "before-cursors":
+                        wait()  # the new session is written; the cursor files are not
                     return real(path, text)
 
                 patch.setattr(module, "_atomic_write_text", write)
@@ -155,6 +157,30 @@ def test_728_reset_and_claimed_retry_take_turns(tmp_path, monkeypatch, archive, 
     assert retry_result[0] == "RequeueRefused" and "nothing was published" in retry_result[1]
     assert "earlier session" in retry_result[1] or "archived" in retry_result[1]
     assert record.read_bytes() == before and s.load_config()["session_id"] != session_id
+    assert not _706_published(s)
+
+
+@pytest.mark.parametrize("archive", [False, True])
+def test_739_reset_keeps_the_publication_lock_until_the_cursor_files_are_written(tmp_path, monkeypatch, archive):
+    s = _requeue_store(tmp_path, monkeypatch, False)
+    original, _ = _725_unmarked_copy(tmp_path, monkeypatch, s)  # a claimed record: a retry of it is what must wait
+    session_id = s.load_config()["session_id"]
+    ctx = multiprocessing.get_context("spawn")
+    reset = _728_child(ctx, s, "reset-archive" if archive else "reset", "before-cursors", original.id)
+    retry = None
+    try:
+        assert reset[1].wait(60), "reset did not reach the cursor writes"
+        assert s.load_config()["session_id"] != session_id  # the new session is already saved...
+        assert not list(s.state_dir.glob("*.cursor"))  # ...and the cursor files are not
+        retry = _728_child(ctx, s, "retry", "waiting", original.id)
+        assert retry[1].wait(60), "retry did not attempt publication"
+        assert not retry[3].wait(0.3), "retry got in before the cursor files were written"
+    finally:
+        reset_result = _728_finish(reset)
+        retry_result = _728_finish(retry) if retry else None
+    assert reset_result == ("ok", "")
+    assert retry_result[0] == "RequeueRefused" and "nothing was published" in retry_result[1]
+    assert sorted(p.name for p in s.state_dir.glob("*.cursor")) == ["beta.cursor", "gamma.cursor", "lead.cursor"]
     assert not _706_published(s)
 
 

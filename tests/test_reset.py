@@ -292,6 +292,20 @@ def test_init_force_does_NOT_clear_messages(store_root: Path) -> None:
     assert s.load_config()["agents"] == ["gamma", "delta"]
 
 
+def test_reset_help_tells_the_user_to_stop_the_agents_and_how_long_a_send_waits(
+    capsys: pytest.CaptureFixture,
+) -> None:
+    """While reset runs every send waits for the publication lock, and one that waits longer than 10 seconds fails:
+    the help says so. Argparse wraps lines to the terminal width, so collapse whitespace before checking."""
+    with pytest.raises(SystemExit):
+        cli.main(["reset", "--help"])
+    normalized = " ".join(capsys.readouterr().out.split())
+    assert (
+        "Stop the agents first: while reset runs, every send waits, and one that waits longer than 10 seconds fails."
+        in normalized
+    )
+
+
 def test_init_force_help_text_points_at_reset(
     tmp_path: Path,
     capsys: pytest.CaptureFixture,
