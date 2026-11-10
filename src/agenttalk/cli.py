@@ -5961,7 +5961,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
         try:
             base = _lane_resolve(store, args.base)
             target_head = _lane_resolve(store, args.target)
-            prefixes = lane_mod.normalize_prefixes(args.path, casefold=False)
+            prefixes = lane_mod.normalize_prefixes(args.path)
             planned_epoch = store.current_epoch()
             assignment_fp = _lane_assignment_fingerprint(store)
             assigned_at = _iso_now()

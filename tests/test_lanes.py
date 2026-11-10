@@ -37,6 +37,16 @@ OTHER = "b" * 40
 
 # --------------------------------------------------------------- pure: bounds
 
+@pytest.mark.parametrize("prefix", ["SRC/core", "SRC\\core/"])
+def test_normalize_prefixes_preserves_display_form(prefix):
+    assert lanes.normalize_prefixes([prefix]) == ["SRC/core"]
+
+
+def test_normalize_prefixes_rejects_casefold_keyword():
+    with pytest.raises(TypeError, match="casefold"):
+        lanes.normalize_prefixes(["SRC/core"], casefold=True)
+
+
 def test_segment_bounds_not_string_prefix() -> None:
     assert lanes.path_under_prefix("src/foo/x.py", "src/foo", casefold=False) is True
     assert lanes.path_under_prefix("src/foo", "src/foo", casefold=False) is True

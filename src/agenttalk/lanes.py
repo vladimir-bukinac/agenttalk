@@ -273,7 +273,7 @@ def canonical_host_path_checked(value: str | os.PathLike[str]) -> str:
     return token
 
 
-def normalize_prefixes(raw: object, *, casefold: bool = False) -> list[str]:
+def normalize_prefixes(raw: object) -> list[str]:
     """Normalize a path_subset to repo-relative prefixes (display form, not
     casefolded — casefolding is applied at COMPARE time). [] means the whole domain."""
     if raw is None:
