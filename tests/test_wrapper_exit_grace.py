@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import errno
 import gc
+import inspect
 import os
 import signal
 import subprocess
@@ -22,6 +23,7 @@ import textwrap
 import threading
 import time
 import types
+import warnings
 from pathlib import Path
 
 import pytest
@@ -37,6 +39,53 @@ pytestmark = pytest.mark.subprocess
 GRACE = getattr(run, "OUTPUT_GRACE_AFTER_EXIT_SECONDS", 2.0)
 HARD_TIMEOUT = GRACE + 10.0
 SLOW = GRACE + 2.0  # longer than the grace, so a grace started too early ends the read too soon
+
+
+def _process_identity(pid):
+    """Who has this process number: a text that names ONE process for as long as it exists (its creation time), or
+    None when it cannot be read. A number that was handed to a new process answers with a different text, so a
+    clean-up can tell the helper a test started from a stranger that got its number (#749). Self-contained: the
+    stand-in model embeds this source to record each helper's identity at the moment it starts it."""
+    import os
+    import subprocess
+
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.OpenProcess.argtypes = [ctypes.c_ulong, ctypes.c_int, ctypes.c_ulong]
+        kernel.OpenProcess.restype = ctypes.c_void_p
+        kernel.GetProcessTimes.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+        kernel.GetProcessTimes.restype = ctypes.c_int
+        kernel.CloseHandle.argtypes = [ctypes.c_void_p]
+        handle = kernel.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            created, exited, kernel_time, user_time = (wintypes.FILETIME() for _ in range(4))
+            ok = kernel.GetProcessTimes(
+                handle, ctypes.byref(created), ctypes.byref(exited), ctypes.byref(kernel_time), ctypes.byref(user_time)
+            )
+            if not ok:
+                return None
+            return f"nt:{(created.dwHighDateTime << 32) | created.dwLowDateTime}"
+        finally:
+            kernel.CloseHandle(handle)
+    try:  # Linux: the start time, in clock ticks after boot (field 22 of /proc/<pid>/stat)
+        with open(f"/proc/{pid}/stat", encoding="ascii", errors="replace") as stat:
+            return "proc:" + stat.read().rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        pass
+    try:  # macOS and others: the start time as the process list prints it
+        done = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, timeout=10, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    text = " ".join(done.stdout.split())
+    return f"ps:{text}" if done.returncode == 0 and text else None
+
 
 # A stand-in model: it prints a `codex exec --json` turn, then does what its mode asks.
 MODEL = textwrap.dedent(r'''
@@ -64,8 +113,9 @@ MODEL = textwrap.dedent(r'''
 
     def spawn(argv, **kwargs):
         child = subprocess.Popen(argv, **kwargs)
+        identity = _process_identity(child.pid) or "-"  # who this number is NOW: the clean-up stops only that process
         with open(pidfile, "a", encoding="utf-8") as handle:
-            handle.write(f"{child.pid}\n")
+            handle.write(f"{child.pid}\t{identity}\n")
 
     def again(next_mode):
         return [sys.executable, __file__, next_mode, pidfile, str(slow)]
@@ -134,6 +184,7 @@ MODEL = textwrap.dedent(r'''
         sys.stdout.flush()
         spawn(SLEEPER)
 ''')
+MODEL = inspect.getsource(_process_identity) + "\n\n" + MODEL
 
 SURVIVORS = [
     "survivor-nofds-null",      # close_fds=False, stdio on null: shares the pipe on Windows
@@ -154,8 +205,25 @@ def _argv(model: Path, mode: str, pidfile: Path) -> list[str]:
     return [sys.executable, str(model), mode, str(pidfile), str(SLOW)]
 
 
+def _helpers(pidfile: Path) -> list[tuple[int, str | None]]:
+    """Every process the stand-in started: its number and the identity it had then (None: none was recorded)."""
+    if not pidfile.exists():
+        return []
+    helpers = []
+    for line in pidfile.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            number, _tab, identity = line.partition("\t")
+            helpers.append((int(number), identity if identity not in ("", "-") else None))
+    return helpers
+
+
 def _pids(pidfile: Path) -> list[int]:
-    return [int(line) for line in pidfile.read_text(encoding="utf-8").split()] if pidfile.exists() else []
+    return [pid for pid, _identity_then in _helpers(pidfile)]
+
+
+def _identity(pid: int) -> str | None:
+    """Who has this number now (see `_process_identity`); the clean-up calls this one so a test can fake the answer."""
+    return _process_identity(pid)
 
 
 def _state(pid: int) -> str:
@@ -269,9 +337,28 @@ def _proven_unused_pid(candidates=range(4_000_000, 4_000_040, 4)) -> int | None:
 
 
 def _end_all(pidfile: Path) -> None:
-    """Stop every process the stand-in started, by its exact id, and prove each one has ended."""
-    for pid in _pids(pidfile):
+    """Stop every process the stand-in started, and prove each one has ended. A number is stopped only when it is
+    provably the helper the stand-in started: the identity it had then must be the identity it has now (#749). A number
+    that now belongs to a different process is left alone (the helper has ended); one whose identity was not recorded
+    or cannot be read now is left alone and fails the clean-up with a message, never a guess."""
+    for pid, recorded in _helpers(pidfile):
         if _state(pid) != "ended":
+            if recorded is None:
+                raise AssertionError(
+                    f"process {pid} started by the test has no recorded identity, so it is not stopped"
+                )
+            current = _identity(pid)
+            if current is None:
+                raise AssertionError(
+                    f"process {pid} started by the test cannot be identified now, so it is not stopped"
+                )
+            if current != recorded:
+                warnings.warn(
+                    f"process number {pid} now belongs to a different process than the helper the test started "
+                    "(the helper has ended); the other process was not stopped",
+                    stacklevel=2,
+                )
+                continue
             try:
                 os.kill(pid, signal.SIGTERM)  # TerminateProcess on Windows
             except ProcessLookupError:  # it ended between the check and the kill: nothing is left to stop
@@ -307,6 +394,35 @@ def _states(monkeypatch, first, then):
     return seen
 
 
+SAME = "identity-of-the-helper"  # what a fake lookup says for the helper the test started
+
+
+def _pidfile_for(tmp_path, pid, identity=SAME):
+    """A pid file as the stand-in writes it: the id and the identity the helper had when it was started."""
+    pidfile = tmp_path / "pids"
+    pidfile.write_text(f"{pid}\t{identity}\n", encoding="utf-8")
+    return pidfile
+
+
+def _identity_is(monkeypatch, answer):
+    """The clean-up asks `_identity` who has a number NOW; this fakes the answer (None: it cannot be read)."""
+    asked = []
+
+    def identity(pid):
+        asked.append(pid)
+        return answer
+
+    monkeypatch.setattr(sys.modules[__name__], "_identity", identity)
+    return asked
+
+
+def _kill_recorded(monkeypatch):
+    """Replace the real stop with a recorder: a test that must not stop anything proves it by the list staying empty."""
+    killed = []
+    monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append(pid))
+    return killed
+
+
 def _kill_raises(monkeypatch, error):
     def kill(pid, sig):
         raise error
@@ -320,11 +436,11 @@ def test_end_all_treats_a_process_that_ended_before_the_kill_as_stopped(tmp_path
     # handle to the ended process is still open, and as "parameter is incorrect" once none is; Linux as no such process.
     child = subprocess.Popen([sys.executable, "-c", "pass"])
     child.wait()
-    pidfile = tmp_path / "pids"
-    pidfile.write_text(str(child.pid), encoding="utf-8")
+    pidfile = _pidfile_for(tmp_path, child.pid)
     if handle == "closed":
         del child
         gc.collect()
+    _identity_is(monkeypatch, SAME)
     seen = _states(monkeypatch, "alive", None)
 
     _end_all(pidfile)  # must not raise
@@ -333,8 +449,8 @@ def test_end_all_treats_a_process_that_ended_before_the_kill_as_stopped(tmp_path
 
 
 def test_end_all_still_fails_for_a_process_that_is_really_still_running(tmp_path, monkeypatch):
-    pidfile = tmp_path / "pids"
-    pidfile.write_text("4242", encoding="utf-8")
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _identity_is(monkeypatch, SAME)
     _states(monkeypatch, "alive", "alive")
     _kill_raises(monkeypatch, ProcessLookupError())  # the kill finds nothing, yet the process is reported alive
     _fast_clock(monkeypatch)
@@ -347,8 +463,8 @@ def test_end_all_still_fails_for_a_process_that_is_really_still_running(tmp_path
 def test_end_all_never_takes_a_process_it_cannot_inspect_for_stopped(tmp_path, monkeypatch, kill):
     # The probe is denied after the first look (WinError 5 on Windows). Whether the kill is refused too or goes through,
     # "could not look" is not "gone": the clean-up must not return normally.
-    pidfile = tmp_path / "pids"
-    pidfile.write_text("4242", encoding="utf-8")
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _identity_is(monkeypatch, SAME)
     _states(monkeypatch, "alive", "unknown")
     if kill == "denied":
         _kill_raises(monkeypatch, PermissionError(13, "Access is denied", None, 5))
@@ -361,8 +477,8 @@ def test_end_all_never_takes_a_process_it_cannot_inspect_for_stopped(tmp_path, m
 
 
 def test_end_all_lets_an_unlisted_error_escape_even_when_the_process_is_confirmed_gone(tmp_path, monkeypatch):
-    pidfile = tmp_path / "pids"
-    pidfile.write_text("4242", encoding="utf-8")
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _identity_is(monkeypatch, SAME)
     _states(monkeypatch, "alive", "ended")
     _kill_raises(monkeypatch, OSError(errno.EIO, "Input/output error"))  # neither "no such process" nor a listed code
 
@@ -372,12 +488,136 @@ def test_end_all_lets_an_unlisted_error_escape_even_when_the_process_is_confirme
 
 @pytest.mark.skipif(os.name != "nt", reason="the access-denied and invalid-parameter codes are Windows errors")
 def test_end_all_does_not_swallow_a_windows_error_while_the_process_is_still_alive(tmp_path, monkeypatch):
-    pidfile = tmp_path / "pids"
-    pidfile.write_text("4242", encoding="utf-8")
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _identity_is(monkeypatch, SAME)
     _states(monkeypatch, "alive", "alive")
     _kill_raises(monkeypatch, PermissionError(13, "Access is denied", None, 5))
 
     with pytest.raises(PermissionError):
+        _end_all(pidfile)
+
+
+def test_end_all_does_not_stop_a_process_whose_number_was_reused(tmp_path, monkeypatch):
+    """The helper ended and the system gave its number to an unrelated program: the number is alive, but it is not the
+    helper, and it is left alone (#749). The helper itself has ended, so there is nothing to stop."""
+    pidfile = _pidfile_for(tmp_path, 4242, identity="the-helper")
+    _identity_is(monkeypatch, "an-unrelated-program")
+    _states(monkeypatch, "alive", "alive")
+    killed = _kill_recorded(monkeypatch)
+
+    with pytest.warns(UserWarning, match="different process"):
+        _end_all(pidfile)
+
+    assert killed == []
+
+
+def test_end_all_does_not_stop_a_process_it_cannot_identify(tmp_path, monkeypatch):
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _identity_is(monkeypatch, None)  # the number is alive and its identity cannot be read now
+    _states(monkeypatch, "alive", "alive")
+    killed = _kill_recorded(monkeypatch)
+
+    with pytest.raises(AssertionError, match="cannot be identified"):
+        _end_all(pidfile)
+
+    assert killed == []
+
+
+@pytest.mark.parametrize("line", ["4242\n", "4242\t-\n"], ids=["bare-number", "no-identity-read"])
+def test_end_all_does_not_stop_a_helper_whose_identity_was_never_recorded(tmp_path, monkeypatch, line):
+    pidfile = tmp_path / "pids"
+    pidfile.write_text(line, encoding="utf-8")
+    _identity_is(monkeypatch, SAME)
+    _states(monkeypatch, "alive", "alive")
+    killed = _kill_recorded(monkeypatch)
+
+    with pytest.raises(AssertionError, match="no recorded identity"):
+        _end_all(pidfile)
+
+    assert killed == []
+
+
+def test_end_all_stops_a_process_that_is_provably_the_helper(tmp_path, monkeypatch):
+    pidfile = _pidfile_for(tmp_path, 4242)
+    asked = _identity_is(monkeypatch, SAME)
+    answers = iter(["alive", "ended", "ended"])  # alive before the stop, ended after it
+    monkeypatch.setattr(sys.modules[__name__], "_state", lambda pid: next(answers))
+    killed = _kill_recorded(monkeypatch)
+
+    _end_all(pidfile)
+
+    assert killed == [4242] and asked == [4242]
+
+
+def test_end_all_does_not_ask_for_an_identity_when_the_helper_has_ended(tmp_path, monkeypatch):
+    pidfile = _pidfile_for(tmp_path, 4242)
+    asked = _identity_is(monkeypatch, SAME)
+    _states(monkeypatch, "ended", "ended")
+    killed = _kill_recorded(monkeypatch)
+
+    _end_all(pidfile)
+
+    assert killed == [] and asked == []
+
+
+def test_end_all_checks_each_helper_on_its_own(tmp_path, monkeypatch):
+    """Two helpers: the first number was reused, the second is the helper. Only the second is stopped."""
+    pidfile = tmp_path / "pids"
+    pidfile.write_text("1111\thelper-1\n2222\thelper-2\n", encoding="utf-8")
+    monkeypatch.setattr(sys.modules[__name__], "_identity", lambda pid: {1111: "stranger", 2222: "helper-2"}[pid])
+    status = {1111: iter(["alive"]), 2222: iter(["alive", "ended", "ended"])}
+    monkeypatch.setattr(sys.modules[__name__], "_state", lambda pid: next(status[pid]))
+    killed = _kill_recorded(monkeypatch)
+
+    with pytest.warns(UserWarning, match="1111"):
+        _end_all(pidfile)
+
+    assert killed == [2222]
+
+
+def test_the_pid_file_lists_numbers_and_identities_and_still_reads_a_bare_number(tmp_path):
+    pidfile = tmp_path / "pids"
+    pidfile.write_text("11\tnt:123\n22\tps:Mon Nov 11 10:00:00 2026\n33\n44\t-\n", encoding="utf-8")
+
+    assert _pids(pidfile) == [11, 22, 33, 44]
+    assert _helpers(pidfile) == [(11, "nt:123"), (22, "ps:Mon Nov 11 10:00:00 2026"), (33, None), (44, None)]
+    assert _helpers(tmp_path / "absent") == []
+
+
+def test_the_identity_of_a_running_process_is_stable_and_differs_from_another_process():
+    first = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    second = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        mine, again, other = _identity(first.pid), _identity(first.pid), _identity(second.pid)
+    finally:
+        first.kill()
+        second.kill()
+        first.wait()
+        second.wait()
+
+    assert mine is not None and mine == again  # the same process answers the same
+    assert other is not None and other != mine  # a different process does not
+
+
+def test_the_identity_of_an_unused_number_is_unreadable():
+    unused = _proven_unused_pid()
+    if unused is None:
+        pytest.skip("no candidate id could be shown unused by the platform's process list")
+
+    assert _identity(unused) is None
+
+
+def test_the_stand_in_records_the_identity_of_the_helper_it_starts(model, tmp_path):
+    pidfile = tmp_path / "pids.txt"
+    try:
+        done = subprocess.run(
+            _argv(model, "survivor-default-null", pidfile), capture_output=True, text=True, timeout=60, check=False
+        )
+        helpers = _helpers(pidfile)
+        assert done.returncode == 0 and len(helpers) == 1
+        pid, recorded = helpers[0]
+        assert recorded is not None and recorded == _identity(pid)  # what it wrote is what the lookup says now
+    finally:
         _end_all(pidfile)
 
 
