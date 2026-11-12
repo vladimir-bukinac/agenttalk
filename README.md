@@ -164,7 +164,7 @@ assistant that talks to you.
 
 New here? Give your assistant [`docs/LEAD-SETUP-BRIEF.md`](https://github.com/zoolok17/agenttalk/blob/v0.104.0/docs/LEAD-SETUP-BRIEF.md) and ask it to set up
 agenttalk: it sets up a first team without the supervisor and tells you what only a person can decide.
-Once agenttalk is installed, the brief and the other guides for leads are on your machine too: `agenttalk doctor`
+Once agenttalk is installed, the brief and the other guides for leads are on your machine too: `& $env:AGENTTALK_PY -m agenttalk doctor`
 prints the installed `module path`, and the brief is `docs/LEAD-SETUP-BRIEF.md` under it.
 To do it yourself, follow the steps below.
 
@@ -194,8 +194,23 @@ export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"
 ```
 
 `AGENTTALK_PY` names the Python you just installed agenttalk into. Keep using that Python after you change folders.
-In each new terminal, set `AGENTTALK_PY` again to the same full Python path before starting an assistant. The steps
-below show PowerShell; on Linux or macOS, replace `& $env:AGENTTALK_PY` with `"$AGENTTALK_PY"`.
+In the first terminal, type `$env:AGENTTALK_PY` in PowerShell or `echo "$AGENTTALK_PY"` in sh to see its full path.
+In each new terminal, set `AGENTTALK_PY` again to that same full path. Then put its command folder first on PATH,
+so assistants that run a plain `agenttalk` use this environment too. Do this in every terminal before starting an assistant.
+
+PowerShell:
+
+```powershell
+$env:PATH = (Split-Path $env:AGENTTALK_PY) + ';' + $env:PATH
+```
+
+sh:
+
+```sh
+export PATH="$(dirname "$AGENTTALK_PY"):$PATH"
+```
+
+The steps below show PowerShell; on Linux or macOS, replace `& $env:AGENTTALK_PY` with `"$AGENTTALK_PY"`.
 
 Then, in your project's top folder:
 

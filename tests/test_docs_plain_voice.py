@@ -135,28 +135,35 @@ def test_readme_describes_the_install_flags_exactly() -> None:
 
 
 @pytest.mark.parametrize(
-    "shell, create, capture, invoke",
+    "shell, create, capture, invoke, path_setup, show_path",
     [
         (
             "powershell",
             "python -m venv agenttalk-env",
             r"$env:AGENTTALK_PY = (Resolve-Path .\agenttalk-env\Scripts\python.exe).Path",
             "& $env:AGENTTALK_PY",
+            "$env:PATH = (Split-Path $env:AGENTTALK_PY) + ';' + $env:PATH",
+            "$env:AGENTTALK_PY",
         ),
         (
             "sh",
             "python3 -m venv agenttalk-env",
             'export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"',
             '"$AGENTTALK_PY"',
+            'export PATH="$(dirname "$AGENTTALK_PY"):$PATH"',
+            'echo "$AGENTTALK_PY"',
         ),
     ],
+    ids=["powershell", "sh"],
 )
-def test_quick_start_uses_the_environment_python(shell, create, capture, invoke):
-    """Creation, absolute interpreter capture and both module calls stay in one environment."""
+def test_quick_start_uses_the_environment_python(shell, create, capture, invoke, path_setup, show_path):
+    """The first install block uses one Python; assistant terminals put its commands first on PATH."""
     started = README.read_text(encoding="utf-8").split("## Get started\n", 1)[1].split("\n## ", 1)[0]
-    blocks = dict(re.findall(r"```(powershell|sh)\n(.*?)```", started, re.S))
-    assert shell in blocks, f"Get started needs the {shell} environment recipe"
-    commands = [line.strip() for line in blocks[shell].splitlines() if line.strip()]
+    blocks = [
+        body for language, body in re.findall(r"```(powershell|sh)\n(.*?)```", started, re.S) if language == shell
+    ]
+    assert blocks, f"Get started needs the {shell} environment recipe"
+    commands = [line.strip() for line in blocks[0].splitlines() if line.strip()]
     assert len(commands) == 4
     assert commands[:2] == [create, capture]
     assert commands[2].startswith(invoke + " -m pip install ")
@@ -165,3 +172,12 @@ def test_quick_start_uses_the_environment_python(shell, create, capture, invoke)
     assert commands[3] == invoke + " -m agenttalk install-skills"
     assert "& $env:AGENTTALK_PY -m agenttalk init --here --agents claude-dev,codex-rev" in started
     assert "& $env:AGENTTALK_PY -m agenttalk codex-config --enable" in started
+    assert any(path_setup == line.strip() for block in blocks[1:] for line in block.splitlines())
+    assert f"`{show_path}`" in started
+    assert "`& $env:AGENTTALK_PY -m agenttalk doctor`" in started
+
+
+def test_quick_setup_links_to_the_first_install_without_another_pip_recipe():
+    quick = README.read_text(encoding="utf-8").split("\n## 2. Quick setup\n", 1)[1].split("\n## ", 1)[0]
+    assert "[Get started](#get-started)" in quick
+    assert "pip install" not in quick
