@@ -103,6 +103,9 @@ def test_doctor_powershell_check_keeps_result_and_locks_only_set_up_project(
 
     monkeypatch.setattr(store, "_powershell_selection_lock", tracked_lock)
     monkeypatch.setattr(doctor.sys, "platform", "win32")
+    # This test is about locking, not about where PowerShell is installed: no host found.
+    monkeypatch.setattr(doctor.psh, "program_files_candidates", lambda *a, **k: ())
+    monkeypatch.setattr(doctor.psh, "path_candidate_remediations", lambda *a, **k: ())
     check = doctor._check_powershell_host(store)
     assert check == doctor.Check(
         name="powershell_host",
@@ -117,6 +120,174 @@ def test_doctor_powershell_check_keeps_result_and_locks_only_set_up_project(
     assert len(lock_entries) == int(initialized)
     if not initialized:
         assert list(tmp_path.iterdir()) == []
+
+
+def _windows_without_selection(monkeypatch: pytest.MonkeyPatch, program_files, on_path=()):
+    """Windows branch forced (the check returns early on other platforms); the two candidate
+    searches `supervise --select-pwsh` uses are replaced by what the test wants them to find."""
+    monkeypatch.setattr(doctor.sys, "platform", "win32")
+    monkeypatch.setattr(doctor.psh, "program_files_candidates", lambda *a, **k: tuple(program_files))
+    monkeypatch.setattr(doctor.psh, "path_candidate_remediations", lambda *a, **k: tuple(on_path))
+
+
+def test_doctor_powershell_check_says_so_when_pwsh_is_installed_but_not_selected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pwsh = tmp_path / "pf" / "PowerShell" / "7" / "pwsh.exe"
+    pwsh.parent.mkdir(parents=True)
+    pwsh.write_bytes(b"")  # only its existence is tested; nothing is run
+    _windows_without_selection(monkeypatch, [str(pwsh)])
+    check = doctor._check_powershell_host(Store(tmp_path / "project"))
+    assert (check.name, check.status, check.data) == (
+        "powershell_host", "error", {"status": "error", "task_status": "unknown"},
+    )
+    assert str(pwsh) in check.fix
+    assert "already installed" in check.fix
+    assert "`agenttalk supervise --select-pwsh`" in check.fix
+    assert "install PowerShell" not in check.fix and "aka.ms" not in check.fix
+    # the message no longer tells the reader to install what is installed
+    assert "no PowerShell host is selected" in check.details
+    assert "aka.ms" not in check.details
+    assert check.details.endswith("; task status UNKNOWN")
+
+
+def test_doctor_powershell_check_names_the_path_command_for_a_path_only_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    command = 'agenttalk supervise --select-pwsh --pwsh "C:\\tools\\pwsh.exe"'
+    _windows_without_selection(monkeypatch, [], on_path=[command])
+    check = doctor._check_powershell_host(Store(tmp_path))
+    assert check.status == "error"
+    assert f"`{command}`" in check.fix
+    assert "already installed" in check.fix
+    assert "aka.ms" not in check.fix
+
+
+def test_doctor_powershell_check_keeps_install_advice_when_no_pwsh_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    missing = tmp_path / "pf" / "PowerShell" / "7" / "pwsh.exe"  # never created
+    _windows_without_selection(monkeypatch, [str(missing)])
+    check = doctor._check_powershell_host(Store(tmp_path / "project"))
+    assert check.status == "error"
+    assert check.fix == doctor.psh.INSTALL_REMEDIATION
+    assert doctor.psh.INSTALL_REMEDIATION in check.details
+
+
+def test_doctor_powershell_check_never_runs_the_pwsh_it_finds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pwsh = tmp_path / "pwsh.exe"
+    pwsh.write_bytes(b"")
+    _windows_without_selection(monkeypatch, [str(pwsh)])
+
+    def boom(*args, **kwargs):
+        raise AssertionError("doctor must only test that the file exists")
+
+    monkeypatch.setattr(doctor.psh, "probe_candidate", boom)
+    monkeypatch.setattr(doctor.psh, "resolve_candidate", boom)
+    monkeypatch.setattr(doctor.psh.subprocess, "run", boom)
+    monkeypatch.setattr(doctor.psh.subprocess, "Popen", boom)
+    assert doctor._check_powershell_host(Store(tmp_path / "project")).status == "error"
+
+
+def test_doctor_powershell_install_advice_constant_is_unchanged() -> None:
+    # supervisor_lifecycle and `supervise --select-pwsh` share this text; doctor must not edit it.
+    assert doctor.psh.INSTALL_REMEDIATION == (
+        "install PowerShell Core 7+ (pwsh) from https://aka.ms/powershell, then run "
+        "`agenttalk supervise --select-pwsh`"
+    )
+
+
+def test_doctor_not_set_up_check_says_not_set_up_yet(tmp_path: Path) -> None:
+    check = doctor._check_init(Store(tmp_path))
+    assert (check.name, check.status) == ("store.initialized", "error")
+    assert check.details == f"not set up yet: no .agenttalk/ found at {tmp_path}"
+    assert "`agenttalk init --here --agents <your agent names>`" in check.fix
+    assert "claude,codex" not in check.fix
+
+
+def test_doctor_not_set_up_run_keeps_result_exit_code_and_json_shape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.delenv("AGENTTALK_ROOT", raising=False)
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["doctor", "--json"]) == 2
+    report = json.loads(capsys.readouterr().out)
+    check = report["checks"][0]
+    assert report["overall"] == "error"
+    assert set(check) == {"name", "status", "details", "fix", "data"}  # the same keys as before
+    assert check["data"] is None
+    assert (check["name"], check["status"]) == ("store.initialized", "error")
+    assert check["details"].startswith("not set up yet: no .agenttalk/ found at ")
+    assert cli.main(["doctor"]) == 2
+    text = capsys.readouterr().out
+    assert "not set up yet" in text
+    assert "overall: ERROR" in text
+    # no extra line promises the ERROR goes away after `init`: on Windows powershell_host
+    # still fails until `supervise --select-pwsh`
+    assert "will clear" not in text and "then run doctor again" not in text
+    assert not (tmp_path / ".agenttalk").exists()
+
+
+def _stub_skill_findings(monkeypatch: pytest.MonkeyPatch, findings) -> None:
+    from agenttalk import skill_currency as skc
+
+    monkeypatch.setattr(skc, "check_bundled_skills", lambda *a, **k: list(findings))
+
+
+def _lag(n: int):
+    from agenttalk import skill_currency as skc
+
+    return [
+        skc.Finding(f"skills/s{i}.md", 0, "reviewed-against",
+                    "reviewed-against 0.92 lags package 0.104 (re-review against current CLI)",
+                    level="warn")
+        for i in range(n)
+    ]
+
+
+def test_skill_currency_advisory_only_is_a_note_for_the_maintainers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    findings = _lag(41)
+    _stub_skill_findings(monkeypatch, findings)
+    check = doctor._check_skill_currency()
+    assert check.status == "warn"
+    assert check.details.startswith("41 bundled skills were last reviewed against an older agenttalk")
+    assert check.fix == "nothing to do: this is a note for the maintainers of the bundled skills"
+    assert "re-stamp" not in check.details + check.fix
+    # every finding stays in the JSON data
+    assert len(check.data["findings"]) == 41
+    assert check.data["findings"][0] == {
+        "file": "skills/s0.md", "line": 0, "token": "reviewed-against",
+        "reason": findings[0].reason, "level": "warn",
+    }
+
+
+def test_skill_currency_with_blocking_findings_also_names_the_maintainers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from agenttalk import skill_currency as skc
+
+    blocking = skc.Finding("skills/a.md", 3, "agenttalk nope", "unknown CLI command", level="error")
+    _stub_skill_findings(monkeypatch, [blocking, *_lag(2)])
+    check = doctor._check_skill_currency()
+    assert check.status == "warn"
+    assert check.details.startswith("1 blocking + 2 advisory skill-currency issue(s): ")
+    assert "skills/a.md:3 unknown CLI command" in check.details
+    # the maintainer advice is kept, but it now says who it is for
+    assert "maintainers" in check.fix
+    assert "fix blocking drift" in check.fix
+    assert "re-stamp reviewed-against" in check.fix
+    assert len(check.data["findings"]) == 3
+
+
+def test_skill_currency_with_no_findings_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_skill_findings(monkeypatch, [])
+    check = doctor._check_skill_currency()
+    assert check.status == "ok" and check.fix == ""
+    assert check.details == "bundled skills pass currency lint (frontmatter + stamps + CLI tokens)"
 
 
 def test_doctor_on_initialized_project_includes_all_check_categories(

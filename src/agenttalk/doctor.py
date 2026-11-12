@@ -609,6 +609,29 @@ def _check_ovh_qwen_gateway(store: Store) -> Check | None:
     )
 
 
+def _installed_pwsh_fix() -> str:
+    """The fix text when PowerShell 7 is already installed but not selected, else "".
+
+    Looks in the places `agenttalk supervise --select-pwsh` looks (its standard Program Files
+    search, then the PATH hints it prints). A file-existence test only: nothing is executed."""
+    try:
+        for candidate in psh.program_files_candidates():
+            if os.path.isfile(candidate):
+                return (
+                    f"PowerShell 7 is already installed at {candidate}; run "
+                    "`agenttalk supervise --select-pwsh` to select it (only the supervisor needs this)"
+                )
+        command = next(iter(psh.path_candidate_remediations()), "")
+    except (OSError, ValueError):
+        return ""
+    if not command:
+        return ""
+    return (
+        f"PowerShell 7 is already installed; run `{command}` to select it "
+        "(only the supervisor needs this)"
+    )
+
+
 def _check_powershell_host(store: Store) -> Check:
     if not sys.platform.startswith("win"):
         return Check(
@@ -624,11 +647,18 @@ def _check_powershell_host(store: Store) -> Check:
             # A diagnostic must not create a store just to lock an absent selection.
             record = supervisor_lifecycle.read_selected_host_locked(store)
     except (OSError, supervisor_lifecycle.SupervisorLifecycleError) as exc:
+        message = str(exc)
+        fix = psh.INSTALL_REMEDIATION
+        installed_fix = _installed_pwsh_fix()
+        if installed_fix:
+            # PowerShell 7 is already here; "install it" would send the reader the wrong way.
+            fix = installed_fix
+            message = message.removesuffix(f"; {psh.INSTALL_REMEDIATION}")
         return Check(
             name="powershell_host",
             status="error",
-            details=f"PowerShell Core host unavailable: {exc}; task status UNKNOWN",
-            fix=psh.INSTALL_REMEDIATION,
+            details=f"PowerShell Core host unavailable: {message}; task status UNKNOWN",
+            fix=fix,
             data={"status": "error", "task_status": "unknown"},
         )
     warning = record.get("_warning")
@@ -1769,8 +1799,8 @@ def _check_init(store: Store) -> Check:
         return Check(
             name="store.initialized",
             status="error",
-            details=f"no .agenttalk/ found at {store.root}",
-            fix="run `agenttalk init --here --agents claude,codex` from the project root",
+            details=f"not set up yet: no .agenttalk/ found at {store.root}",
+            fix="run `agenttalk init --here --agents <your agent names>` from the project root",
         )
     try:
         cfg = store.load_config()
@@ -1896,14 +1926,26 @@ def _check_skill_currency() -> Check:
     lead = errors or warnings
     sample = "; ".join(f"{f.file}:{f.line} {f.reason}" for f in lead[:5])
     more = "" if len(lead) <= 5 else f" (+{len(lead) - 5} more)"
+    data = {"findings": [{"file": f.file, "line": f.line, "token": f.token,
+                          "reason": f.reason, "level": f.level} for f in findings]}
+    if not errors:
+        # Only version-lag notes: they are for the people who maintain the bundled skills.
+        return Check(
+            name="skill_currency", status="warn",
+            details=f"{len(warnings)} bundled skills were last reviewed against an older agenttalk "
+                    f"version ({sample}{more})",
+            # still a text fix, so the JSON `fix` keeps its type
+            fix="nothing to do: this is a note for the maintainers of the bundled skills",
+            data=data,
+        )
     return Check(
         name="skill_currency", status="warn",
         details=f"{len(errors)} blocking + {len(warnings)} advisory skill-currency "
                 f"issue(s): {sample}{more}",
-        fix="fix blocking drift (stamps/CLI tokens/parity); re-stamp reviewed-against on "
-            "review (see docs/skill-devkit-evolution-design.md)",
-        data={"findings": [{"file": f.file, "line": f.line, "token": f.token,
-                            "reason": f.reason, "level": f.level} for f in findings]},
+        fix="for the maintainers of the bundled skills (the problem is in the agenttalk package, "
+            "not in your project): fix blocking drift (stamps/CLI tokens/parity); re-stamp "
+            "reviewed-against on review (see docs/skill-devkit-evolution-design.md)",
+        data=data,
     )
 
 
