@@ -7,6 +7,8 @@ import json
 import re
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 README = REPO / "README.md"
 MANUAL = REPO / "docs" / "AGENTTALK-NEW-USER-MANUAL.md"
@@ -130,3 +132,36 @@ def test_readme_describes_the_install_flags_exactly() -> None:
     assert ("`--claude-only` and `--codex-only` choose which side gets the bus commands; the devkit "
             "still goes to both sides unless you add `--no-devkit`") in readme
     assert "to install just one side" not in readme
+
+
+@pytest.mark.parametrize(
+    "shell, create, capture, invoke",
+    [
+        (
+            "powershell",
+            "python -m venv agenttalk-env",
+            r"$env:AGENTTALK_PY = (Resolve-Path .\agenttalk-env\Scripts\python.exe).Path",
+            "& $env:AGENTTALK_PY",
+        ),
+        (
+            "sh",
+            "python3 -m venv agenttalk-env",
+            'export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"',
+            '"$AGENTTALK_PY"',
+        ),
+    ],
+)
+def test_quick_start_uses_the_environment_python(shell, create, capture, invoke):
+    """Creation, absolute interpreter capture and both module calls stay in one environment."""
+    started = README.read_text(encoding="utf-8").split("## Get started\n", 1)[1].split("\n## ", 1)[0]
+    blocks = dict(re.findall(r"```(powershell|sh)\n(.*?)```", started, re.S))
+    assert shell in blocks, f"Get started needs the {shell} environment recipe"
+    commands = [line.strip() for line in blocks[shell].splitlines() if line.strip()]
+    assert len(commands) == 4
+    assert commands[:2] == [create, capture]
+    assert commands[2].startswith(invoke + " -m pip install ")
+    pins = PIN.findall(commands[2])
+    assert pins and set(pins) == set(PIN.findall(MANUAL.read_text(encoding="utf-8")))
+    assert commands[3] == invoke + " -m agenttalk install-skills"
+    assert "& $env:AGENTTALK_PY -m agenttalk init --here --agents claude-dev,codex-rev" in started
+    assert "& $env:AGENTTALK_PY -m agenttalk codex-config --enable" in started

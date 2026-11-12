@@ -168,20 +168,42 @@ Once agenttalk is installed, the brief and the other guides for leads are on you
 prints the installed `module path`, and the brief is `docs/LEAD-SETUP-BRIEF.md` under it.
 To do it yourself, follow the steps below.
 
-Install a released version and the instructions each assistant reads:
+Give agenttalk its own Python environment, a folder that keeps its packages separate from your other software.
+Open a terminal in a folder outside your project's code and team folder. The following commands create a new
+`agenttalk-env` folder there, install a released version and install the instructions each assistant reads. If that
+folder already exists, choose another name and use it throughout.
+
+Windows (PowerShell):
 
 ```powershell
-python -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
-agenttalk install-skills
+python -m venv agenttalk-env
+$env:AGENTTALK_PY = (Resolve-Path .\agenttalk-env\Scripts\python.exe).Path
+& $env:AGENTTALK_PY -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
+& $env:AGENTTALK_PY -m agenttalk install-skills
 ```
+
+Linux and macOS (sh):
+
+On Debian or Ubuntu, install the venv package first: `sudo apt install python3-venv` (on Python 3.14 this brings `python3.14-venv`).
+
+```sh
+python3 -m venv agenttalk-env
+export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"
+"$AGENTTALK_PY" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
+"$AGENTTALK_PY" -m agenttalk install-skills
+```
+
+`AGENTTALK_PY` names the Python you just installed agenttalk into. Keep using that Python after you change folders.
+In each new terminal, set `AGENTTALK_PY` again to the same full Python path before starting an assistant. The steps
+below show PowerShell; on Linux or macOS, replace `& $env:AGENTTALK_PY` with `"$AGENTTALK_PY"`.
 
 Then, in your project's top folder:
 
-1. Name the seats: `agenttalk init --here --agents claude-dev,codex-rev`.
+1. Name the seats: `& $env:AGENTTALK_PY -m agenttalk init --here --agents claude-dev,codex-rev`.
 2. In each terminal, set that seat's name before you start the assistant, for example
    `$env:AGENTTALK_SELF = 'claude-dev'` in PowerShell, or
    `export AGENTTALK_SELF=claude-dev` in bash or zsh.
-3. For Codex, read what `agenttalk codex-config --enable` allows, then run it.
+3. For Codex, read what `& $env:AGENTTALK_PY -m agenttalk codex-config --enable` allows, then run it.
 4. Start one assistant and tell it to add itself as the lead. Start the other and tell
    it to join as a reviewer and wait for the lead.
 5. Ask the lead to hand a piece of work to the other assistant for review.
@@ -408,17 +430,14 @@ in the technical reference.
 
 ### Install (tag-pinned)
 
-```powershell
-python -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
-agenttalk install-skills          # installs bus skills + the dev-discipline devkit
-```
+Follow [Get started](#get-started) to create a private Python environment and install agenttalk and its skills.
+Use that same Python in every terminal. The examples below shorten the command to `agenttalk`; write
+`& $env:AGENTTALK_PY -m agenttalk` in PowerShell or `"$AGENTTALK_PY" -m agenttalk` on Linux and macOS.
 
-The first line installs agenttalk itself. Pin it to a released tag
-(`@v0.104.0` above, or whatever the current release is) rather than a
-branch: the commands and the message format can change between
-releases, and a tag keeps every agent in a project on the same version.
+The install command pins a released tag (`@v0.104.0` in Get started), rather than a branch: commands and the message
+format can change between releases, and a tag keeps every agent in a project on the same version.
 
-The second line installs the skills, the instructions each agent CLI
+The `install-skills` command installs the skills, the instructions each agent CLI
 reads to use agenttalk. It writes Claude Code's bus commands under
 `~/.claude/commands` and Codex's under `~/.codex/skills`, and the
 dev-discipline pack (the devkit) under both `~/.claude/skills` and

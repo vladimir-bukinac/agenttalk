@@ -120,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The README first install keeps agenttalk in its own Python environment (#716).** Both platform recipes use that environment after changing folders, Quick setup links to the same recipe, and the README and lead setup brief name the Debian/Ubuntu venv package.
+
 - **`agenttalk status` no longer reads as if anyone can safely run `drain` for another seat (#726).**
   The warning for a seat that has unread messages and has never acknowledged one used to end with
   "run `agenttalk drain --for <seat>` to consume + advance", which sounds like a repair anyone can run.
