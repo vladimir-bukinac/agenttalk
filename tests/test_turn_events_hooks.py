@@ -726,17 +726,18 @@ def _close_wait_problem(close_seconds, joins, took, deadline_origin=0.0):
     time as a lower bound for the sample, rather than assuming it is within 1 ms of join entry. Each request must fit
     what remained then on the same absolute deadline; adding requests would reject valid retries after early returns.
     Actual coverage must reach the deadline (with 50 ms of clock slack). A late timer can cover it even when its
-    request was short.
+    request was short. Coverage is measured at the end of the last recorded join.
 
     Time outside the waits is checked separately: tolerate a scheduler pause up to a second, but catch a 1.5 s sleep
-    before or after waiting, even when a timer also returns late. No timer of the test's own calibrates either rule.
+    before or after waiting, even when a timer also returns late. Waits that begin at or after the deadline count as
+    outside time too: many short waits must not extend the deadline. No timer of the test's own calibrates either rule.
     """
     if not joins:
         return "close did not wait for the writer at all"
-    outside = took - sum(spent for _begin, _ask, spent in joins)
+    deadline = deadline_origin + close_seconds
+    outside = took - sum(spent for begin, _ask, spent in joins if begin < deadline)
     if outside > 1.0:
         return f"close spent {outside:.3f} s outside its wait for the writer"
-    deadline = deadline_origin + close_seconds
     observed = deadline_origin
     for begin, ask, spent in joins:
         if ask is None or ask > max(0.0, deadline - observed) + 0.001:
@@ -771,6 +772,24 @@ def _close_wait_problem(close_seconds, joins, took, deadline_origin=0.0):
             id="second-full-request-after-a-short-wait",
         ),
         pytest.param([(0.0, 0.3, 0.3)], 0.55, None, id="healthy-a-pause-after-the-wait"),
+        pytest.param(
+            [(0.0, 0.3, 0.3), (0.3, 0.0, 0.0)],
+            0.3,
+            None,
+            id="healthy-zero-wait-at-the-deadline",
+        ),
+        pytest.param(
+            [(0.0, 0.3, 0.3)] + [(0.3 + i * 0.001, 0.001, 0.001) for i in range(1500)],
+            1.8,
+            "outside its wait",
+            id="1500-short-waits-after-the-deadline",
+        ),
+        pytest.param(
+            [(0.0, 0.3, 0.3)] + [(0.3 + i * 0.001, 0.001, 0.001) for i in range(3000)],
+            3.3,
+            "outside its wait",
+            id="3000-short-waits-after-the-deadline",
+        ),
         pytest.param([(0.0, 0.3, 0.0001)], 0.0001, "does not cover", id="wait-returned-immediately"),
         pytest.param(
             [(i * 0.01, 0.01, 0.01) for i in range(30)],
@@ -853,6 +872,9 @@ def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path)
     deadline_origins = []
 
     class RecordingBudget(float):
+        def __add__(self, origin):
+            return self.__radd__(origin)
+
         def __radd__(self, origin):
             # Capture the exact monotonic operand in the sink's deadline calculation, before close can shorten its
             # deadline after an early join return. This also keeps a pause before creation outside the wait budget.
