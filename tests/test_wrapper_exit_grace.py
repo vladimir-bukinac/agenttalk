@@ -92,11 +92,26 @@ MODEL = textwrap.dedent(r'''
     import json, subprocess, sys, time
 
     mode, pidfile, slow = sys.argv[1], sys.argv[2], float(sys.argv[3])
-    SLEEPER = [sys.executable, "-c", "import time; time.sleep(120)"]
+    # A helper watches this file and leaves when it appears (or after 120 s, as before): the clean-up asks it to stop by
+    # itself, so no signal has to be sent to a number that may by then belong to another process (#749).
+    STOP = pidfile + ".stop"
+    SLEEPER = [sys.executable, "-c", """import os, sys, time
+    end = time.time() + 120
+    while time.time() < end and not os.path.exists(sys.argv[1]):
+        time.sleep(0.05)
+    """, STOP]
     # Logs a line every 0.3 s, like a dev server. Once nobody reads its output it ignores the failed
     # writes and keeps running, so a test can see that the wrapper did not stop it.
-    WRITER = [sys.executable, "-c", "import time\nfor i in range(400):\n    try:\n"
-              "        print('GET /', i, flush=True)\n    except OSError:\n        pass\n    time.sleep(0.3)"]
+    WRITER = [sys.executable, "-c", """import os, sys, time
+    for i in range(400):
+        if os.path.exists(sys.argv[1]):
+            break
+        try:
+            print('GET /', i, flush=True)
+        except OSError:
+            pass
+        time.sleep(0.3)
+    """, STOP]
     NULL = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     def say(obj):
@@ -298,10 +313,11 @@ class _PidfdReference:
         os.close(self._fd)
 
 
-class _NumberReference:
-    """No way to hold a process by anything but its number here (macOS, or a Linux without pidfd): the identity is read
-    and the stop goes by number right after. This is the one place where a number handed to a stranger in the moment
-    between the two steps is not covered; every other platform closes that window."""
+class _ReadOnlyReference:
+    """No handle and no pidfd here (macOS, or a Linux without pidfd): nothing binds a stop to the process whose
+    identity was read, and a stop by number could reach a stranger that got the number in between. This reference can
+    say who has the number (so a stranger is told from the helper) but REFUSES to stop anything: the helpers stop
+    themselves (see `_ask_to_stop`), and one that does not is reported for a person to stop."""
 
     def __init__(self, pid):
         self._pid = pid
@@ -310,7 +326,10 @@ class _NumberReference:
         return _process_identity(self._pid)
 
     def terminate(self):
-        os.kill(self._pid, signal.SIGTERM)
+        raise AssertionError(
+            f"process {self._pid} started by the test is still running and cannot be stopped safely on this system "
+            "(no process handle or pidfd to bind a stop to it); it was not signalled, stop it by hand"
+        )
 
     def close(self):
         pass
@@ -318,7 +337,8 @@ class _NumberReference:
 
 def _open_reference(pid):
     """A reference to the process that has this number now, or None (it cannot be opened or identified) or `_GONE`
-    (no such process). The identity is asked of the reference and the stop goes through it, never by number alone."""
+    (no such process). The identity is asked of the reference and the stop goes through it. Where nothing can bind a
+    stop to the process (no handle, no pidfd) the reference refuses to stop: a bare number is never signalled."""
     if os.name == "nt":
         return _WindowsReference.open(pid)
     if hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"):
@@ -327,7 +347,7 @@ def _open_reference(pid):
         except ProcessLookupError:
             return _GONE
         except OSError as exc:
-            if exc.errno not in (errno.ENOSYS, errno.EINVAL):  # a kernel without pidfd falls through to the number
+            if exc.errno not in (errno.ENOSYS, errno.EINVAL):  # a kernel without pidfd: read-only, below
                 return None
     try:
         os.kill(pid, 0)  # a look, not a stop
@@ -337,7 +357,7 @@ def _open_reference(pid):
         pass
     except OSError:
         return None
-    return _NumberReference(pid)
+    return _ReadOnlyReference(pid)
 
 
 def _state(pid: int) -> str:
@@ -451,11 +471,11 @@ def _proven_unused_pid(candidates=range(4_000_000, 4_000_040, 4)) -> int | None:
 
 
 def _end_one(pid: int, recorded: str | None) -> None:
-    """Stop one helper, if it is provably the one the stand-in started, and prove it has ended. The stop goes through
-    the reference that was checked (a handle or a pidfd), never by the bare number, so a number handed to another
-    process after the check cannot receive it. A number that now belongs to a different process is left alone (the
-    helper has ended); one whose identity was not recorded or cannot be read now is left alone and fails with a
-    message."""
+    """Stop one helper that did not leave by itself, if it is provably the one the stand-in started, and prove it has
+    ended. The stop goes through the reference that was checked (a handle or a pidfd), never by the bare number, so a
+    number handed to another process after the check cannot receive it; where no such reference exists it is refused.
+    A number that now belongs to a different process is left alone (the helper has ended); one whose identity was not
+    recorded or cannot be read now is left alone and fails with a message."""
     reference = None
     try:
         if _state(pid) != "ended":
@@ -500,10 +520,25 @@ def _end_one(pid: int, recorded: str | None) -> None:
             reference.close()
 
 
+_COOPERATIVE_WAIT = 5.0  # seconds the helpers get to leave by themselves before any other stop is considered
+
+
+def _ask_to_stop(pidfile: Path) -> None:
+    """The stop that needs no signal: write the stop file the helpers watch, and give them a few seconds to leave. A
+    helper that leaves by itself cannot be the wrong process that receives a signal."""
+    Path(str(pidfile) + ".stop").write_text("stop", encoding="utf-8")
+    deadline = time.monotonic() + _COOPERATIVE_WAIT
+    for pid, _identity_then in _helpers(pidfile):
+        while time.monotonic() < deadline and _state(pid) != "ended":
+            time.sleep(0.05)
+
+
 def _end_all(pidfile: Path) -> None:
-    """Stop every process the stand-in started (see `_end_one`). A helper that cannot be proven or stopped does not keep
-    the later helpers from being cleaned up: every one is looked at, and the failures are raised after the last (the
-    only one, as it was; several together in one message)."""
+    """Stop every process the stand-in started (see `_end_one`): first by asking them to leave by themselves (the
+    stop file), then, for one that did not, through a reference that is bound to it. A helper that cannot be proven or
+    stopped does not keep the later helpers from being cleaned up: every one is looked at, and the failures are raised
+    after the last (the only one, as it was; several together in one message)."""
+    _ask_to_stop(pidfile)
     failures = []
     for pid, recorded in _helpers(pidfile):
         try:
@@ -531,6 +566,7 @@ def _states(monkeypatch, first, then):
         seen.append(pid)
         return first if len(seen) == 1 else (real(pid) if then is None else then)
 
+    monkeypatch.setattr(sys.modules[__name__], "_ask_to_stop", lambda pidfile: None)  # these tests fake the helpers
     monkeypatch.setattr(sys.modules[__name__], "_state", state)
     return seen
 
@@ -581,6 +617,7 @@ def _reference_is(monkeypatch, identity, *, error=None, on_identity=None, bound=
         handed.append(reference)
         return reference
 
+    monkeypatch.setattr(sys.modules[__name__], "_ask_to_stop", lambda pidfile: None)  # these tests fake the helpers
     monkeypatch.setattr(sys.modules[__name__], "_open_reference", open_reference)
     return handed
 
@@ -593,6 +630,7 @@ def _no_reference(monkeypatch, answer):
         asked.append(pid)
         return answer
 
+    monkeypatch.setattr(sys.modules[__name__], "_ask_to_stop", lambda pidfile: None)  # these tests fake the helpers
     monkeypatch.setattr(sys.modules[__name__], "_open_reference", open_reference)
     return asked
 
@@ -677,6 +715,72 @@ def test_end_all_does_not_swallow_a_windows_error_while_the_process_is_still_ali
 
     with pytest.raises(PermissionError):
         _end_all(pidfile)
+
+
+def test_end_all_asks_every_helper_to_stop_itself_before_it_considers_any_other_stop(tmp_path, monkeypatch):
+    """The first thing the clean-up does is write the stop file the helpers watch: a helper that stops itself needs no
+    signal, so it cannot be the wrong process that receives one."""
+    pidfile = tmp_path / "pids"
+    pidfile.write_text("", encoding="utf-8")
+
+    _end_all(pidfile)
+
+    assert Path(str(pidfile) + ".stop").exists()
+
+
+def test_end_all_ends_a_real_helper_without_signalling_it_by_number_or_reference(model, tmp_path, monkeypatch):
+    """A real helper (the stand-in's survivor) leaves when the stop file appears: nothing is sent to it."""
+    pidfile = tmp_path / "pids.txt"
+    subprocess.run(_argv(model, "survivor-default-null", pidfile), capture_output=True, text=True, timeout=60)
+    (pid, _identity_then), = _helpers(pidfile)
+    assert _state(pid) == "alive"  # it is really running before the clean-up
+    sent = []
+    real_kill = os.kill  # a look (signal 0) is how the probe sees a process; only a real stop is recorded
+    monkeypatch.setattr(os, "kill", lambda pid, sig: sent.append((pid, sig)) if sig else real_kill(pid, 0))
+    monkeypatch.setattr(sys.modules[__name__], "_open_reference", lambda pid: sent.append(("opened", pid)))
+
+    _end_all(pidfile)
+
+    assert _state(pid) == "ended" and sent == []
+
+
+def test_end_all_refuses_to_stop_a_helper_it_cannot_bind_a_stop_to(tmp_path, monkeypatch):
+    """No handle and no pidfd (macOS, or a Linux without pidfd): a helper that does not stop itself is reported, never
+    killed by number, because a number handed to a stranger in between would be stopped instead."""
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _states(monkeypatch, "alive", "alive")
+    by_number = _stops_by_number(monkeypatch)
+    monkeypatch.setattr(sys.modules[__name__], "_open_reference", lambda pid: _ReadOnlyReference(pid))
+    monkeypatch.setattr(sys.modules[__name__], "_process_identity", lambda pid: SAME)
+
+    with pytest.raises(AssertionError, match="cannot be stopped safely"):
+        _end_all(pidfile)
+
+    assert by_number == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX: what is used when the kernel or the system has no pidfd")
+@pytest.mark.parametrize("how", ["no-pidfd", "enosys", "einval"])
+def test_without_a_pidfd_the_selector_gives_a_reference_that_never_stops_by_number(tmp_path, monkeypatch, how):
+    by_number = _stops_by_number(monkeypatch, owner=lambda: "unrelated replacement")
+    monkeypatch.setattr(sys.modules[__name__], "_process_identity", lambda pid: SAME)
+    if how == "no-pidfd":
+        monkeypatch.delattr(os, "pidfd_open", raising=False)
+    else:
+        code = errno.ENOSYS if how == "enosys" else errno.EINVAL
+
+        def pidfd_open(pid):
+            raise OSError(code, "no pidfd here")
+
+        monkeypatch.setattr(os, "pidfd_open", pidfd_open, raising=False)
+        monkeypatch.setattr(signal, "pidfd_send_signal", lambda *a, **k: None, raising=False)
+
+    reference = _open_reference(os.getpid())  # a process that exists: the selector must hand out a reference
+
+    assert isinstance(reference, _ReadOnlyReference) and reference.identity() == SAME
+    with pytest.raises(AssertionError, match="cannot be stopped safely"):
+        reference.terminate()
+    assert by_number == []
 
 
 def test_end_all_does_not_stop_a_process_whose_number_was_reused(tmp_path, monkeypatch):
@@ -814,6 +918,7 @@ def test_end_all_keeps_cleaning_up_after_one_helper_it_cannot_prove(tmp_path, mo
         return reference
 
     monkeypatch.setattr(sys.modules[__name__], "_open_reference", open_reference)
+    monkeypatch.setattr(sys.modules[__name__], "_ask_to_stop", lambda pidfile: None)
     status = {1111: iter(["alive"]), 2222: iter(["alive", "ended", "ended"])}
     monkeypatch.setattr(sys.modules[__name__], "_state", lambda pid: next(status[pid]))
 
