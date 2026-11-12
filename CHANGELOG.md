@@ -120,6 +120,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The real-browser tests no longer lose 90 seconds when their debugging port is already taken (#770).**
+  This is a change to the test suite only; the product is unchanged. The check used to pick a random port
+  between 9300 and 9799 for the browser and look for it on IPv4 only. If another program held that port on
+  IPv4, the browser listened on IPv6 alone, the check never found it, and it waited out its whole 90-second
+  start allowance before failing. The browser now chooses a free port itself and the check reads it from the
+  browser's `DevToolsActivePort` file, so no port can clash. The 90-second allowance and every message and
+  retry are unchanged.
+
 - **`agenttalk status` no longer reads as if anyone can safely run `drain` for another seat (#726).**
   The warning for a seat that has unread messages and has never acknowledged one used to end with
   "run `agenttalk drain --for <seat>` to consume + advance", which sounds like a repair anyone can run.

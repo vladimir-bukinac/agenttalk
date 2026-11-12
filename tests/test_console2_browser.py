@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -584,6 +585,45 @@ def test_check_waits_for_a_late_first_draw_instead_of_failing_on_a_missing_label
     assert out["watchedLabelInitialText"], out
     assert out["problems"] == [], out["problems"]  # no console error and no page exception while it waited
 
+
+def _hold_ipv4_ports(first: int, last: int) -> list[socket.socket]:
+    """Take every IPv4 loopback port in first..last that is free right now (bound, not listening, so a
+    connection to it is refused). A port some other process already holds is taken anyway."""
+    held = []
+    for port in range(first, last + 1):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            sock.close()
+            continue
+        held.append(sock)
+    return held
+
+
+@pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_check_finds_the_browser_when_the_old_debugging_port_range_is_taken_on_ipv4(page) -> None:
+    """#770: the check used to pick a random debugging port from 9300-9799 and look for it on IPv4
+    only. When that IPv4 port was already taken the browser listened on [::1] alone, and the check
+    waited out its whole 90 s browser-start allowance and failed. Here every IPv4 port in that old
+    range is taken, so whichever port the check picks is one: the browser must still be found."""
+    url, profile = page
+    flags = _browser_launch_flags(platform.system())
+    held = _hold_ipv4_ports(9300, 9799)
+    try:
+        assert len(held) > 400, "the test needs (nearly) the whole range to be taken"
+        result = subprocess.run(
+            ["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)],
+            capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
+        )
+    finally:
+        for sock in held:
+            sock.close()
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["initial"]["connected"] is True
+    assert out["problems"] == [], out["problems"]
 
 
 # --- #315: the buffer-space retry, proved with a stand-in for the node check (no browser needed) ----

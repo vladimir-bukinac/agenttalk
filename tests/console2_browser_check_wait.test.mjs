@@ -6,7 +6,7 @@
 import assert from 'node:assert/strict';
 import { createRunner } from './console2_harness.mjs';
 import {
-  FatalExitError, makeDeadline, waitForDeadline, waitForPageTarget,
+  FatalExitError, makeDeadline, parseDevToolsActivePort, waitForDeadline, waitForDevToolsPort, waitForPageTarget,
 } from './console2_browser_check.mjs';
 
 const { test, run } = createRunner('console2 browser check: deadline/page-target waits');
@@ -234,6 +234,58 @@ test('waitForPageTarget: a listTargetsOnce that throws (endpoint transiently unr
   }, { deadline: makeDeadline(10000, clock), intervalMs: 1, sleep: clock.sleep });
   assert.equal(page.id, 'p');
   assert.equal(calls, 2);
+});
+
+// ------------------------------------------------------------------ DevToolsActivePort (#770)
+
+test('parseDevToolsActivePort: takes the port from the first line of the file the browser writes', () => {
+  assert.equal(parseDevToolsActivePort('9335\n/devtools/browser/5fb1ca23-5353-4684-85de-4e9ee42278fa'), 9335);
+  assert.equal(parseDevToolsActivePort('51234\r\n/devtools/browser/x'), 51234);
+});
+
+test('parseDevToolsActivePort: a partly written or unusable file is "not yet", never a wrong port', () => {
+  for (const text of ['', '93', '9335', 'abc\n/x', '0\n/x', '70000\n/x', '-5\n/x', ' 9335\n/x']) {
+    assert.equal(parseDevToolsActivePort(text), undefined, JSON.stringify(text));
+  }
+});
+
+test('waitForDevToolsPort: retries while the file is absent or partial, then returns the port', async () => {
+  const clock = fakeClock();
+  const reads = [
+    () => { throw Object.assign(new Error('ENOENT (simulated: not written yet)'), { code: 'ENOENT' }); },
+    () => '93',
+    () => '9335\n/devtools/browser/x',
+  ];
+  let calls = 0;
+  const port = await waitForDevToolsPort(async () => reads[calls++](), {
+    deadline: makeDeadline(10000, clock), intervalMs: 1, sleep: clock.sleep,
+  });
+  assert.equal(port, 9335);
+  assert.equal(calls, 3);
+});
+
+test('waitForDevToolsPort: a file that never appears raises, bounded, naming the file and the stderr collected', async () => {
+  const clock = fakeClock();
+  await assert.rejects(
+    () => waitForDevToolsPort(async () => { throw new Error('ENOENT'); }, {
+      deadline: makeDeadline(90000, clock), intervalMs: 150, sleep: clock.sleep,
+      getDiagnostics: () => 'stderr:\nboom',
+    }),
+    /the DevTools port file \(DevToolsActivePort\) did not happen within the shared budget; stderr:\nboom/,
+  );
+  assert.ok(clock.now() >= 90000, 'the budget is the same 90 s, not a new one');
+});
+
+test('waitForDevToolsPort: a browser that exited fails fast with its exit info, not after the budget', async () => {
+  const clock = fakeClock();
+  await assert.rejects(
+    () => waitForDevToolsPort(async () => { throw new Error('ENOENT'); }, {
+      deadline: makeDeadline(90000, clock), intervalMs: 1, sleep: clock.sleep,
+      checkExited: () => ({ code: 1, signal: null, stderr: 'GPU process crashed' }),
+    }),
+    (e) => e instanceof FatalExitError && /GPU process crashed/.test(e.message),
+  );
+  assert.ok(clock.now() < 1000, 'it did not wait out the budget');
 });
 
 run();

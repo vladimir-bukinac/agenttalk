@@ -14,6 +14,8 @@
 // What the DOM stub cannot show and this does: a detached element has no scroll layout (the thread
 // must be scrolled after insertion), and a redraw that replaces a focused control drops focus to <body>.
 import { spawn } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -122,6 +124,26 @@ export async function waitForPageTarget(listTargetsOnce, opts) {
   }, { intervalMs: 150, describe: 'a page target appearing in /json/list', ...opts });
 }
 
+// #770: the check asks the browser to pick its own free debugging port (--remote-debugging-port=0)
+// and reads the port it chose from the DevToolsActivePort file in the profile folder (line 1 is the
+// port, line 2 the browser's websocket path). A port the check picked itself could already be taken
+// on IPv4: the browser then listened on [::1] alone, the IPv4-only poll never found it, and the whole
+// start allowance was lost. Returns the port, or `undefined` while the file is absent or only partly written.
+export function parseDevToolsActivePort(text) {
+  const m = /^(\d+)\r?\n/.exec(String(text));
+  const port = m ? Number(m[1]) : NaN;
+  return Number.isInteger(port) && port > 0 && port < 65536 ? port : undefined;
+}
+
+// Waits for the port file on the SAME shared startup budget as every other start-up wait.
+// `readOnce` must be a single read of the file's text (it rejects while the file is absent).
+export async function waitForDevToolsPort(readOnce, opts) {
+  return waitForDeadline(
+    async () => parseDevToolsActivePort(await readOnce()),
+    { intervalMs: 150, describe: 'the DevTools port file (DevToolsActivePort)', ...opts },
+  );
+}
+
 // Everything below this line is the check's own entrypoint - spawning a real browser and driving
 // it over CDP - guarded so importing the pure helpers above (for a unit test) never also does that.
 async function main() {
@@ -145,14 +167,16 @@ const sabotageScrollScript = sabotage === 'scroll'
   ? `window.__sabotageObserver = new MutationObserver(() => { window.__thread.scrollTop = 999999; });
      window.__sabotageObserver.observe(document.querySelector('${WATCHED_AGE_SELECTOR}'), { childList: true, characterData: true, subtree: true });`
   : '';
-const PORT = 9300 + Math.floor(Math.random() * 500);
+// The debugging port is chosen by the browser itself (#770) and read back below, once the browser has written it.
+let PORT = null;
 
 // `profile` is a fresh, unique directory per test run - the caller's job
 // (test_console2_browser.py's `page` fixture uses pytest's own tmp_path); a reused or
-// already-open profile directory makes Chromium refuse to start outright.
+// already-open profile directory makes Chromium refuse to start outright. (A fresh one also
+// means the DevToolsActivePort file read below can only be this browser's own.)
 const child = spawn(exe, [
   ...extraFlags, `--user-data-dir=${profile}`,
-  `--remote-debugging-port=${PORT}`, '--window-size=1240,780', 'about:blank',
+  '--remote-debugging-port=0', '--window-size=1240,780', 'about:blank',
 ], { stdio: ['ignore', 'ignore', 'pipe'] });
 
 let childStderr = '';
@@ -290,6 +314,10 @@ try {
   // `startupDeadline`; whatever the first phase spent is no longer available to the second.
   const startupDeadline = makeDeadline(STARTUP_BUDGET_MS);
   const getDiagnostics = () => `stderr:\n${childStderr}`;
+  PORT = await waitForDevToolsPort(
+    () => readFile(join(profile, 'DevToolsActivePort'), 'utf8'),
+    { deadline: startupDeadline, checkExited: checkChildExited, getDiagnostics },
+  );
   await waitForDeadline((remainingMs) => fetchJsonOnce('/json/version', remainingMs), {
     deadline: startupDeadline, intervalMs: 150,
     checkExited: checkChildExited, describe: 'the DevTools endpoint (/json/version)', getDiagnostics,
