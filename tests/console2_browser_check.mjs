@@ -1,5 +1,5 @@
 // Real-browser check for the console v2 stream, driven over the DevTools protocol.
-// Usage: node console2_browser_check.mjs <browser-exe> <page-url> <profile-dir> [launch-flags-json] [sabotage]
+// Usage: node console2_browser_check.mjs <browser-exe> <page-url> <profile-dir> [launch-flags-json] [sabotage] [limits-json]
 // launch-flags-json is a JSON array of the platform-specific launch flags (see
 // test_console2_browser.py's _browser_launch_flags, the pure function that picks them - the
 // sole caller always supplies it); an empty/omitted array means no headless/GPU/sandbox flags
@@ -9,7 +9,16 @@
 // own finding): tests/test_console2_browser.py's own negative-control test asserts this makes
 // afterRedraw.top come back wrong, proving the atomic setup+baseline fix below actually waits for
 // a redraw AFTER scrollTop is set, not one that already happened before it.
+// limits-json is TEST-ONLY: an object that shrinks the check's own waits (milliseconds: loadMs, headStartMs,
+// firstDrawMs; any left out keeps its default below) so a test of a late or missing page script finishes in
+// seconds. Nothing but a test passes it, so a real run always waits the documented defaults.
 // Prints one JSON object of measurements; tests/test_console2_browser.py asserts on it.
+//
+// Exit codes: 0 = finished, measurements on stdout; 1 = any other failure (the message is on stderr);
+// LOAD_FAILURE_EXIT_CODE (#750) = the PAGE did not load: one of its own errors while loading (a script that
+// failed to load, a page exception), or it did not finish loading within the limit. Then stdout is
+// {"loadFailure": <why>, "problems": [<the page's own errors>]} and nothing else, so the caller can tell a
+// page that did not load apart from a label that was never drawn, and can retry the one known runner fault.
 //
 // What the DOM stub cannot show and this does: a detached element has no scroll layout (the thread
 // must be scrolled after insertion), and a redraw that replaces a focused control drops focus to <body>.
@@ -25,8 +34,40 @@ export const PER_REQUEST_CAP_MS = 10000;
 // The overall startup budget (DevTools up AND a page target found) - ONE shared elapsed-time
 // clock, not two independent ones (see makeDeadline/F2 below).
 export const STARTUP_BUDGET_MS = 90000;
-// #315: how long to wait for the page's first draw (thread and watched label) after the fixed settle sleep.
+// #750: how long the page gets to finish LOADING (document.readyState "complete": every script fetched and
+// run, or failed) before anything is looked for in it. Its own limit, apart from the first-draw wait below, so
+// a script that arrives late or fails cannot use up the wait for the first draw, and a page that never loads
+// says so instead of reporting a missing label.
+export const LOAD_BUDGET_MS = 30000;
+// #315: the fixed head start after the load, before the first-draw wait begins (first poll, feeds, first draw).
+export const HEAD_START_MS = 3500;
+// #315: how long to wait for the page's first draw (thread and watched label) after the head start.
+// #750: this clock now starts after the page finished loading, as its message always said.
 export const FIRST_DRAW_BUDGET_MS = 20000;
+// #750: the exit code for a page that did not load (see the header).
+export const LOAD_FAILURE_EXIT_CODE = 17;
+// #750: after "complete", the page's own load errors (a failed script) can still be on their way from the
+// browser for a moment; this short pause lets them arrive before the load is judged.
+const LOAD_SETTLE_MS = 200;
+
+// The waits of the check's page-load and first-draw phases, from the optional TEST-ONLY limits argument (a
+// JSON object, see the header): anything left out keeps its default; a name that is not known, or a value that
+// is not a non-negative number, is refused rather than ignored.
+export function resolveLimits(limitsJson) {
+  const given = limitsJson ? JSON.parse(limitsJson) : {};
+  const limits = { loadMs: LOAD_BUDGET_MS, headStartMs: HEAD_START_MS, firstDrawMs: FIRST_DRAW_BUDGET_MS };
+  for (const [key, value] of Object.entries(given)) {
+    if (!(key in limits)) throw new Error(`unknown limit "${key}" (known: ${Object.keys(limits).join(', ')})`);
+    if (typeof value !== 'number' || !(value >= 0)) {
+      throw new Error(`limit ${key} must be a number of milliseconds, got ${JSON.stringify(value)}`);
+    }
+    limits[key] = value;
+  }
+  return limits;
+}
+
+// #750: the page did not load. Thrown inside main() and turned into LOAD_FAILURE_EXIT_CODE plus data there.
+class LoadFailure extends Error {}
 
 // A single overall elapsed-time budget, meant to be created ONCE and threaded through every wait
 // composed from it. PR #230 delta review, F2: the previous code gave waitForPageTarget its OWN
@@ -125,8 +166,9 @@ export async function waitForPageTarget(listTargetsOnce, opts) {
 // Everything below this line is the check's own entrypoint - spawning a real browser and driving
 // it over CDP - guarded so importing the pure helpers above (for a unit test) never also does that.
 async function main() {
-const [exe, pageUrl, profile, flagsJson, sabotage] = process.argv.slice(2);
+const [exe, pageUrl, profile, flagsJson, sabotage, limitsJson] = process.argv.slice(2);
 const extraFlags = flagsJson ? JSON.parse(flagsJson) : [];
+const limits = resolveLimits(limitsJson);
 
 // The page can carry more than one `.c2-age` label at once (one per open card), each on its OWN
 // independent clock, and "the first .c2-age" is neither stable (DOM/queue order depends on
@@ -202,6 +244,21 @@ async function evaluate(expression) {
   const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
   if (r.exceptionDetails) throw new Error('page exception: ' + JSON.stringify(r.exceptionDetails.exception || r.exceptionDetails.text));
   return r.result.value;
+}
+
+// One page query that must be answered within `budgetMs`, so an unresponsive browser cannot make a wait
+// longer than it says; the failure names what was being waited for.
+async function askWithin(expression, budgetMs, what) {
+  let timer;
+  const unanswered = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(
+      `the browser did not answer a query within ${budgetMs / 1000}s while waiting for ${what}`)), budgetMs);
+  });
+  try {
+    return await Promise.race([evaluate(expression), unanswered]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // F1/F2 need at least one real redraw to have happened (the fake server ages its cards on every
@@ -283,6 +340,7 @@ async function pressKey(name, opts = {}) {
   await send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 }
 
+let exitCode = 0;
 try {
   // PR #230 delta review, F2: ONE shared budget for the WHOLE startup sequence (DevTools coming
   // up, then a page target appearing) - the previous code gave each phase its own independent 90s
@@ -332,12 +390,42 @@ try {
   // FAILS CLEARLY rather than silently proceeding, replaces it.
   await activateTarget(page.id);
   try { await send('Page.setWebLifecycleState', { state: 'active' }); } catch (e) { /* older targets lack this; activateTarget above is the primary mechanism */ }
-  await send('Page.navigate', { url: pageUrl });
+  const navigation = await send('Page.navigate', { url: pageUrl });
+  // The browser could not even open the page (nothing answered, or the connection was refused or dropped).
+  if (navigation.errorText) throw new LoadFailure(`the browser could not open the page: ${navigation.errorText}`);
   const stillHidden = await evaluate('document.hidden');
   if (stillHidden) {
     throw new Error('target activation did not make the page visible (document.hidden is still true)');
   }
-  await sleep(3500);                                   // first poll, feeds, first draw
+
+  // #750: wait for the page to finish LOADING (document.readyState "complete", which comes once every script
+  // has been fetched and run, or has failed) before the first-draw clock below starts. That clock used to start
+  // while the page's own script could still be on its way: a late script left the page without the planted
+  // fault (and, in a real run, without anything drawn), so nothing threw and the wait ended in "label not
+  // found". This looks at NO card or label, only at the load state, so it cannot use up a one-shot fault
+  // planted on a query for them. The about:blank test is for the moment right after Page.navigate answers,
+  // when the old, empty document can still be the one that is asked.
+  const describeProblems = () => (problems.length
+    ? `the page reported: ${problems.join(' | ')}` : 'the page reported no errors');
+  const loadDeadline = makeDeadline(limits.loadMs);
+  for (;;) {
+    const exited = checkChildExited();
+    if (exited) throw new FatalExitError('the page load', exited);
+    // A page error while loading ends the wait at once: the error is the cause, whatever else is still loading.
+    if (problems.length) throw new LoadFailure(`the page failed to load: ${describeProblems()}`);
+    const load = await askWithin(
+      `({ state: document.readyState, blank: location.href === 'about:blank' })`,
+      Math.max(2000, loadDeadline.remainingMs()), 'the page to load');
+    if (load.state === 'complete' && !load.blank) break;
+    if (loadDeadline.expired()) {
+      throw new LoadFailure(`the page did not finish loading within ${limits.loadMs / 1000}s `
+        + `(document.readyState "${load.state}"); ${describeProblems()}`);
+    }
+    await sleep(Math.max(0, Math.min(100, loadDeadline.remainingMs())));
+  }
+  await sleep(LOAD_SETTLE_MS);
+  if (problems.length) throw new LoadFailure(`the page failed to load: ${describeProblems()}`);
+  await sleep(limits.headStartMs);                     // first poll, feeds, first draw
 
   const out = {};
   const measure = () => evaluate(`(() => { const t = document.querySelector('.c2-thread');
@@ -354,33 +442,30 @@ try {
   // A query that fails - the page raised an exception, the browser answered with a protocol error, or
   // the browser did not answer in time - is a real fault and stops the check with its own cause; it is
   // never retried (a later good query would hide it) and never reported as "label not found".
-  const firstDrawDeadline = makeDeadline(FIRST_DRAW_BUDGET_MS);
+  // #750: every way this wait can fail also says what the page itself reported meanwhile (it used to be
+  // collected and then thrown away), so a failure names its cause instead of leaving only "label not found".
+  const firstDrawDeadline = makeDeadline(limits.firstDrawMs);
   let watchedLabelText = null;
-  for (;;) {
-    const exited = checkChildExited();
-    if (exited) throw new FatalExitError('the first draw', exited);
-    // Each query is bounded by what is left of the budget (at least 2 s), so an unresponsive browser
-    // cannot make the "20 s" longer than it says.
-    const queryBudgetMs = Math.max(2000, firstDrawDeadline.remainingMs());
-    let timer;
-    const unanswered = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(
-        `the browser did not answer a query within ${queryBudgetMs / 1000}s while waiting for the first draw`)), queryBudgetMs);
-    });
-    try {
-      watchedLabelText = await Promise.race([evaluate(
+  try {
+    for (;;) {
+      const exited = checkChildExited();
+      if (exited) throw new FatalExitError('the first draw', exited);
+      // Each query is bounded by what is left of the budget (at least 2 s), so an unresponsive browser
+      // cannot make the "20 s" longer than it says.
+      watchedLabelText = await askWithin(
         `(() => { const a = document.querySelector('${WATCHED_AGE_SELECTOR}'); const t = document.querySelector('.c2-thread');
           return a && t ? a.textContent : null; })()`,
-      ), unanswered]);
-    } finally {
-      clearTimeout(timer);
+        Math.max(2000, firstDrawDeadline.remainingMs()), 'the first draw');
+      if (watchedLabelText !== null) break;
+      if (firstDrawDeadline.expired()) {
+        throw new Error(`watched age label not found: no element matches "${WATCHED_AGE_SELECTOR}" `
+          + `(or the thread is missing) within ${limits.firstDrawMs / 1000}s after the page finished loading`);
+      }
+      await sleep(Math.max(0, Math.min(250, firstDrawDeadline.remainingMs())));
     }
-    if (watchedLabelText !== null) break;
-    if (firstDrawDeadline.expired()) {
-      throw new Error(`watched age label not found: no element matches "${WATCHED_AGE_SELECTOR}" `
-        + `(or the thread is missing) within ${FIRST_DRAW_BUDGET_MS / 1000}s after the page loaded`);
-    }
-    await sleep(Math.max(0, Math.min(250, firstDrawDeadline.remainingMs())));
+  } catch (e) {
+    // A new error, not a changed message: Node prints the stack, which was built with the old message.
+    throw new Error(`${e.message}; ${describeProblems()}`, { cause: e });
   }
 
   // F1: first draw is scrolled to the end
@@ -637,11 +722,17 @@ try {
 
   out.problems = problems;
   process.stdout.write(JSON.stringify(out));
+} catch (e) {
+  if (!(e instanceof LoadFailure)) throw e;
+  // The page did not load: say why for a person, and print the same as data for the test (#750).
+  process.stderr.write(`${e.message}\n`);
+  process.stdout.write(JSON.stringify({ loadFailure: e.message, problems }));
+  exitCode = LOAD_FAILURE_EXIT_CODE;
 } finally {
   try { ws && ws.close(); } catch (e) { /* closing */ }
   child.kill();
 }
-process.exit(0);
+process.exit(exitCode);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {

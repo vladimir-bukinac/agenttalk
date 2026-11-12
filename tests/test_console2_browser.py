@@ -39,7 +39,8 @@ PROJECT = "proj-browser"
 # phase is now itself ONE shared 90s budget, not two 90s budgets composed - see
 # console2_browser_check.mjs's STARTUP_BUDGET_MS/makeDeadline):
 #   startup (DevTools up AND a page target found - ONE shared budget) ......... 90.0s
-#   post-navigate settle sleep .................................................. 3.5s
+#   page load wait (document.readyState "complete", LOAD_BUDGET_MS, #750) ...... 30.0s
+#   post-load head start before the first-draw wait (HEAD_START_MS) ............. 3.5s
 #   F1 stream redraw wait (waitForTextChange, its own independent 30s budget) . 30.0s
 #   F2 stream redraw wait (waitForTextChange) .................................. 30.0s
 #   board-cards-render wait loop (100 attempts x 150ms) ......................... 15.0s
@@ -47,60 +48,97 @@ PROJECT = "proj-browser"
 #   first-draw wait (thread and watched label, FIRST_DRAW_BUDGET_MS, #315) ..... 20.0s
 #   misc small fixed sleeps and CDP round-trips (keyboard/overlay steps, etc.) ...  5.0s
 #                                                                              ----------
-#   worst case, one full scenario ............................................ 223.5s
-# 240s leaves ~16s of headroom above that computed worst case. (A second attempt after a
-# network-buffer error, see run_browser_check, is a separate subprocess with its own timeout.)
-BROWSER_CHECK_TIMEOUT_S = 240
+#   worst case, one full scenario ............................................ 253.5s
+# 270s leaves ~16s of headroom above that computed worst case. (A second attempt after a
+# network-buffer error, see run_check, is a separate subprocess with its own timeout.)
+BROWSER_CHECK_TIMEOUT_S = 270
 
 # #315: the one console line a Windows runner prints when it runs out of network buffers after hours of
 # tests. It is the machine, not the page, so it alone earns one more try; any other problem never does.
 BUFFER_SPACE_PROBLEM = "log: Failed to load resource: net::ERR_NO_BUFFER_SPACE"
+
+# #750: the exit code of console2_browser_check.mjs when the page itself did not load (a script that failed
+# or never answered, or a page that did not finish loading in time). Its stdout is then one JSON object,
+# {"loadFailure": <why>, "problems": [<the page's own errors>]}, never the measurements. Pinned against the
+# script's own value by test_the_checks_default_limits_and_load_failure_exit_code_are_pinned.
+LOAD_FAILURE_EXIT_CODE = 17
 
 
 def _only_buffer_space_problems(problems: list[str]) -> bool:
     return bool(problems) and all(problem == BUFFER_SPACE_PROBLEM for problem in problems)
 
 
-def run_browser_check(url: str, profile: Path, flags: list[str], *, browser: str | None = None,
-                      run=subprocess.run, extra_args: tuple[str, ...] = (), behaviour=None, before_retry=None) -> dict:
-    """Run console2_browser_check.mjs and return what it measured.
+def _load_failure(result) -> dict:
+    """What a check that exited with LOAD_FAILURE_EXIT_CODE printed: {"loadFailure": ..., "problems": [...]}."""
+    try:
+        return json.loads(result.stdout)
+    except ValueError:
+        raise AssertionError(
+            f"the check exited with the load-failure code but printed no data: {result.stdout!r} {result.stderr}"
+        ) from None
 
-    If the check finished and its ONLY console problems are the network-buffer line above, it runs once
-    more, in a fresh browser process (a new random debugging port) with a fresh profile folder, and says
-    so in the test output. A second buffer error is returned as it is, so the test fails as before. A
-    check that exits with an error, or any other console problem, is never retried: the first result
-    is the result.
+
+def _ended_on_buffer_space_alone(result) -> bool:
+    """The attempt ended with the network-buffer line as its ONLY problem: it ran to the end with that as its
+    only console problem (#315), or the page failed to load with nothing but that line (#750). Anything else
+    - another error, a mix, no error at all, or any other failure of the check - is final."""
+    if result.returncode == 0:
+        return _only_buffer_space_problems(json.loads(result.stdout).get("problems") or [])
+    if result.returncode == LOAD_FAILURE_EXIT_CODE:
+        return _only_buffer_space_problems(_load_failure(result).get("problems") or [])
+    return False
+
+
+def run_check(url: str, profile: Path, flags: list[str], *, browser: str | None = None,
+              run=subprocess.run, extra_args: tuple[str, ...] = (), behaviour=None, before_retry=None):
+    """Run console2_browser_check.mjs and return the finished process (the last attempt's).
+
+    If an attempt ends on the network-buffer line alone (see _ended_on_buffer_space_alone) it runs ONCE more,
+    in a fresh browser process (a new random debugging port) with a fresh profile folder, and says so in the
+    test output. A second such attempt is returned as it is, so the test fails as before. A check that
+    exits with any other error, a "label not found" after the page loaded, any other page problem: never
+    retried, the first result is the result.
 
     The retry forgives only the machine's network error, never a page that misbehaved. So before the
-    retry is granted, `behaviour` (the test's own assertions on every other measurement) runs on the
-    FIRST result: if it fails, that failure is the result and a clean second run cannot erase it.
+    retry is granted after a finished run, `behaviour` (the test's own assertions on every other
+    measurement) runs on the FIRST result: if it fails, that failure is the result and a clean second run
+    cannot erase it.
 
     The second attempt must start from the same state as the first. `before_retry` (the page fixture's
     `restart_clock`) runs just before it, so the fixture's cards, which age at 60x real time from the
     first request, do not carry the time the first attempt took into the second.
     """
     browser = browser or BROWSER
-    out: dict = {}
+    result = None
     for attempt in (1, 2):
         attempt_profile = profile if attempt == 1 else profile.with_name(profile.name + "-retry")
         result = run(
             ["node", str(CHECK), browser, url, str(attempt_profile), json.dumps(flags), *extra_args],
             capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
         )
-        # A browser binary that exists but fails to start is a hard FAILURE, never a skip -
-        # result.stderr carries the launched process's own stderr on that path (see the .mjs).
-        assert result.returncode == 0, result.stderr
-        out = json.loads(result.stdout)
-        if attempt == 1 and _only_buffer_space_problems(out.get("problems") or []):
-            if behaviour is not None:
-                behaviour(out)  # the first run's other measurements must already pass
+        if attempt == 1 and _ended_on_buffer_space_alone(result):
+            if behaviour is not None and result.returncode == 0:
+                behaviour(json.loads(result.stdout))  # the first run's other measurements must already pass
             print("console2 browser check: the runner ran out of network buffers "
                   f"({BUFFER_SPACE_PROBLEM!r}); retrying once with a fresh profile and port (#315)")
             if before_retry is not None:
                 before_retry()
             continue
         break
-    return out
+    return result
+
+
+def run_browser_check(url: str, profile: Path, flags: list[str], **kwargs) -> dict:
+    """run_check, then the measurements it printed. A check that did not finish is a hard FAILURE, never a
+    skip: a browser binary that exists but fails to start (result.stderr carries the launched process's own
+    stderr on that path, see the .mjs), or a page that failed to load (its own errors are in the message)."""
+    result = run_check(url, profile, flags, **kwargs)
+    if result.returncode == LOAD_FAILURE_EXIT_CODE:
+        load = _load_failure(result)
+        raise AssertionError(f"the page failed to load: {load.get('loadFailure')}; "
+                             f"the page's own errors: {load.get('problems')}")
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
 
 
 def _find_browser() -> str | None:
@@ -192,7 +230,8 @@ def _state(now: datetime, grown: int = 0) -> dict:
     }]}
 
 
-def _handler(monotonic=time.monotonic, api_delay_s: float = 0.0, inject_js: str = ""):
+def _handler(monotonic=time.monotonic, api_delay_s: float = 0.0, inject_js: str = "", *,
+             script_delay_s: float = 0.0, script_status: int | None = None, script_hangs: bool = False):
     # PR #230 delta review, F1: aging used to start at HANDLER-CONSTRUCTION time (before Chromium
     # even launches), so a longer (but healthy) browser startup - #229's own fix allows up to 90s -
     # directly ate into the fixture's own 3600s (1h) granularity budget: the reviewer reproduced
@@ -203,6 +242,7 @@ def _handler(monotonic=time.monotonic, api_delay_s: float = 0.0, inject_js: str 
     # `monotonic` is injectable (round 2, N2) so the real-browser fixture uses real time.monotonic
     # while the F1 regression test below can drive it with fixed readings instead of a real sleep.
     clock = {"started": None, "api_release": None}
+    release_hung_requests = threading.Event()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args) -> None:  # noqa: D401 - silence the test server
@@ -214,6 +254,11 @@ def _handler(monotonic=time.monotonic, api_delay_s: float = 0.0, inject_js: str 
             request this server answers is its first again (see the note above on F1)."""
             clock["started"] = None
             clock["api_release"] = None
+
+        @staticmethod
+        def release() -> None:
+            """Let any request held by `script_hangs` go, so the server can shut down."""
+            release_hung_requests.set()
 
         def _send(self, body: bytes, ctype: str, csp: str) -> None:
             self.send_response(200)
@@ -233,6 +278,16 @@ def _handler(monotonic=time.monotonic, api_delay_s: float = 0.0, inject_js: str 
                 if clock["api_release"] is None:
                     clock["api_release"] = monotonic() + api_delay_s
                 time.sleep(max(0.0, clock["api_release"] - monotonic()))
+            if path.endswith("/console2.js"):
+                # #750: the page's own script (where the test-only fault is injected) arrives late, answers
+                # with an error, or never answers - what a slow or failing runner network does to it.
+                if script_hangs:
+                    release_hung_requests.wait(timeout=300)
+                    return
+                time.sleep(script_delay_s)
+                if script_status is not None:
+                    self.send_error(script_status)
+                    return
             now = datetime.now(timezone.utc)
             aging_from = clock["api_release"] if clock["api_release"] is not None else clock["started"]
             grown = int(max(0.0, monotonic() - aging_from) * 60)  # cards age 60 s per second: a new label every read
@@ -375,6 +430,27 @@ def one_shot_query_error_page(tmp_path: Path):
     finally:
         srv.shutdown()
         srv.server_close()
+
+
+@pytest.fixture
+def serve_page(tmp_path: Path):
+    """`serve_page(**options)` starts the fixture page with the given `_handler` options and returns
+    (url, profile); every server it started is shut down, and any held request released, afterwards."""
+    started = []
+
+    def start(**options):
+        handler = _handler(**options)
+        srv = _serve(handler)
+        started.append((srv, handler))
+        return f"http://127.0.0.1:{srv.server_address[1]}/v2", tmp_path / "profile"
+
+    try:
+        yield start
+    finally:
+        for srv, handler in started:
+            handler.release()
+            srv.shutdown()
+            srv.server_close()
 
 
 @pytest.fixture
@@ -588,6 +664,18 @@ def test_check_waits_for_a_late_first_draw_instead_of_failing_on_a_missing_label
 
 # --- #315: the buffer-space retry, proved with a stand-in for the node check (no browser needed) ----
 
+class _Exit:
+    """A check that ended with this exit code, standard output and standard error."""
+
+    def __init__(self, code: int, stdout: str = "", stderr: str = "the check broke") -> None:
+        self.code, self.stdout, self.stderr = code, stdout, stderr
+
+
+def _load_failed(problems: list[str], why: str = "the page did not finish loading (stand-in)") -> _Exit:
+    """A check that stopped because the page did not load, as the real one reports it (#750)."""
+    return _Exit(LOAD_FAILURE_EXIT_CODE, json.dumps({"loadFailure": why, "problems": problems}), why)
+
+
 def _standin(*answers):
     """A stand-in for subprocess.run that returns the given check results one after another, and
     records every command line it was given."""
@@ -596,6 +684,8 @@ def _standin(*answers):
     def run(command, **kwargs):
         calls.append(command)
         answer = answers[len(calls) - 1]
+        if isinstance(answer, _Exit):
+            return subprocess.CompletedProcess(command, answer.code, stdout=answer.stdout, stderr=answer.stderr)
         if isinstance(answer, int):  # a check that exits with an error
             return subprocess.CompletedProcess(command, answer, stdout="", stderr="the check broke")
         measured = answer if isinstance(answer, dict) else {"problems": answer}
@@ -672,6 +762,83 @@ def test_a_buffer_error_with_otherwise_good_measurements_is_still_retried(tmp_pa
     assert out["problems"] == [] and len(calls) == 2
 
 
+# --- #750: the same one retry for a page that failed to LOAD on the network-buffer line alone ------------
+
+def test_a_load_failure_with_only_the_buffer_space_error_is_retried_once_and_then_passes(tmp_path, capsys) -> None:
+    out, calls = _check_with(_load_failed([BUFFER_SPACE_PROBLEM]), [], tmp_path=tmp_path)
+    assert out["problems"] == [] and len(calls) == 2
+    assert calls[1][4].endswith("profile-retry")  # a fresh profile folder (and the check picks a fresh port)
+    printed = capsys.readouterr().out
+    assert "retrying once" in printed and "ERR_NO_BUFFER_SPACE" in printed  # said in the test output
+
+
+def test_a_second_load_failure_is_not_retried_again_and_fails_with_its_cause(tmp_path) -> None:
+    run, calls = _standin(_load_failed([BUFFER_SPACE_PROBLEM]), _load_failed([BUFFER_SPACE_PROBLEM], "again"))
+    with pytest.raises(AssertionError, match="the page failed to load: again"):
+        run_browser_check("http://x/v2", tmp_path / "profile", [], browser="browser", run=run)
+    assert len(calls) == 2  # exactly one retry
+
+
+_HTTP_500 = "log: Failed to load resource: the server responded with a status of 500 (Internal Server Error)"
+
+
+@pytest.mark.parametrize("problems", [
+    [_HTTP_500],
+    ["log: Failed to load resource: net::ERR_CONNECTION_REFUSED"],
+    [BUFFER_SPACE_PROBLEM, _HTTP_500],
+    ["log: Failed to load resource: net::ERR_NO_BUFFER_SPACE_2"],
+    [],
+], ids=["a 500 answer", "other network error", "mixed with a real error", "a similar but different line",
+        "no error at all (a plain time-out)"])
+def test_any_other_load_failure_fails_at_once_without_a_retry(problems, tmp_path, capsys) -> None:
+    run, calls = _standin(_load_failed(problems), [])
+    with pytest.raises(AssertionError, match="the page failed to load"):
+        run_browser_check("http://x/v2", tmp_path / "profile", [], browser="browser", run=run)
+    assert len(calls) == 1
+    assert "retrying" not in capsys.readouterr().out
+
+
+def test_a_label_not_found_after_the_page_loaded_is_never_retried_even_with_the_buffer_line_in_it(tmp_path) -> None:
+    """After the page loaded, a missing label means the page's error may have been hidden: that is a real
+    failure, whatever the page reported meanwhile (the check prints it in the message, not as load data)."""
+    missing = _Exit(1, stderr=f"watched age label not found ...; the page reported: {BUFFER_SPACE_PROBLEM}")
+    run, calls = _standin(missing, [])
+    with pytest.raises(AssertionError, match="watched age label not found"):
+        run_browser_check("http://x/v2", tmp_path / "profile", [], browser="browser", run=run)
+    assert len(calls) == 1
+
+
+def test_the_retry_is_one_per_check_across_both_kinds_of_buffer_error(tmp_path) -> None:
+    """A finished run with the buffer line and a failed load with it share ONE retry, in either order."""
+    out, calls = _check_with(_load_failed([BUFFER_SPACE_PROBLEM]), [BUFFER_SPACE_PROBLEM], tmp_path=tmp_path)
+    assert len(calls) == 2 and out["problems"] == [BUFFER_SPACE_PROBLEM]  # not a third attempt
+    run, calls = _standin([BUFFER_SPACE_PROBLEM], _load_failed([BUFFER_SPACE_PROBLEM]))
+    with pytest.raises(AssertionError, match="the page failed to load"):
+        run_browser_check("http://x/v2", tmp_path / "profile", [], browser="browser", run=run)
+    assert len(calls) == 2
+
+
+def test_a_load_failure_does_not_run_the_behaviour_assertions_and_still_gets_its_retry(tmp_path) -> None:
+    """There are no measurements to assert on after a failed load; the retry must not trip over that."""
+    clean = {"problems": [], "threadKept": True, "afterRedraw": {"top": 250}}
+    out, calls = _check_with(_load_failed([BUFFER_SPACE_PROBLEM]), clean, tmp_path=tmp_path, behaviour=_page_behaves)
+    assert len(calls) == 2 and out["threadKept"] is True
+
+
+def test_the_injected_error_check_gets_the_same_one_retry_and_nothing_more(tmp_path, capsys) -> None:
+    """run_check, which the injected-error test uses, retries a buffer-only load failure once and hands back
+    the second attempt as it is - here the page's reported injected error, which then passes that test."""
+    injected = _Exit(1, stderr="TypeError: injected query failure")
+    run, calls = _standin(_load_failed([BUFFER_SPACE_PROBLEM]), injected)
+    result = run_check("http://x/v2", tmp_path / "profile", [], browser="browser", run=run)
+    assert len(calls) == 2 and "injected query failure" in result.stderr
+    assert "retrying once" in capsys.readouterr().out
+    # a different load failure is final, with its own data for the test to show
+    run, calls = _standin(_load_failed(["log: Failed to load resource: net::ERR_CONNECTION_REFUSED"]), injected)
+    result = run_check("http://x/v2", tmp_path / "profile", [], browser="browser", run=run)
+    assert len(calls) == 1 and result.returncode == LOAD_FAILURE_EXIT_CODE
+
+
 @pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
 @pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
 def test_check_does_not_hide_a_page_exception_raised_while_it_waits_for_the_first_draw(
@@ -680,14 +847,130 @@ def test_check_does_not_hide_a_page_exception_raised_while_it_waits_for_the_firs
     the page (here one injected TypeError, once) must fail the check with its cause, not be retried until a
     later good query hides it."""
     url, profile = one_shot_query_error_page
-    flags = _browser_launch_flags(platform.system())
-    result = subprocess.run(
-        ["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)],
-        capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
-    )
+    # Same one-time retry as the main test (#750): a runner's network-buffer error that stops the page loading
+    # is not this test's fault to find; any other outcome of the first attempt is final.
+    result = run_check(url, profile, _browser_launch_flags(platform.system()))
+    assert result.returncode != LOAD_FAILURE_EXIT_CODE, f"the page failed to load: {result.stdout} {result.stderr}"
     assert result.returncode != 0, "the injected page exception was swallowed"
     assert "injected query failure" in result.stderr, result.stderr
     assert "watched age label not found" not in result.stderr, result.stderr  # not replaced by the absent-label message
+
+
+# --- #750: the check waits for the page to LOAD before its first-draw clock starts ---------------------
+
+def _with_limits(**limits_ms: int) -> tuple[str, str]:
+    """The check's own optional arguments after the launch flags: no sabotage, then limits in milliseconds
+    (loadMs, headStartMs, firstDrawMs; any left out keeps its default). Test-only: it lets a test that waits
+    for a late or missing script finish in seconds instead of the real 25-50."""
+    return "", json.dumps(limits_ms)
+
+
+# What the check's own constants must be (console2_browser_check.mjs), asked of the script itself.
+_CHECK_DEFAULTS = {
+    "loadMs": 30000, "headStartMs": 3500, "firstDrawMs": 20000, "startupMs": 90000, "loadFailureExitCode": 17,
+}
+_ASK_THE_CHECK = """
+const m = await import(process.argv[1]);
+const d = m.resolveLimits(undefined);
+let bad = null;
+try { m.resolveLimits('{"loadMs": "x"}'); } catch (e) { bad = String(e.message); }
+console.log(JSON.stringify({
+  loadMs: d.loadMs, headStartMs: d.headStartMs, firstDrawMs: d.firstDrawMs, startupMs: m.STARTUP_BUDGET_MS,
+  loadFailureExitCode: m.LOAD_FAILURE_EXIT_CODE, partial: m.resolveLimits('{"loadMs": 5}'), bad,
+}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_the_checks_default_limits_and_load_failure_exit_code_are_pinned() -> None:
+    """#750: the new page-load limit has a stated default (30 s), pinned here with the existing first-draw
+    (20 s) and startup (90 s) limits, the 3.5 s head start and the exit code this file reads. With no limits
+    argument the check uses exactly these; the argument is for tests that shrink them."""
+    result = subprocess.run(
+        ["node", "--input-type=module", "-e", _ASK_THE_CHECK, CHECK.as_uri()],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=REPO_ROOT,
+    )
+    assert result.returncode == 0, result.stderr
+    asked = json.loads(result.stdout)
+    assert {key: asked[key] for key in _CHECK_DEFAULTS} == _CHECK_DEFAULTS, asked
+    assert asked["loadFailureExitCode"] == LOAD_FAILURE_EXIT_CODE
+    # a limit that is given changes only itself; the others keep their defaults
+    assert asked["partial"] == {"loadMs": 5, "headStartMs": 3500, "firstDrawMs": 20000}, asked["partial"]
+    assert "loadMs" in asked["bad"], asked["bad"]  # a limit that is not a number is refused, never ignored
+
+
+@pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_a_late_page_script_does_not_use_up_the_first_draw_wait(serve_page) -> None:
+    """#750, the cause: the 20 s first-draw wait started while the page's own script was still loading, so a
+    late script left the page without the test-only fault, nothing threw, and the wait ended in "label not
+    found". Here the script is 1 s late and the first-draw wait (and the head start) are shrunk far below
+    that: the check must still wait for the load first, and so report the injected error."""
+    url, profile = serve_page(inject_js=_ONE_SHOT_QUERY_ERROR, script_delay_s=1.0)
+    result = run_check(url, profile, _browser_launch_flags(platform.system()),
+                       extra_args=_with_limits(headStartMs=0, firstDrawMs=500))
+    assert result.returncode not in (0, LOAD_FAILURE_EXIT_CODE), (result.returncode, result.stdout, result.stderr)
+    assert "injected query failure" in result.stderr, result.stderr
+    assert "watched age label not found" not in result.stderr, result.stderr
+
+
+@pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_a_page_script_that_never_answers_fails_within_the_load_limit_and_says_so(serve_page) -> None:
+    """#750: the load wait has its own limit. The script request never answers, the limit is shrunk to 3 s:
+    the check must stop with the load-failure code and a message about the LOAD, not about a missing label."""
+    url, profile = serve_page(script_hangs=True)
+    result = run_check(url, profile, _browser_launch_flags(platform.system()),
+                       extra_args=_with_limits(loadMs=3000, headStartMs=0, firstDrawMs=500))
+    assert result.returncode == LOAD_FAILURE_EXIT_CODE, (result.returncode, result.stdout, result.stderr)
+    load = _load_failure(result)
+    assert "did not finish loading within 3s" in load["loadFailure"], load
+    assert "label not found" not in load["loadFailure"] + result.stderr
+
+
+@pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_a_page_script_that_fails_to_load_is_reported_as_a_load_failure_not_a_missing_label(serve_page) -> None:
+    """#750: a script that answers 500 still ends the page load ("complete"), so a check that only waits for
+    that would go on to a 20 s "label not found". The page's own error must stop it at once: the load-failure
+    code, the page's error as data and in the message, and never the label message."""
+    url, profile = serve_page(inject_js=_ONE_SHOT_QUERY_ERROR, script_status=500)
+    result = run_check(url, profile, _browser_launch_flags(platform.system()),
+                       extra_args=_with_limits(headStartMs=0, firstDrawMs=500))
+    assert result.returncode == LOAD_FAILURE_EXIT_CODE, (result.returncode, result.stdout, result.stderr)
+    load = _load_failure(result)
+    assert any("Failed to load resource" in problem for problem in load["problems"]), load
+    assert "Failed to load resource" in load["loadFailure"] and "page failed to load" in load["loadFailure"], load
+    assert "label not found" not in load["loadFailure"] + result.stderr
+
+
+@pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_a_first_draw_failure_says_when_the_clock_started_and_that_the_page_reported_no_errors(serve_page) -> None:
+    """#750: every failure of the first-draw wait names the page's own errors, or says there were none, and
+    its message says the wait began after the page finished loading (which is now true)."""
+    url, profile = serve_page(api_delay_s=30.0)  # the data never comes in time: the label is never drawn
+    result = run_check(url, profile, _browser_launch_flags(platform.system()),
+                       extra_args=_with_limits(headStartMs=0, firstDrawMs=1500))
+    assert result.returncode not in (0, LOAD_FAILURE_EXIT_CODE), (result.returncode, result.stdout, result.stderr)
+    assert "watched age label not found" in result.stderr, result.stderr
+    assert "after the page finished loading" in result.stderr, result.stderr
+    assert "the page reported no errors" in result.stderr, result.stderr
+
+
+@pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_a_page_error_during_the_first_draw_wait_is_printed_when_the_wait_gives_up(serve_page) -> None:
+    """#750: the errors the check collected while it waited were thrown away when the wait gave up. A page
+    exception half a second after load (the label never drawn) must be named in the failure."""
+    late_exception = "setTimeout(function () { throw new Error('a late page fault'); }, 500);"
+    url, profile = serve_page(api_delay_s=30.0, inject_js=late_exception)
+    result = run_check(url, profile, _browser_launch_flags(platform.system()),
+                       extra_args=_with_limits(headStartMs=0, firstDrawMs=3000))
+    assert result.returncode not in (0, LOAD_FAILURE_EXIT_CODE), (result.returncode, result.stdout, result.stderr)
+    assert "watched age label not found" in result.stderr, result.stderr
+    assert "the page reported: exception: " in result.stderr, result.stderr
+    assert "the page reported no errors" not in result.stderr, result.stderr
 
 
 def _watched_card_age(url: str) -> int:
