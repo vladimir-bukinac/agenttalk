@@ -713,35 +713,35 @@ def test_the_same_loop_scenario_behaves_identically_with_the_journal_on_or_off(t
 
 
 def _close_wait_problem(close_seconds, joins, took):
-    """Why a close was not the wait of exactly one deadline for a stuck writer, or None when it was.
+    """Why a close did not wait to one deadline for a stuck writer, or None when it did.
 
-    ``joins`` is what the close did while waiting for the writer thread, one entry per wait: (when it began, counted
-    from the start of the close; how long it asked to wait; how long it really waited). ``took`` is the whole close.
+    ``joins`` records each wait: (start relative to the close, requested timeout, actual elapsed time). ``took`` is the
+    whole close. The writer is still blocked, so requesting a wait is not enough: the waits must actually reach the
+    deadline. Time before and between waits counts too, including a scheduler pause that consumes the remaining time.
 
-    Nothing here is a fixed number of seconds for the whole close, and nothing is measured against a timer of the test's
-    own, so a pause by the scheduler cannot fail a correct close or hide a wrong one:
-    - The deadline is set after the close begins, and each wait asks for what is left of it. So what the waits ask for
-      can never be more than one deadline, and what they ask for plus the time that passed before the first one always
-      covers the whole deadline. A pause before the wait eats into what it asks for, never into that sum. A wait that is
-      missing, switched off or shortened leaves the sum short; a longer or a second wait makes the request too big.
-      (A little slack for the resolution of the clock.)
-    - The time of the close outside its waits is the close's own work: microseconds. A pause by the scheduler is
-      tolerated up to a second; a sleep of 1.5 s after (or before) the wait is not. A wait that returns late is not
-      counted here, since it is the timer, not the close.
+    The deadline is set between starting the close and starting its first wait. Its latest possible value is therefore
+    the first wait's start plus ``close_seconds``. Each request must fit what remains of that same absolute deadline;
+    adding requests would reject valid retries after early returns. Actual coverage must reach ``close_seconds`` from
+    the start of the close (with 50 ms of clock slack). A late timer can cover it even when its request was short.
+
+    Time outside the waits is checked separately: tolerate a scheduler pause up to a second, but catch a 1.5 s sleep
+    before or after waiting, even when a timer also returns late. No timer of the test's own calibrates either rule.
     """
     if not joins:
         return "close did not wait for the writer at all"
-    asked = sum(float("inf") if ask is None else ask for _begin, ask, _spent in joins)
-    if asked > close_seconds + 0.001:
-        return f"close asked to wait {asked:.3f} s in all, more than its one deadline of {close_seconds} s"
-    if joins[0][0] + asked < close_seconds - 0.05:
-        return (
-            f"close began waiting {joins[0][0]:.3f} s in and asked for {asked:.3f} s, which does not cover its "
-            f"deadline of {close_seconds} s: the wait is shortened or missing"
-        )
     outside = took - sum(spent for _begin, _ask, spent in joins)
     if outside > 1.0:
         return f"close spent {outside:.3f} s outside its wait for the writer"
+    deadline = joins[0][0] + close_seconds
+    for begin, ask, _spent in joins:
+        if ask is None or ask > max(0.0, deadline - begin) + 0.001:
+            return f"close asked to wait {ask} s at {begin:.3f} s, more than its one deadline of {close_seconds} s"
+    covered = joins[-1][0] + joins[-1][2]
+    if covered < close_seconds - 0.05:
+        return (
+            f"close stopped waiting at {covered:.3f} s, which does not cover its deadline of {close_seconds} s: "
+            "the wait is shortened or missing"
+        )
     return None
 
 
@@ -752,6 +752,31 @@ def _close_wait_problem(close_seconds, joins, took):
         pytest.param([(0.0, 0.3, 1.1)], 1.1, None, id="healthy-the-timer-returned-late"),
         pytest.param([(0.25, 0.049, 0.049)], 0.3, None, id="healthy-a-pause-ate-part-of-the-deadline"),
         pytest.param([(0.0, 0.3, 0.3)], 0.55, None, id="healthy-a-pause-after-the-wait"),
+        pytest.param([(0.0, 0.3, 0.0001)], 0.0001, "does not cover", id="wait-returned-immediately"),
+        pytest.param(
+            [(i * 0.01, 0.01, 0.01) for i in range(30)],
+            0.3,
+            None,
+            id="healthy-split-waits",
+        ),
+        pytest.param(
+            [(0.0, 0.01, 0.16)] + [(0.16 + i * 0.01, 0.01, 0.01) for i in range(14)],
+            0.3,
+            None,
+            id="healthy-split-waits-first-timer-returned-late",
+        ),
+        pytest.param(
+            [(i * 0.03, 0.01, 0.01) for i in range(10)],
+            0.3,
+            None,
+            id="healthy-split-waits-with-time-between-them",
+        ),
+        pytest.param(
+            [(i * 0.01, min(0.3 - i * 0.01, 0.1), 0.01) for i in range(30)],
+            0.3,
+            None,
+            id="healthy-retries-after-early-returns",
+        ),
         pytest.param([(0.0, 0.0, 0.0)], 0.0, "does not cover", id="wait-switched-off"),
         pytest.param([(0.0, 0.1, 0.1)], 0.1, "does not cover", id="wait-shortened"),
         pytest.param([], 0.3, "did not wait", id="wait-missing"),
