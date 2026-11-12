@@ -737,3 +737,297 @@ def test_both_abandon_refusals_offer_repair_without_a_command_circle(damaged_lan
             assert repr(str(checkout)) in refusal and "still exists" in refusal
         assert lanes.lanes_path(store).read_bytes() == before
         assert evidence.read_text() == "unfinished work"
+
+
+# --------------------------------------------------------------------------- #759
+# Four readers that still trusted a damaged checkout path: `lane gc`, `lane recover`, the end of `lane deliver`
+# and the "is a launch using this lane?" check.
+
+DAMAGED_VALUES = ["", "   ", "\t", 7]
+DAMAGED_REASONS = {"": "is blank", "   ": "contains only whitespace", "\t": "contains only whitespace",
+                   7: "is not a string"}
+GC_ITEM_KEYS = {"lane_id", "branch", "status", "worktree", "worktree_remove_safe", "worktree_reason",
+                "branch_delete_safe", "reason"}
+
+
+def _retired_git_lane(root, base, lane_id, *, registered):
+    """An abandoned lane whose branch tip is in the target. `registered`: its checkout is left in place (kept by a
+    launch that has since ended), so Git still lists it; otherwise the checkout is gone."""
+    from pathlib import Path
+
+    from test_lanes import _assign_worktree, _run_raw
+
+    store = Store(root)
+    lane = _assign_worktree(root, base, lane_id)
+    if registered:
+        store.write_launch_request({"request_id": f"lr-{lane_id}", "state": "queued", "lane_id": lane_id})
+    assert _run_raw(["lane", "abandon", "--id", lane_id], root) == 0
+    if registered:
+        assert store.archive_launch_request(f"lr-{lane_id}", {"request_id": f"lr-{lane_id}",
+                                                              "terminal_state": "completed"})
+        assert Path(lane["worktree_path"]).exists()
+    return lane
+
+
+def _damage_record(root, lane_id, field, value):
+    store = Store(root)
+    data = lanes.load_lanes(store)
+    data["lanes"][lane_id][field] = value
+    lanes.save_lanes(store, data)
+
+
+def _gc_items(capsys, root, *flags):
+    capsys.readouterr()
+    assert cli.main(["--root", str(root), "lane", "gc", *flags, "--json"]) == 0
+    return {i["lane_id"]: i for i in json.loads(capsys.readouterr().out)["items"]}
+
+
+@pytest.mark.parametrize("delete", [False, True])
+@pytest.mark.parametrize("registered", [False, True])
+@pytest.mark.parametrize("field", ["worktree_path", "worktree_toplevel_canonical"])
+@pytest.mark.parametrize("value", DAMAGED_VALUES)
+def test_gc_leaves_the_branch_and_folder_of_a_damaged_lane_alone(tmp_path, capsys, value, field, registered, delete):
+    from pathlib import Path
+
+    from test_lanes import _lane_branch_present, _repo
+
+    root, base = _repo(tmp_path)
+    lane = _retired_git_lane(root, base, "gcdam", registered=registered)
+    _retired_git_lane(root, base, "gchealthy", registered=False)
+    wt = Path(lane["worktree_path"])
+    if not registered:
+        # Git lists nothing; the lane's record names a folder elsewhere that still holds unfinished work.
+        wt = tmp_path / "surviving"
+        wt.mkdir()
+        (wt / "keep.txt").write_text("unfinished work")
+        _damage_record(root, "gcdam", "worktree_path", str(wt))
+        _damage_record(root, "gcdam", "worktree_toplevel_canonical", str(wt))
+    _damage_record(root, "gcdam", field, value)
+    before = lanes.lanes_path(Store(root)).read_bytes()
+
+    items = _gc_items(capsys, root, *(["--delete"] if delete else []))
+
+    item = items["gcdam"]
+    assert set(item) == GC_ITEM_KEYS                       # no new key: the answer is in the existing ones
+    assert item["branch_delete_safe"] is False and item["worktree_remove_safe"] is False
+    assert item["reason"] == item["worktree_reason"]
+    assert f"checkout path {field} {DAMAGED_REASONS[value]}" in item["reason"]
+    assert "gc leaves its branch and worktree alone" in item["reason"]
+    assert "lane abandon --id gcdam --acknowledge-missing-worktree" in item["reason"]
+    assert _lane_branch_present(root, "gcdam")
+    assert wt.exists()
+    if not registered:
+        assert (wt / "keep.txt").read_text() == "unfinished work"
+    assert lanes.lanes_path(Store(root)).read_bytes() == before
+    # A healthy lane in the same run is still judged as before.
+    assert items["gchealthy"]["branch_delete_safe"] is True
+    if delete:
+        assert items["gchealthy"]["branch_deleted"] is True and not _lane_branch_present(root, "gchealthy")
+    else:
+        assert _lane_branch_present(root, "gchealthy")
+
+
+@pytest.mark.parametrize("registered", [False, True])
+def test_gc_text_output_says_why_a_damaged_lane_was_kept(tmp_path, capsys, registered):
+    from test_lanes import _repo
+
+    root, base = _repo(tmp_path)
+    _retired_git_lane(root, base, "gcdam", registered=registered)
+    _damage_record(root, "gcdam", "worktree_path", "   ")
+    capsys.readouterr()
+
+    assert cli.main(["--root", str(root), "lane", "gc", "--delete"]) == 0
+
+    err = capsys.readouterr().err
+    kept = "worktree kept" if registered else "branch kept"
+    assert f"agenttalk lane gc: gcdam: {kept}: its checkout path worktree_path contains only whitespace" in err
+    assert "--acknowledge-missing-worktree" in err
+    assert ("the worktree was not removed" in err) is registered
+
+
+@pytest.mark.parametrize("control", ["none", "valid"])
+@pytest.mark.parametrize("registered", [False, True])
+def test_gc_still_collects_a_lane_with_an_unset_or_valid_checkout_path(tmp_path, capsys, control, registered):
+    from test_lanes import _lane_branch_present, _repo
+
+    root, base = _repo(tmp_path)
+    _retired_git_lane(root, base, "gcctl", registered=registered)
+    if control == "none":
+        _damage_record(root, "gcctl", "worktree_toplevel_canonical", None)  # an older record without the field
+
+    item = _gc_items(capsys, root, "--delete")["gcctl"]
+
+    assert item["branch_deleted"] is True and not _lane_branch_present(root, "gcctl")
+    assert ("worktree_removed" in item) is registered
+    assert "checkout path" not in item["reason"]
+
+
+def test_gc_keeps_the_manual_review_reason_of_an_acknowledged_damaged_lane(tmp_path, capsys):
+    from test_lanes import _lane_branch_present, _repo, _run_raw
+
+    root, base = _repo(tmp_path)
+    _retired_git_lane(root, base, "gcack", registered=False)
+    _damage_record(root, "gcack", "worktree_path", "")
+    _damage_record(root, "gcack", "worktree_toplevel_canonical", str(tmp_path / "nowhere"))
+    assert _run_raw(["lane", "abandon", "--id", "gcack", "--acknowledge-missing-worktree"], root) == 0
+
+    item = _gc_items(capsys, root, "--delete")["gcack"]
+
+    assert item["branch_delete_safe"] is False
+    assert "acknowledged by a person" in item["reason"]
+    assert "its checkout path" not in item["reason"] and "--acknowledge-missing-worktree" not in item["reason"]
+    assert _lane_branch_present(root, "gcack")
+
+
+# ---- lane recover
+
+def _half_delivered(damaged_lane, field, value):
+    """A delivered lane whose publication stopped half-way, with one damaged checkout field."""
+    store = damaged_lane(field, value)
+    data = lanes.load_lanes(store)
+    row = data["lanes"]["damaged"]
+    row.update(status=lanes.STATUS_DELIVERED, publish_pending=True, cleanup_pending=True,
+               worktree_state=lanes.STATUS_CLEANUP_PENDING)
+    lanes.save_lanes(store, data)
+    return store
+
+
+def _lane_cmd(store, *argv):
+    return cli.main(["--root", str(store.root), "lane", *argv])
+
+
+@pytest.mark.parametrize("field", ["worktree_path", "worktree_toplevel_canonical"])
+@pytest.mark.parametrize("value", DAMAGED_VALUES)
+def test_recover_restores_a_damaged_lane_and_says_how_to_retire_it(damaged_lane, capsys, field, value):
+    store = _half_delivered(damaged_lane, field, value)
+    # Before recover, the two other commands both refuse: recover is the only way out.
+    assert _lane_cmd(store, "deliver", "--id", "damaged", "--from", "dev") == 2
+    assert _lane_cmd(store, "abandon", "--id", "damaged", "--acknowledge-missing-worktree") == 2
+    capsys.readouterr()
+
+    assert _lane_cmd(store, "recover", "--id", "damaged", "--reason", "damaged path") == 0
+
+    output = capsys.readouterr()
+    assert "recovered lane damaged to ACTIVE" in output.out
+    assert f"lane 'damaged' is active again, but its checkout path {field} {DAMAGED_REASONS[value]}" in output.err
+    assert "lane abandon --id damaged --acknowledge-missing-worktree" in output.err
+    row = lanes.load_lanes(store)["lanes"]["damaged"]
+    assert row["status"] == lanes.STATUS_ACTIVE
+    assert row["worktree_state"] == lanes.STATUS_ACTIVE      # never left on a retired-looking state
+    assert row[field] == value                               # the damaged field itself is not touched
+    # No dead end: the hint works.
+    assert _lane_cmd(store, "abandon", "--id", "damaged", "--acknowledge-missing-worktree") == 0
+    assert lanes.load_lanes(store)["lanes"]["damaged"]["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED
+
+
+@pytest.mark.parametrize("field", ["worktree_path", "worktree_toplevel_canonical"])
+@pytest.mark.parametrize("control", ["none", "valid"])
+def test_recover_says_nothing_about_a_checkout_that_is_not_damaged(damaged_lane, capsys, field, control):
+    value = None if control == "none" else "somewhere/else"
+    store = _half_delivered(damaged_lane, field, value)
+    capsys.readouterr()
+
+    assert _lane_cmd(store, "recover", "--id", "damaged", "--reason", "control") == 0
+
+    output = capsys.readouterr()
+    assert "recovered lane damaged to ACTIVE" in output.out
+    assert output.err == ""
+    row = lanes.load_lanes(store)["lanes"]["damaged"]
+    assert row["status"] == lanes.STATUS_ACTIVE
+    if not (field == "worktree_path" and value is None):    # a waived lane keeps its (absent) checkout state
+        assert row["worktree_state"] == lanes.STATUS_ACTIVE
+
+
+# ---- the end of `lane deliver`
+
+def _delivered_awaiting_cleanup(damaged_lane, field, value):
+    store = damaged_lane(field, value)
+    data = lanes.load_lanes(store)
+    row = data["lanes"]["damaged"]
+    row.update(status=lanes.STATUS_DELIVERED, publish_pending=False, cleanup_pending=True,
+               delivery_transaction_id="a" * 32, delivered_head="b" * 40)
+    lanes.save_lanes(store, data)
+    pending = {"lane_instance_id": row["instance_id"], "lane_generation": row["generation"],
+               "transaction_id": "a" * 32, "head_sha": "b" * 40}
+    return store, pending, dict(row)
+
+
+@pytest.mark.parametrize("field", ["worktree_path", "worktree_toplevel_canonical"])
+@pytest.mark.parametrize("value", DAMAGED_VALUES)
+def test_delivery_cleanup_is_never_recorded_as_done_for_a_damaged_path(damaged_lane, capsys, field, value):
+    store, pending, row = _delivered_awaiting_cleanup(damaged_lane, field, value)
+    folder = store.root / "checkout"
+    folder.mkdir()
+    (folder / "keep.txt").write_text("unfinished work")
+    artifact = store.root / "artifact.json"
+    capsys.readouterr()
+
+    result = cli._lane_deliver_cleanup(store, "damaged", pending, row, artifact, "b" * 40)
+
+    assert result == (artifact, True, "b" * 40)             # cleanup pending, as for any other failed teardown
+    err = capsys.readouterr().err
+    assert "the lane is delivered, but its worktree cleanup is pending" in err
+    assert f"checkout path {field} {DAMAGED_REASONS[value]}" in err
+    saved = lanes.load_lanes(store)["lanes"]["damaged"]
+    assert saved["cleanup_pending"] is True
+    assert saved["worktree_state"] == lanes.STATUS_CLEANUP_FAILED
+    assert field in saved["worktree_cleanup_error"]
+    assert saved["status"] == lanes.STATUS_DELIVERED and saved["publish_pending"] is False
+    assert (folder / "keep.txt").read_text() == "unfinished work"
+    # The record can still be retired once the person has looked at the folder: no dead end.
+    assert not lanes.delivery_recovery_required(saved)
+    (folder / "keep.txt").unlink()
+    folder.rmdir()
+    assert _lane_cmd(store, "abandon", "--id", "damaged", "--acknowledge-missing-worktree") == 0
+
+
+@pytest.mark.parametrize("control", ["none", "valid"])
+def test_delivery_cleanup_still_completes_when_the_path_is_unset_or_gone(damaged_lane, control):
+    value = None if control == "none" else "no/such/folder"
+    store, pending, row = _delivered_awaiting_cleanup(damaged_lane, "worktree_path", value)
+    if control == "none":
+        row["worktree_toplevel_canonical"] = None
+
+    result = cli._lane_deliver_cleanup(store, "damaged", pending, row, store.root / "artifact.json", "b" * 40)
+
+    assert result[1] is False
+    saved = lanes.load_lanes(store)["lanes"]["damaged"]
+    assert saved["cleanup_pending"] is False and saved["worktree_state"] == lanes.STATUS_DELIVERED
+
+
+# ---- "is a launch using this lane?"
+
+@pytest.mark.parametrize("field", ["worktree_path", "worktree_toplevel_canonical"])
+@pytest.mark.parametrize("value", DAMAGED_VALUES)
+def test_launch_check_finds_a_launch_that_names_a_lane_with_a_damaged_path(damaged_lane, field, value):
+    store = damaged_lane(field, value)
+    store.write_launch_request({"request_id": "lr-damaged", "state": "launched", "lane_id": "damaged"})
+    row = lanes.load_lanes(store)["lanes"]["damaged"]
+
+    in_use = cli._lane_worktree_launch_use(store, row)
+
+    assert in_use is not None and cli._LANE_WORKTREE_BUSY in in_use and "lr-damaged" in in_use
+
+
+@pytest.mark.parametrize("field", ["worktree_path", "worktree_toplevel_canonical"])
+@pytest.mark.parametrize("value", DAMAGED_VALUES)
+def test_launch_check_never_answers_idle_for_a_damaged_path(damaged_lane, field, value):
+    store = damaged_lane(field, value)
+    row = lanes.load_lanes(store)["lanes"]["damaged"]
+
+    in_use = cli._lane_worktree_launch_use(store, row)
+
+    assert in_use is not None and "could not be established" in in_use
+    assert f"checkout path {field} {DAMAGED_REASONS[value]}" in in_use
+
+
+def test_launch_check_keeps_its_answers_for_an_unset_or_valid_path(damaged_lane):
+    store = damaged_lane("worktree_path", None)
+    row = lanes.load_lanes(store)["lanes"]["damaged"]
+    row["worktree_toplevel_canonical"] = None
+    assert cli._lane_worktree_launch_use(store, row) is None          # a waived lane: no checkout, nothing to guard
+    store = damaged_lane("worktree_path", str(store.root / "checkout"))
+    row = lanes.load_lanes(store)["lanes"]["damaged"]
+    assert cli._lane_worktree_launch_use(store, row) is None          # a valid path and no launch
+    store.write_launch_request({"request_id": "lr-valid", "state": "launched", "lane_id": "damaged"})
+    assert cli._LANE_WORKTREE_BUSY in cli._lane_worktree_launch_use(store, row)

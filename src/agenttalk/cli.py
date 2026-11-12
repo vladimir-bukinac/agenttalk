@@ -4863,6 +4863,13 @@ def _lane_worktree_launch_use(store, lane: dict, *, queued_ok: bool = False,
     lane bindings are checked and uncomparable folder evidence still prevents acknowledgement.
     """
     wt = lane.get("worktree_path")
+    damage = None
+    problem = None if pathless else lane_mod.checkout_path_problem(lane)
+    if problem is not None:
+        # A damaged path is never compared as a folder, and never means "no launch": judged as the record-only exit
+        # judges it (by any usable field, then by lane id), but never idle. The `pathless` call is that exit itself.
+        damage = f"the lane's checkout path {problem[0]} {problem[1]}"
+        pathless = True
     if pathless:
         path = _lane_acknowledgement_path(store, lane)
         if path is not None:
@@ -4979,7 +4986,7 @@ def _lane_worktree_launch_use(store, lane: dict, *, queued_ok: bool = False,
         return _lane_unknown("the supervisor-state.json file in the store has an unexpected shape")
     if unknown and pathless:
         unknown += "; no usable checkout path remains, so stop the supervised seats first"
-    return _lane_unknown(unknown) if unknown else None
+    return _lane_unknown(unknown or damage) if unknown or damage else None
 
 
 def _lane_worktree_idle(store, lane: dict) -> bool:
@@ -5716,7 +5723,7 @@ def _lane_recovery_active_snapshot(lane: dict) -> dict:
     ):
         restored.pop(key, None)
     restored["status"] = lane_mod.STATUS_ACTIVE
-    if restored.get("worktree_path"):
+    if restored.get("worktree_path") is not None:  # any recorded value, damaged ones too, is a checkout the lane had
         restored["worktree_state"] = lane_mod.STATUS_ACTIVE
     return restored
 
@@ -5913,6 +5920,15 @@ def _lane_finalize_delivery(store, lane_id: str) -> tuple[Path, bool, str]:
 def _lane_deliver_cleanup(store, lane_id: str, pending: dict, cleanup_lane: dict, artifact: Path,
                           delivered_head: str) -> tuple[Path, bool, str]:
     """The worktree teardown that ends a delivery, run while the lane's cleanup lock and occupancy claim are held."""
+    try:
+        lane_mod.require_checkout_paths(cleanup_lane, lane_id)
+    except lane_mod.LaneError as exc:
+        # A damaged path is not "no worktree": cleanup is never recorded as done for a checkout nobody looked at.
+        message = str(exc)
+        _lane_checkpoint_cleanup(store, lane_id, pending, success=False, error=message)
+        sys.stderr.write(
+            f"agenttalk lane deliver: the lane is delivered, but its worktree cleanup is pending: {message}.\n")
+        return artifact, True, delivered_head
     wt_raw = cleanup_lane.get("worktree_path")
     if not isinstance(wt_raw, str) or not wt_raw:
         _lane_checkpoint_cleanup(store, lane_id, pending, success=True)
@@ -6595,6 +6611,15 @@ def _cmd_lane(args: argparse.Namespace) -> int:
             f"recovered lane {lane_id} to ACTIVE for fresh evaluation; "
             "orphaned prepared evidence remains nonconsumable"
         )
+        try:
+            restored = (lane_mod.load_lanes(store).get("lanes") or {}).get(lane_id)
+        except lane_mod.LaneError:
+            restored = None
+        problem = lane_mod.checkout_path_problem(restored) if isinstance(restored, dict) else None
+        if problem is not None:
+            sys.stderr.write(
+                f"agenttalk lane recover: lane {lane_id!r} is active again, but its checkout path {problem[0]} "
+                f"{problem[1]}; {lane_mod.checkout_path_recovery(lane_id, restored)}\n")
         return 0
 
     if action == "workspace":
@@ -6947,6 +6972,15 @@ def _cmd_lane(args: argparse.Namespace) -> int:
             if in_use is not None:  # a session is on the lane (or that could not be established): nothing of it goes
                 wt_safe, wt_reason = False, lane_occupancy.refusal(lane_id, in_use)
                 safe, reason = False, wt_reason
+            elif isinstance(lane, dict) and not lane_mod.checkout_damage_acknowledged(lane):
+                problem = lane_mod.checkout_path_problem(lane)
+                if problem is not None:
+                    # A damaged path proves nothing about the checkout: nothing of the lane goes, nothing is judged
+                    # from the other field. (An acknowledged lane keeps its own "manual review" reason.)
+                    wt_safe, wt_reason = False, (
+                        f"its checkout path {problem[0]} {problem[1]}, so gc leaves its branch and worktree "
+                        f"alone; {lane_mod.checkout_path_recovery(lane_id, lane)}")
+                    safe, reason = False, wt_reason
             # A registered worktree that gc did not remove keeps the branch, whether or not its folder exists: a missing
             # folder can also mean it was moved or redirected, and Git then still lists the old path.
             kept_reason = (
