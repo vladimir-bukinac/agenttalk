@@ -7890,6 +7890,50 @@ def test_the_acknowledge_help_says_how_a_relative_or_unprovable_path_is_handled(
         assert flat.count(sentence) == 2, sentence      # in the description and in the option's own help
 
 
+# The two steps a refused acknowledgement leaves to a person, and the one thing never to do (#668). Each is a step to
+# take, so a help text that only says "refused" does not pass.
+_ACK_RECOVERY_STEPS = (
+    "restore the verified intended parent folder",
+    "inspect the real checkout and its Git registration before repairing",
+    "never remove or replace a link blindly",
+)
+
+
+def _abandon_help_parts(capsys: pytest.CaptureFixture) -> tuple[str, str]:
+    """`lane abandon --help` as (the command's description, the option list), each as raw text."""
+    with pytest.raises(SystemExit):
+        cli.main(["lane", "abandon", "--help"])
+    description, options = re.split(r"\n(?:options|optional arguments):\n", capsys.readouterr().out, maxsplit=1)
+    return description, options
+
+
+def _flat(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_the_abandon_description_names_the_recovery_steps_for_a_refused_acknowledgement(
+        capsys: pytest.CaptureFixture) -> None:
+    """#668: the description says a relative or unprovable path is refused; it must also say what to do next."""
+    description, _options = _abandon_help_parts(capsys)
+    flat = _flat(description)
+    for step in _ACK_RECOVERY_STEPS:
+        assert step in flat, step
+    # the steps sit with the refusal they answer, before the sentence about launches and supervisors
+    assert flat.index("could not prove this path absent for") < flat.index(_ACK_RECOVERY_STEPS[0])
+    assert flat.index(_ACK_RECOVERY_STEPS[2]) < flat.index("resolve the reported launch or supervisor problem")
+
+
+def test_the_acknowledge_option_help_names_the_recovery_steps_for_a_refused_acknowledgement(
+        capsys: pytest.CaptureFixture) -> None:
+    """#668: the same steps in the option's own help, which is what a person reads next to the flag."""
+    _description, options = _abandon_help_parts(capsys)
+    chunk = next(c for c in re.split(r"\n  (?=-)", options) if c.lstrip().startswith("--acknowledge-missing-worktree"))
+    flat = _flat(chunk)
+    for step in _ACK_RECOVERY_STEPS:
+        assert step in flat, step
+    assert flat.index("could not prove this path absent for") < flat.index(_ACK_RECOVERY_STEPS[0])
+
+
 @pytest.mark.parametrize("where", ["store-root", "another-folder"])
 def test_plain_abandon_and_gc_on_a_relative_record_behave_as_before(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, where: str) -> None:

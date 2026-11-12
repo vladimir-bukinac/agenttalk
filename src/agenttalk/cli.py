@@ -4663,6 +4663,14 @@ _LANE_WORKTREE_BUSY = "worktree has an active or pending launch"
 _LANE_WRAP_NOT_DETECTED = (
     "Sessions without a lane occupancy token (including older agenttalk sessions) can go undetected; stop them first."
 )
+# #668: what a person does after `lane abandon --acknowledge-missing-worktree` refuses a saved worktree path it could
+# not prove absent (a relative one with '..', a link on the way, a missing parent, a record that does not match the
+# lane's checkout). The same sentence is in the command description and in the option's own help.
+_LANE_ACK_RECOVERY = (
+    "To recover, restore the verified intended parent folder and run the command again, or inspect the real checkout "
+    "and its Git registration before repairing a record that does not match it; never remove or replace a link "
+    "blindly. "
+)
 _LANE_UPGRADE_STOP_FIRST = (
     " Before upgrading, stop every supervisor, wrapper, scheduled job and shell using this store; "
     "upgrade every entry point, then restart. Never run an older client against an upgraded store. "
@@ -17925,8 +17933,8 @@ def build_parser() -> argparse.ArgumentParser:
             "proof that the branch is unused. The worktree is also kept while a launch uses it, or when that "
             "cannot be established. A relative saved path is read as relative to the store root, as saved; one with "
             "'..', or one agenttalk could not prove this path absent for (a link on the way, a missing parent, a "
-            "folder it cannot look at), is refused with advice and nothing is changed. "
-            "With --acknowledge-missing-worktree, resolve the reported launch or "
+            "folder it cannot look at), is refused with advice and nothing is changed. " + _LANE_ACK_RECOVERY
+            + "With --acknowledge-missing-worktree, resolve the reported launch or "
             "supervisor problem before retrying. " + _LANE_WRAP_NOT_DETECTED + _LANE_UPGRADE_STOP_FIRST
         ),
     )
@@ -17939,7 +17947,8 @@ def build_parser() -> argparse.ArgumentParser:
                           help="Finish the bookkeeping for a lane whose worktree is already gone: records your "
                                "acknowledgement, not a check. Never removes a checkout or deletes a branch. "
                                "A relative saved path is read as relative to the store root; a path agenttalk "
-                               "could not prove this path absent for is refused. " + _LANE_WRAP_NOT_DETECTED)
+                               "could not prove this path absent for is refused. " + _LANE_ACK_RECOVERY
+                               + _LANE_WRAP_NOT_DETECTED)
     labandon.set_defaults(func=cmd_lane)
 
     lgc = lsub.add_parser(
