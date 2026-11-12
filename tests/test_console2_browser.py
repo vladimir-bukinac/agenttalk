@@ -13,6 +13,8 @@ ordinary redraw exactly like the stream's needs-you cards and chat thread do, pl
 """
 from __future__ import annotations
 
+import contextlib
+import errno
 import json
 import os
 import platform
@@ -586,19 +588,118 @@ def test_check_waits_for_a_late_first_draw_instead_of_failing_on_a_missing_label
     assert out["problems"] == [], out["problems"]  # no console error and no page exception while it waited
 
 
-def _hold_ipv4_ports(first: int, last: int) -> list[socket.socket]:
-    """Take every IPv4 loopback port in first..last that is free right now (bound, not listening, so a
-    connection to it is refused). A port some other process already holds is taken anyway."""
-    held = []
-    for port in range(first, last + 1):
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
+# Errors from bind() that mean "this port is not available to a browser either": another process holds it
+# (address in use), or the system keeps it back (Windows reserves some ranges; access denied).
+_PORT_UNAVAILABLE_ERRNOS = {
+    code
+    for code in (
+        errno.EADDRINUSE, errno.EACCES, getattr(errno, "WSAEADDRINUSE", None), getattr(errno, "WSAEACCES", None),
+    )
+    if code is not None
+}
+
+
+@contextlib.contextmanager
+def _ipv4_ports_taken(first: int, last: int):
+    """Make every IPv4 loopback port in first..last unavailable to a browser, for the length of the `with`.
+
+    A port some other process already holds (or the system keeps back) is unavailable already; every other
+    port is taken here (bound, not listening, so a connection to it is refused). Yields (taken_here,
+    taken_by_others). Every socket acquired is closed when the `with` ends and also if acquiring stops
+    half way. If this machine cannot do it (out of sockets, or bind() fails for a reason other than the
+    port being unavailable) the test is skipped with that reason: it cannot be run honestly here."""
+    held: list[socket.socket] = []
+    by_others = 0
+    try:
+        for port in range(first, last + 1):
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            except OSError as exc:
+                pytest.skip(f"cannot take the whole port range: out of sockets after {len(held)} ports ({exc})")
+            try:
+                sock.bind(("127.0.0.1", port))
+            except OSError as exc:
+                sock.close()
+                if exc.errno not in _PORT_UNAVAILABLE_ERRNOS:
+                    pytest.skip(f"cannot take the whole port range: bind of port {port} failed ({exc})")
+                by_others += 1
+                continue
+            held.append(sock)
+        yield len(held), by_others
+    finally:
+        for sock in held:
             sock.close()
-            continue
-        held.append(sock)
-    return held
+
+
+class _FakeSocket:
+    def __init__(self, owner: "_FakeSockets") -> None:
+        self.owner, self.closed = owner, False
+
+    def bind(self, address) -> None:
+        error = self.owner.bind_errors.get(address[1])
+        if error is not None:
+            raise OSError(error, "simulated bind failure")
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _FakeSockets:
+    """Stands in for socket.socket: the given ports fail to bind with the given errno, and the Nth socket
+    that is asked for (counting from 0) cannot be created."""
+
+    def __init__(self, bind_errors: dict[int, int] | None = None, create_fails_at: int | None = None) -> None:
+        self.bind_errors, self.create_fails_at, self.made = bind_errors or {}, create_fails_at, []
+
+    def __call__(self, family, kind) -> _FakeSocket:
+        if self.create_fails_at is not None and len(self.made) == self.create_fails_at:
+            raise OSError(errno.EMFILE, "simulated: too many open files")
+        self.made.append(_FakeSocket(self))
+        return self.made[-1]
+
+
+@contextlib.contextmanager
+def _must_not_skip():
+    """For the tests where taking the range has to work: a skip there is a failure, not a pass."""
+    try:
+        yield
+    except pytest.skip.Exception as exc:
+        pytest.fail(f"taking the range must not skip here: {exc}")
+
+
+def test_ports_held_by_other_processes_count_as_taken_not_as_a_failure(monkeypatch) -> None:
+    fake = _FakeSockets({9302: errno.EADDRINUSE, 9303: errno.EACCES})
+    monkeypatch.setattr(socket, "socket", fake)
+    with _must_not_skip(), _ipv4_ports_taken(9300, 9304) as (here, others):
+        assert (here, others) == (3, 2)
+        assert [s.closed for s in fake.made] == [False, False, True, True, False]  # the refused two are not kept
+    assert all(s.closed for s in fake.made)
+
+
+def test_a_range_already_taken_by_others_is_still_a_valid_setup(monkeypatch) -> None:
+    fake = _FakeSockets(dict.fromkeys(range(9300, 9305), errno.EADDRINUSE))
+    monkeypatch.setattr(socket, "socket", fake)
+    with _must_not_skip(), _ipv4_ports_taken(9300, 9304) as (here, others):
+        assert (here, others) == (0, 5)
+    assert all(s.closed for s in fake.made)
+
+
+def test_running_out_of_sockets_skips_the_test_and_closes_what_was_taken(monkeypatch) -> None:
+    fake = _FakeSockets(create_fails_at=3)
+    monkeypatch.setattr(socket, "socket", fake)
+    with pytest.raises(pytest.skip.Exception, match="out of sockets after 3 ports"):
+        with _ipv4_ports_taken(9300, 9304):
+            pytest.fail("the body must not run when the range cannot be taken")
+    assert len(fake.made) == 3 and all(s.closed for s in fake.made)
+
+
+def test_a_bind_failure_that_is_not_a_taken_port_skips_the_test_and_closes_everything(monkeypatch) -> None:
+    fake = _FakeSockets({9302: errno.ENOBUFS})
+    monkeypatch.setattr(socket, "socket", fake)
+    with pytest.raises(pytest.skip.Exception, match="bind of port 9302 failed"):
+        with _ipv4_ports_taken(9300, 9304):
+            pytest.fail("the body must not run when the range cannot be taken")
+    assert len(fake.made) == 3 and all(s.closed for s in fake.made)
 
 
 @pytest.mark.skipif(BROWSER is None, reason="no Chromium-family browser on this runner")
@@ -607,23 +708,64 @@ def test_check_finds_the_browser_when_the_old_debugging_port_range_is_taken_on_i
     """#770: the check used to pick a random debugging port from 9300-9799 and look for it on IPv4
     only. When that IPv4 port was already taken the browser listened on [::1] alone, and the check
     waited out its whole 90 s browser-start allowance and failed. Here every IPv4 port in that old
-    range is taken, so whichever port the check picks is one: the browser must still be found."""
+    range is unavailable (taken here, or already held by something else), so whichever port the check
+    picks is one: the browser must still be found."""
     url, profile = page
     flags = _browser_launch_flags(platform.system())
-    held = _hold_ipv4_ports(9300, 9799)
-    try:
-        assert len(held) > 400, "the test needs (nearly) the whole range to be taken"
+    with _ipv4_ports_taken(9300, 9799):
         result = subprocess.run(
             ["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)],
             capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
         )
-    finally:
-        for sock in held:
-            sock.close()
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
     assert out["initial"]["connected"] is True
     assert out["problems"] == [], out["problems"]
+
+
+# A stand-in for the browser: a node script that notes which debugging port it was asked for, listens on a
+# port of its own, writes that port to DevToolsActivePort in the profile folder (as a real browser does),
+# and leaves as soon as something asks it for /json/version, noting which port that request came in on.
+_FAKE_BROWSER = """\
+import http from 'node:http';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const args = process.argv.slice(2);
+const pick = (name) => (args.find((a) => a.startsWith(name)) || '').slice(name.length);
+const profile = pick('--user-data-dir=');
+const note = { asked: pick('--remote-debugging-port='), wrote: null, seen: null };
+const save = () => writeFileSync(join(profile, '..', 'fake-browser.json'), JSON.stringify(note));
+mkdirSync(profile, { recursive: true });
+const server = http.createServer((req, res) => {
+  note.seen = note.seen || { port: server.address().port, url: req.url };
+  save();
+  res.end('{}');
+  setTimeout(() => process.exit(3), 50);
+});
+server.listen(0, '127.0.0.1', () => {
+  note.wrote = server.address().port;
+  writeFileSync(join(profile, 'DevToolsActivePort'), `${note.wrote}\\n/devtools/browser/fake`);
+  save();
+});
+setTimeout(() => { save(); process.exit(4); }, 10000);
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="no node on this runner")
+def test_check_asks_for_port_zero_and_uses_the_port_the_browser_wrote(tmp_path: Path) -> None:
+    """#770: the node unit tests cover the port-file helpers only. This runs the real entrypoint against a
+    stand-in browser (no real browser needed) and shows the wiring: the browser is asked for port 0, and
+    the check's first DevTools request goes to the port the browser wrote to DevToolsActivePort."""
+    fake = tmp_path / "fake_browser.mjs"
+    fake.write_text(_FAKE_BROWSER, encoding="utf-8")
+    result = subprocess.run(
+        ["node", str(CHECK), shutil.which("node"), "http://127.0.0.1:1/unused", str(tmp_path / "profile"),
+         json.dumps([str(fake)])],
+        capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=REPO_ROOT,
+    )
+    note = json.loads((tmp_path / "fake-browser.json").read_text(encoding="utf-8"))
+    assert note["asked"] == "0", (note, result.stderr)
+    assert note["seen"] == {"port": note["wrote"], "url": "/json/version"}, (note, result.stderr)
 
 
 # --- #315: the buffer-space retry, proved with a stand-in for the node check (no browser needed) ----
