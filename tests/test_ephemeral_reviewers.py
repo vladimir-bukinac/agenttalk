@@ -1292,6 +1292,26 @@ def test_prepare_launch_request_readmits_fresh_durable_marker_before_launch(
     assert len(retired) == 1
 
 
+def test_a_lane_made_with_a_relative_worktrees_root_binds_a_launch_through_the_supervisor_checks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#668: such a lane now stores an absolute folder, so the supervisor's lane registry lists it and a prepared
+    launch gets that folder as its workspace (a relative record was skipped, so no launch could be bound)."""
+    from test_lanes import _branch, _repo, _run_raw
+
+    root, base = _repo(tmp_path)
+    monkeypatch.chdir(root)
+    assert _run_raw([
+        "lane", "assign", "--id", "relroot", "--from", "lead", "--assignee", "dev", "--domain", "core",
+        "--base", base, "--target", _branch(root), "--path", "src/core", "--worktrees-root", ".worktrees",
+    ], root) == 0
+    store = Store(root)
+    folder = lanes.load_lanes(store)["lanes"]["relroot"]["worktree_path"]
+
+    assert sup.active_ephemeral_lane_workspaces(store) == {"relroot": str(Path(folder))}
+    assert Path(folder).is_absolute()
+
+
 def test_prepare_lane_without_worktree_archives_denied_after_claim(tmp_path: Path) -> None:
     s = _store(tmp_path)
     lane = lanes.new_lane(

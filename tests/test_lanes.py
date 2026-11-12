@@ -3936,27 +3936,6 @@ def test_the_refusal_for_an_acknowledged_lane_whose_folder_reappears_points_to_a
     assert lanes.load_lanes(store) == before
 
 
-def test_the_acknowledgement_is_refused_for_a_relative_stored_path(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
-    """A relative path is "gone" or not depending on the folder the command runs in; the option will not guess."""
-    (tmp_path / "store").mkdir()
-    root, base = _repo(tmp_path / "store")
-    lane = _assign_worktree(root, base, "relative")
-    store = Store(root)
-    data = lanes.load_lanes(store)
-    data["lanes"]["relative"]["worktree_path"] = os.path.relpath(lane["worktree_path"], root)
-    lanes.save_lanes(store, data)
-    (tmp_path / "elsewhere").mkdir()
-    monkeypatch.chdir(tmp_path / "elsewhere")                         # here the relative path points at nothing
-    before = lanes.load_lanes(store)
-    capsys.readouterr()
-
-    assert _run_raw(["lane", "abandon", "--id", "relative", ACK], root) == 2
-
-    assert "not absolute" in capsys.readouterr().err
-    assert lanes.load_lanes(store) == before and Path(lane["worktree_path"]).exists()
-
-
 @pytest.mark.parametrize("path, expected", [
     (r"\repo\worktree", False), ("/repo/worktree", False),
     (r"C:repo\worktree", False), ("repo/worktree", False),
@@ -7585,3 +7564,435 @@ def test_719_assign_and_restamp_agree_on_display_case(tmp_path):
     after = lanes.load_lanes(store)["lanes"]["stamp"]
     stamps = {"epoch_at_assign", "registry_hash_at_assign", "restamps"}
     assert {k: v for k, v in after.items() if k not in stamps} == {k: v for k, v in before.items() if k not in stamps}
+
+
+# ---------------------------------------------------------------------------------------------------------------------
+# #668: a lane made with a relative `--worktrees-root` (and an older record with a relative `worktree_path`) can be
+# acknowledged once its checkout is gone. The acknowledgement reads the saved path as saved, joined to the store root.
+# ---------------------------------------------------------------------------------------------------------------------
+
+
+def _assign_rooted(root: Path, base: str, lane_id: str, worktrees_root: str, *, path: str = "src/core") -> dict:
+    """`lane assign` with this `--worktrees-root`, spelled exactly as given (relative or not)."""
+    assert _run_raw([
+        "lane", "assign", "--id", lane_id, "--from", "lead", "--assignee", "dev", "--domain", "core",
+        "--base", base, "--target", _branch(root), "--path", path, "--worktrees-root", worktrees_root,
+    ], root) == 0
+    return lanes.load_lanes(Store(root))["lanes"][lane_id]
+
+
+def _set_lane_fields(root: Path, lane_id: str, **fields: object) -> None:
+    store = Store(root)
+    data = lanes.load_lanes(store)
+    data["lanes"][lane_id].update(fields)
+    lanes.save_lanes(store, data)
+
+
+def _old_relative_lane(root: Path, base: str, lane_id: str, *, gone: bool = True) -> tuple[str, Path]:
+    """A lane as an older release recorded it: the saved `worktree_path` is relative to the store root and the saved
+    `worktree_toplevel_canonical` is the real folder. Returns (the saved spelling, the real folder)."""
+    lane = _assign_worktree(root, base, lane_id)
+    real = Path(lane["worktree_path"])
+    saved = os.path.relpath(real, root)
+    _set_lane_fields(root, lane_id, worktree_path=saved)
+    if gone:
+        shutil.rmtree(real)
+    return saved, real
+
+
+def _ack(root: Path, lane_id: str, capsys: pytest.CaptureFixture) -> tuple[int, str, str]:
+    capsys.readouterr()
+    code = _run_raw(["lane", "abandon", "--id", lane_id, ACK], root)
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def test_assign_with_a_relative_root_stores_an_absolute_path_under_the_store(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, base = _repo(tmp_path)
+    monkeypatch.chdir(root)
+    lane = _assign_rooted(root, base, "abs1", ".worktrees")
+    assert Path(lane["worktree_path"]).is_absolute() and Path(lane["worktree_path"]).exists()
+    assert Path(lane["worktree_path"]).resolve().is_relative_to(root.resolve())
+    assert Path(lane["worktree_root"]).is_absolute()
+
+
+def test_an_absolute_worktrees_root_is_used_as_typed_even_with_dot_dot(tmp_path: Path) -> None:
+    """Only a relative root is resolved: an absolute one is not touched (it is checked, as before)."""
+    root, base = _repo(tmp_path)
+    (root / "sub").mkdir()
+    typed = root / "sub" / ".." / "wt"
+    lane = _assign_rooted(root, base, "abstyped", str(typed))
+    assert lane["worktree_path"].startswith(str(typed)) and Path(lane["worktree_path"]).exists()
+
+
+def test_assign_with_a_relative_root_from_a_subfolder_uses_the_store_root_and_leaves_nothing_behind(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, base = _repo(tmp_path)
+    (root / "sub").mkdir()
+    monkeypatch.chdir(root / "sub")
+    lane = _assign_rooted(root, base, "abs2", ".worktrees")
+    assert Path(lane["worktree_path"]).resolve().is_relative_to((root / ".worktrees").resolve())
+    assert not (root / "sub" / ".worktrees").exists()
+
+
+def test_assign_with_dot_dot_in_a_relative_root_stores_a_path_without_it_and_can_be_acknowledged(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    root, base = _repo(tmp_path)
+    monkeypatch.chdir(root)
+    lane = _assign_rooted(root, base, "abs3", "sub/../wt")
+    assert ".." not in Path(lane["worktree_path"]).parts and Path(lane["worktree_path"]).exists()
+    shutil.rmtree(lane["worktree_path"])
+    code, _out, err = _ack(root, "abs3", capsys)
+    assert code == 0, err
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a symbolic link in the middle of a relative root")
+def test_assign_with_dot_dot_after_a_link_follows_the_link_as_the_system_does_or_is_refused(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin: `a/../wt` with `a` a link means the link target's parent; assign never uses a different folder."""
+    root, base = _repo(tmp_path)
+    (root / "t" / "u").mkdir(parents=True)
+    os.symlink(root / "t" / "u", root / "a", target_is_directory=True)
+    monkeypatch.chdir(root)
+    expected = Path(os.path.realpath(root / "a" / ".." / "wt"))
+    code = _run_raw([
+        "lane", "assign", "--id", "viaa", "--from", "lead", "--assignee", "dev", "--domain", "core", "--base", base,
+        "--target", _branch(root), "--path", "src/core", "--worktrees-root", "a/../wt"], root)
+    if code == 0:
+        wt = Path(lanes.load_lanes(Store(root))["lanes"]["viaa"]["worktree_path"])
+        assert wt.parent == expected and wt.exists()
+    else:
+        assert code == 2
+
+
+@pytest.mark.parametrize("where", ["store-root", "another-folder"])
+def test_a_new_relative_root_lane_whose_checkout_is_gone_is_acknowledged_from_any_folder(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, where: str) -> None:
+    (tmp_path / "store").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    root, base = _repo(tmp_path / "store")
+    monkeypatch.chdir(root)
+    lane = _assign_rooted(root, base, "newrel", ".worktrees")
+    shutil.rmtree(lane["worktree_path"])
+    monkeypatch.chdir(root if where == "store-root" else tmp_path / "elsewhere")
+    code, out, err = _ack(root, "newrel", capsys)
+    assert code == 0, err
+    record = lanes.load_lanes(Store(root))["lanes"]["newrel"]
+    assert record["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED
+    assert record["worktree_path"] == lane["worktree_path"]
+
+
+def test_an_old_relative_record_with_its_checkout_gone_is_acknowledged_from_any_folder_and_keeps_its_spelling(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    (tmp_path / "store").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    root, base = _repo(tmp_path / "store")
+    saved, real = _old_relative_lane(root, base, "oldrel")
+    store = Store(root)
+    before = lanes.load_lanes(store)["lanes"]["oldrel"]
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    code, out, err = _ack(root, "oldrel", capsys)
+    assert code == 0, err
+    assert f"stored as {saved}" in out and str(real) in out           # the output names the folder it took
+    after = lanes.load_lanes(store)["lanes"]["oldrel"]
+    assert after["worktree_path"] == saved                              # the spelling is not rewritten
+    assert after["worktree_toplevel_canonical"] == before["worktree_toplevel_canonical"]
+    assert after["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED
+
+
+@pytest.mark.skipif(os.name == "nt", reason="needs a symbolic link in front of `..`")
+def test_a_relative_record_with_dot_dot_behind_a_link_is_refused_before_any_folder_is_looked_at(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """The maintainers' case: `a/../w/L` read as text names `<root>/w/L` (absent, its parent exists), but with `a` a
+    link to `<root>/t/u` the system reads `<root>/t/w/L`, which is the real checkout. Never settled."""
+    root, base = _repo(tmp_path)
+    (root / "w").mkdir()
+    (root / "t" / "u").mkdir(parents=True)
+    os.symlink(root / "t" / "u", root / "a", target_is_directory=True)
+    lane = _assign_rooted(root, base, "linkdd", "t/w")
+    real = Path(lane["worktree_path"])
+    _set_lane_fields(root, "linkdd", worktree_path=f"a/../w/{real.name}")
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "linkdd", capsys)
+    assert code == 2 and "contains '..'" in err
+    assert lanes.lanes_path(store).read_bytes() == before and real.exists()
+
+
+def test_a_relative_record_with_a_plain_dot_dot_is_refused_with_the_early_reason(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "plaindd")
+    spelled = saved.replace(os.sep, "/").replace(".worktrees/", "sub/../.worktrees/")
+    _set_lane_fields(root, "plaindd", worktree_path=spelled)
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "plaindd", capsys)
+    assert code == 2 and "contains '..'" in err and "plaindd" in err and repr(spelled) in err
+    assert "not absolute" not in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+def test_a_link_on_the_way_makes_an_absent_relative_path_unprovable_and_a_present_one_still_exists(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root, base = _repo(tmp_path)
+    (root / "t").mkdir()
+    lane = _assign_rooted(root, base, "viaj", "t/w")
+    real = Path(lane["worktree_path"])
+    _link_to(root / "a", root / "t")
+    _set_lane_fields(root, "viaj", worktree_path=f"a/w/{real.name}")
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+
+    code, _out, err = _ack(root, "viaj", capsys)                       # present through the link
+    assert code == 2 and "still exists" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+    shutil.rmtree(real)                                                 # absent: nothing says it is really gone
+    code, _out, err = _ack(root, "viaj", capsys)
+    assert code == 2 and "link" in err and "never remove or replace an existing link blindly" in err
+    assert "`worktree_path`" in err and "lanes.json" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+@pytest.mark.parametrize("recorded", ["missing", "empty", "not-text"])
+def test_an_old_relative_record_with_no_recorded_folder_is_refused_naming_what_is_known(
+        tmp_path: Path, capsys: pytest.CaptureFixture, recorded: str) -> None:
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "norec")
+    store = Store(root)
+    data = lanes.load_lanes(store)
+    if recorded == "missing":
+        data["lanes"]["norec"].pop("worktree_toplevel_canonical")
+    else:
+        data["lanes"]["norec"]["worktree_toplevel_canonical"] = "" if recorded == "empty" else 5
+    lanes.save_lanes(store, data)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "norec", capsys)
+    assert code == 2 and "norec" in err and repr(saved) in err and repr(str(real)) in err
+    assert "the lane records" in err and "moved repository" in err and "Nothing was changed" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+@pytest.mark.parametrize("present", [False, True], ids=["checkout-gone", "checkout-there"])
+def test_an_old_relative_record_from_a_moved_repository_is_never_settled_by_guesswork(
+        tmp_path: Path, capsys: pytest.CaptureFixture, present: bool) -> None:
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "moved", gone=not present)
+    other = tmp_path / "somewhere" / "else"                              # where the repository used to be
+    other.mkdir(parents=True)
+    _set_lane_fields(root, "moved", worktree_toplevel_canonical=lanes.canonical_host_path(other))
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "moved", capsys)
+    assert code == 2 and ("still exists" in err if present else "moved repository" in err)
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+def test_a_relative_record_whose_folder_is_there_is_refused_from_another_folder_too(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    (tmp_path / "store").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    root, base = _repo(tmp_path / "store")
+    saved, real = _old_relative_lane(root, base, "there", gone=False)
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    monkeypatch.chdir(tmp_path / "elsewhere")                           # here the saved spelling points at nothing
+    code, _out, err = _ack(root, "there", capsys)
+    assert code == 2 and "still exists" in err and repr(str(real)) in err
+    assert lanes.lanes_path(store).read_bytes() == before and real.exists()
+
+
+def test_a_supervisor_record_naming_the_folder_refuses_a_relative_record_from_another_folder(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """The discriminating fixture: `<elsewhere>/.worktrees` exists, so the stored spelling resolved from there is a
+    clean "no such folder"; only the in-use check on the anchored folder finds the launch."""
+    (tmp_path / "store").mkdir()
+    (tmp_path / "elsewhere" / ".worktrees").mkdir(parents=True)
+    root, base = _repo(tmp_path / "store")
+    saved, real = _old_relative_lane(root, base, "busyrel")
+    store = Store(root)
+    state = {"agents": {"claude-dev": {"phase": "launched", "cwd": str(real)}}}
+    (store.dir / "supervisor-state.json").write_text(json.dumps(state), encoding="utf-8")
+    before = lanes.lanes_path(store).read_bytes()
+    monkeypatch.chdir(tmp_path / "elsewhere")
+    code, _out, err = _ack(root, "busyrel", capsys)
+    assert code == 2 and cli._LANE_WORKTREE_BUSY in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+@pytest.mark.parametrize("where", ["store-root", "another-folder"])
+def test_the_lanes_own_launch_marker_with_a_relative_workspace_path_refuses_from_either_folder(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, where: str) -> None:
+    (tmp_path / "store").mkdir()
+    (tmp_path / "elsewhere").mkdir()
+    root, base = _repo(tmp_path / "store")
+    saved, real = _old_relative_lane(root, base, "markrel")
+    store = Store(root)
+    store.write_launch_request({"request_id": "lr-rel", "state": "launched", "lane_id": "markrel",
+                                "workspace_path": saved})
+    before = lanes.lanes_path(store).read_bytes()
+    monkeypatch.chdir(root if where == "store-root" else tmp_path / "elsewhere")
+    code, _out, err = _ack(root, "markrel", capsys)
+    assert code == 2 and "active or pending launch" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+@windows_only
+def test_a_windows_drive_relative_path_is_still_refused_as_not_absolute(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root, base = _repo(tmp_path)
+    _old_relative_lane(root, base, "driverel")
+    _set_lane_fields(root, "driverel", worktree_path="C:rel")
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "driverel", capsys)
+    assert code == 2 and "not absolute" in err and "'C:rel'" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+@pytest.mark.parametrize("kind", ["relative", "absolute"])
+def test_a_missing_parent_gets_the_restore_advice_and_nothing_is_changed(
+        tmp_path: Path, capsys: pytest.CaptureFixture, kind: str) -> None:
+    root, base = _repo(tmp_path)
+    _assign_worktree(root, base, "noparent")
+    gone = "no-such-parent/inner" if kind == "relative" else str(tmp_path / "no-such-parent" / "inner")
+    _set_lane_fields(root, "noparent", worktree_path=gone)
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "noparent", capsys)
+    assert code == 2 and "restore the verified intended ordinary folder" in err
+    assert "never remove or replace an existing link blindly" in err and "Nothing was changed" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+def test_a_parent_that_is_a_file_is_refused_with_the_generic_wording_not_blamed_on_a_link(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    root, base = _repo(tmp_path)
+    _assign_worktree(root, base, "filepar")
+    (root / "afile").write_text("x", encoding="utf-8")
+    _set_lane_fields(root, "filepar", worktree_path=str(root / "afile" / "inner"))
+    before = lanes.lanes_path(Store(root)).read_bytes()
+    code, _out, err = _ack(root, "filepar", capsys)
+    # Windows reaches the checked resolver; POSIX already fails at the first look (ENOTDIR). Neither blames a link.
+    assert code == 2 and ("could not prove this path absent" in err or "could not be established" in err)
+    assert "link" not in err
+    assert lanes.lanes_path(Store(root)).read_bytes() == before
+
+
+def test_the_acknowledge_help_says_how_a_relative_or_unprovable_path_is_handled() -> None:
+    parser_help = subprocess.run([sys.executable, "-m", "agenttalk", "lane", "abandon", "--help"],
+                                 capture_output=True, text=True,
+                                 env={**os.environ, "PYTHONPATH": str(Path(cli.__file__).parent.parent)}).stdout
+    flat = " ".join(parser_help.split())
+    for sentence in ("relative to the store root", "could not prove this path absent"):
+        assert flat.count(sentence) == 2, sentence      # in the description and in the option's own help
+
+
+@pytest.mark.parametrize("where", ["store-root", "another-folder"])
+def test_plain_abandon_and_gc_on_a_relative_record_behave_as_before(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, where: str) -> None:
+    """Only acknowledgement anchors the saved spelling. Master's newer launch guard refuses plain abandon when
+    that spelling cannot be checked from the current folder; it must not change the record in that case."""
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "plainrel")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(root if where == "store-root" else elsewhere)
+    before = lanes.load_lanes(Store(root))["lanes"]["plainrel"]
+    capsys.readouterr()
+    code = _run_raw(["lane", "abandon", "--id", "plainrel"], root)
+    record = lanes.load_lanes(Store(root))["lanes"]["plainrel"]
+    assert record["worktree_path"] == saved
+    if where == "store-root":
+        assert code == 0
+        assert record["worktree_state"] in {
+            lanes.STATUS_ABANDONED, lanes.STATUS_CLEANUP_PENDING, lanes.STATUS_CLEANUP_FAILED}
+    else:
+        assert code == 3 and record == before
+        assert "could not be established" in capsys.readouterr().err
+    stored_reason = record.get("worktree_cleanup_error")
+    capsys.readouterr()
+    assert _run_raw(["lane", "gc", "--json"], root) == 0
+    assert lanes.load_lanes(Store(root))["lanes"]["plainrel"].get("worktree_cleanup_error") == stored_reason
+
+
+def test_a_repeated_acknowledgement_and_gc_keep_the_acknowledged_state_and_do_not_prove_the_branch_unused(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "twicerel")
+    assert _ack(root, "twicerel", capsys)[0] == 0
+    assert _ack(root, "twicerel", capsys)[0] == 0
+    capsys.readouterr()
+    assert _run_raw(["lane", "gc", "--delete", "--json"], root) == 0
+    record = lanes.load_lanes(Store(root))["lanes"]["twicerel"]
+    assert record["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED
+    assert _branch_exists(root, "lane/twicerel")                       # the acknowledgement is not proof of anything
+
+
+# --- #668 round 2: a folder that appears, a saved token that is only history, an error text that is not a link --------
+
+
+@pytest.mark.parametrize("kind", ["relative", "absolute"])
+def test_a_folder_that_appears_after_the_first_look_is_refused_before_anything_is_saved(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, kind: str) -> None:
+    """R668-01. The folder is absent at the first look and there at the next: checked resolution succeeds for an
+    existing folder, so it proves nothing. The entry is looked at again just before the record is saved."""
+    root, base = _repo(tmp_path)
+    saved, real = _old_relative_lane(root, base, "appears")
+    if kind == "absolute":
+        _set_lane_fields(root, "appears", worktree_path=str(real))
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    real_look, looks = cli._lane_entry_present, []
+
+    def look(path):
+        looks.append(path)
+        answer = real_look(path)
+        if len(looks) == 1:
+            Path(path).mkdir(parents=True)                    # the folder comes back right after the first answer
+        return answer
+
+    monkeypatch.setattr(cli, "_lane_entry_present", look)
+    code, _out, err = _ack(root, "appears", capsys)
+    assert code == 2 and "still exists" in err and "Nothing was changed" in err
+    assert len(looks) >= 2 and lanes.lanes_path(store).read_bytes() == before and real.exists()
+
+
+def test_an_old_location_that_is_now_a_link_to_this_repository_is_still_a_moved_repository(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """R668-02. The saved canonical token names the folder the repository used to be in. Resolved again, it follows a
+    link made there since and reads as the current folder: the saved token is history, compared as it is."""
+    (tmp_path / "store").mkdir()
+    root, base = _repo(tmp_path / "store")
+    saved, real = _old_relative_lane(root, base, "oldlink")
+    old = tmp_path / "oldrepo"
+    token = lanes.canonical_host_path(old / ".worktrees" / real.name)    # as it was recorded, before the link existed
+    _set_lane_fields(root, "oldlink", worktree_toplevel_canonical=token)
+    _link_to(old, root)                                                   # and now `oldrepo` leads to this repository
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "oldlink", capsys)
+    assert code == 2 and "the lane records" in err and "moved repository" in err
+    assert lanes.lanes_path(store).read_bytes() == before
+
+
+def test_an_error_text_that_names_a_link_is_not_a_link_the_catch_all_stays_generic(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    """R668-03. Only the resolver's own reason establishes a link; a permission error whose file name happens to read
+    like that reason is just a permission error."""
+    root, base = _repo(tmp_path)
+    _old_relative_lane(root, base, "namedlink")
+    phrase = "a link or junction is on the way"
+
+    def denied(value):
+        raise PermissionError(errno.EACCES, "Access denied", phrase)
+
+    monkeypatch.setattr(lanes, "canonical_host_path_checked", denied)
+    store = Store(root)
+    before = lanes.lanes_path(store).read_bytes()
+    code, _out, err = _ack(root, "namedlink", capsys)
+    assert code == 2 and "could not prove this path absent" in err
+    assert "never remove or replace an existing link blindly" not in err and "lanes.json" not in err
+    assert lanes.lanes_path(store).read_bytes() == before
