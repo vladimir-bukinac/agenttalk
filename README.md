@@ -193,6 +193,8 @@ export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"
 "$AGENTTALK_PY" -m agenttalk install-skills
 ```
 
+**If Windows refuses a launcher:** security rules such as Device Guard can refuse to start the newly installed `agenttalk.exe` or `pip.exe` (exit 4551), even when Python itself is allowed to run. Run the modules through the Python that has agenttalk installed: `python -m agenttalk ...` or `python -m pip ...`. In the setup above, use `& $env:AGENTTALK_PY -m agenttalk ...` and `& $env:AGENTTALK_PY -m pip ...`. If Windows also refuses that Python, ask the person who manages the computer to check the policy.
+
 `AGENTTALK_PY` names the Python you just installed agenttalk into. Keep using that Python after you change folders.
 In the first terminal, type `$env:AGENTTALK_PY` in PowerShell or `echo "$AGENTTALK_PY"` in sh to see its full path.
 In each new terminal, set `AGENTTALK_PY` again to that same full path. Then put its command folder first on PATH,
