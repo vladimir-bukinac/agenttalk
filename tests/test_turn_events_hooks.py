@@ -712,17 +712,17 @@ def test_the_same_loop_scenario_behaves_identically_with_the_journal_on_or_off(t
     assert sink.kinds().count("dispatch_started") == sink.kinds().count("dispatch_ended") == off["spawns"]
 
 
-def _close_wait_problem(close_seconds, joins, took):
+def _close_wait_problem(close_seconds, joins, took, deadline_origin=0.0):
     """Why a close did not wait to one deadline for a stuck writer, or None when it did.
 
     ``joins`` records each wait: (start relative to the close, requested timeout, actual elapsed time). ``took`` is the
     whole close. The writer is still blocked, so requesting a wait is not enough: the waits must actually reach the
     deadline. Time before and between waits counts too, including a scheduler pause that consumes the remaining time.
 
-    The deadline is set between starting the close and starting its first wait. Its latest possible value is therefore
-    the first wait's start plus ``close_seconds``. Each request must fit what remains of that same absolute deadline;
-    adding requests would reject valid retries after early returns. Actual coverage must reach ``close_seconds`` from
-    the start of the close (with 50 ms of clock slack). A late timer can cover it even when its request was short.
+    ``deadline_origin`` is the clock value used to create the deadline, relative to close entry. Time before that
+    value does not use up the budget. Each request must fit what remains of that same absolute deadline; adding
+    requests would reject valid retries after early returns. Actual coverage must reach the deadline (with 50 ms of
+    clock slack). A late timer can cover it even when its request was short.
 
     Time outside the waits is checked separately: tolerate a scheduler pause up to a second, but catch a 1.5 s sleep
     before or after waiting, even when a timer also returns late. No timer of the test's own calibrates either rule.
@@ -732,12 +732,12 @@ def _close_wait_problem(close_seconds, joins, took):
     outside = took - sum(spent for _begin, _ask, spent in joins)
     if outside > 1.0:
         return f"close spent {outside:.3f} s outside its wait for the writer"
-    deadline = joins[0][0] + close_seconds
+    deadline = deadline_origin + close_seconds
     for begin, ask, _spent in joins:
         if ask is None or ask > max(0.0, deadline - begin) + 0.001:
             return f"close asked to wait {ask} s at {begin:.3f} s, more than its one deadline of {close_seconds} s"
     covered = joins[-1][0] + joins[-1][2]
-    if covered < close_seconds - 0.05:
+    if covered < deadline - 0.05:
         return (
             f"close stopped waiting at {covered:.3f} s, which does not cover its deadline of {close_seconds} s: "
             "the wait is shortened or missing"
@@ -794,6 +794,18 @@ def test_the_close_wait_accounting_tells_a_pause_from_a_wrong_wait(joins, took, 
     assert (found is None) if problem is None else (found is not None and problem in found)
 
 
+@pytest.mark.parametrize(
+    "spent, problem",
+    [
+        pytest.param(0.3, None, id="healthy-pause-before-the-deadline-exists"),
+        pytest.param(0.0001, "does not cover", id="early-return-after-pause-before-the-deadline-exists"),
+    ],
+)
+def test_the_close_wait_coverage_starts_when_the_deadline_exists(spent, problem):
+    found = _close_wait_problem(0.3, [(0.6, 0.3, spent)], 0.6 + spent, deadline_origin=0.6)
+    assert (found is None) if problem is None else (found is not None and problem in found)
+
+
 def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path):
     """The journal's writer is stuck for the whole run. The loop must still behave exactly as without a journal, never
     waiting for the writer, and closing the journal must take no longer than its own wait.
@@ -819,9 +831,20 @@ def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path)
                     self.gave_up.set()
             super().write(handle, data)
 
+    deadline_origins = []
+
+    class RecordingBudget(float):
+        def __radd__(self, origin):
+            # Capture the exact monotonic operand in the sink's deadline calculation, before close can shorten its
+            # deadline after an early join return. This also keeps a pause before creation outside the wait budget.
+            deadline_origins.append(origin - begin)
+            return origin + float(self)
+
     off = _scenario(tmp_path / "off", observe=False)
     files = Blocking()
-    sink = te.TurnEventSink(tmp_path / "journal", "beta", files=files, close_seconds=close_seconds, queue_max=4)
+    sink = te.TurnEventSink(
+        tmp_path / "journal", "beta", files=files, close_seconds=RecordingBudget(close_seconds), queue_max=4
+    )
     assert sink.start() is True
     calls = []  # how long each call into the journal held the loop up
     real_emit = sink.emit
@@ -866,7 +889,8 @@ def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path)
         begin = time.monotonic()
         sink.close()
         took = time.monotonic() - begin
-        problem = _close_wait_problem(close_seconds, joins, took)
+        assert len(deadline_origins) == 1, "close did not create exactly one deadline"
+        problem = _close_wait_problem(close_seconds, joins, took, deadline_origins[0])
         assert problem is None, f"{problem} (waits: {joins})"
     finally:
         files.unblock.set()
