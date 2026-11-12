@@ -720,9 +720,13 @@ def _close_wait_problem(close_seconds, joins, took, deadline_origin=0.0):
     deadline. Time before and between waits counts too, including a scheduler pause that consumes the remaining time.
 
     ``deadline_origin`` is the clock value used to create the deadline, relative to close entry. Time before that
-    value does not use up the budget. Each request must fit what remains of that same absolute deadline; adding
-    requests would reject valid retries after early returns. Actual coverage must reach the deadline (with 50 ms of
-    clock slack). A late timer can cover it even when its request was short.
+    value does not use up the budget. A request is computed before its join begins, so a pause between those steps
+    must not make the request look too large. Its clock sample cannot precede deadline creation or the recorded end
+    of the previous join: the sink cannot compute its next request until that join returns. Use that earlier observed
+    time as a lower bound for the sample, rather than assuming it is within 1 ms of join entry. Each request must fit
+    what remained then on the same absolute deadline; adding requests would reject valid retries after early returns.
+    Actual coverage must reach the deadline (with 50 ms of clock slack). A late timer can cover it even when its
+    request was short.
 
     Time outside the waits is checked separately: tolerate a scheduler pause up to a second, but catch a 1.5 s sleep
     before or after waiting, even when a timer also returns late. No timer of the test's own calibrates either rule.
@@ -733,9 +737,11 @@ def _close_wait_problem(close_seconds, joins, took, deadline_origin=0.0):
     if outside > 1.0:
         return f"close spent {outside:.3f} s outside its wait for the writer"
     deadline = deadline_origin + close_seconds
-    for begin, ask, _spent in joins:
-        if ask is None or ask > max(0.0, deadline - begin) + 0.001:
+    observed = deadline_origin
+    for begin, ask, spent in joins:
+        if ask is None or ask > max(0.0, deadline - observed) + 0.001:
             return f"close asked to wait {ask} s at {begin:.3f} s, more than its one deadline of {close_seconds} s"
+        observed = begin + spent
     covered = joins[-1][0] + joins[-1][2]
     if covered < deadline - 0.05:
         return (
@@ -751,6 +757,19 @@ def _close_wait_problem(close_seconds, joins, took, deadline_origin=0.0):
         pytest.param([(0.0, 0.3, 0.3)], 0.3, None, id="healthy"),
         pytest.param([(0.0, 0.3, 1.1)], 1.1, None, id="healthy-the-timer-returned-late"),
         pytest.param([(0.25, 0.049, 0.049)], 0.3, None, id="healthy-a-pause-ate-part-of-the-deadline"),
+        pytest.param([(0.25, 0.3, 0.3)], 0.55, None, id="healthy-a-pause-after-the-remaining-budget-read"),
+        pytest.param(
+            [(0.0, 0.1, 0.1), (0.35, 0.2, 0.2)],
+            0.55,
+            None,
+            id="healthy-a-pause-after-the-second-remaining-budget-read",
+        ),
+        pytest.param(
+            [(0.0, 0.05, 0.05), (0.05, 0.3, 0.3)],
+            0.35,
+            "more than its one deadline",
+            id="second-full-request-after-a-short-wait",
+        ),
         pytest.param([(0.0, 0.3, 0.3)], 0.55, None, id="healthy-a-pause-after-the-wait"),
         pytest.param([(0.0, 0.3, 0.0001)], 0.0001, "does not cover", id="wait-returned-immediately"),
         pytest.param(
