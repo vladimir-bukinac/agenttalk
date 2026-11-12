@@ -120,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Windows launcher refusals (#716).** The README explains how to run agenttalk and pip through the environment’s Python when Windows refuses their launchers, and when to ask the computer’s manager to check the policy.
+
 - **The README first install keeps agenttalk in its own Python environment (#716).** Both platform recipes use that environment after changing folders, Quick setup links to the same recipe, and the README and lead setup brief name the Debian/Ubuntu venv package.
 
 - **`agenttalk status` no longer reads as if anyone can safely run `drain` for another seat (#726).**

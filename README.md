@@ -164,7 +164,7 @@ assistant that talks to you.
 
 New here? Give your assistant [`docs/LEAD-SETUP-BRIEF.md`](https://github.com/zoolok17/agenttalk/blob/v0.104.0/docs/LEAD-SETUP-BRIEF.md) and ask it to set up
 agenttalk: it sets up a first team without the supervisor and tells you what only a person can decide.
-Once agenttalk is installed, the brief and the other guides for leads are on your machine too: `agenttalk doctor`
+Once agenttalk is installed, the brief and the other guides for leads are on your machine too: `& $env:AGENTTALK_PY -m agenttalk doctor`
 prints the installed `module path`, and the brief is `docs/LEAD-SETUP-BRIEF.md` under it.
 To do it yourself, follow the steps below.
 
@@ -192,6 +192,8 @@ export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"
 "$AGENTTALK_PY" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
 "$AGENTTALK_PY" -m agenttalk install-skills
 ```
+
+**If Windows refuses a launcher:** security rules such as Device Guard can refuse to start the newly installed `agenttalk.exe` or `pip.exe` (exit 4551), even when Python itself is allowed to run. Run the modules through the Python that has agenttalk installed: `python -m agenttalk ...` or `python -m pip ...`. In the setup above, use `& $env:AGENTTALK_PY -m agenttalk ...` and `& $env:AGENTTALK_PY -m pip ...`. If Windows also refuses that Python, ask the person who manages the computer to check the policy.
 
 `AGENTTALK_PY` names the Python you just installed agenttalk into. Keep using that Python after you change folders.
 In each new terminal, set `AGENTTALK_PY` again to the same full Python path before starting an assistant. The steps

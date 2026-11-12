@@ -165,3 +165,17 @@ def test_quick_start_uses_the_environment_python(shell, create, capture, invoke)
     assert commands[3] == invoke + " -m agenttalk install-skills"
     assert "& $env:AGENTTALK_PY -m agenttalk init --here --agents claude-dev,codex-rev" in started
     assert "& $env:AGENTTALK_PY -m agenttalk codex-config --enable" in started
+
+
+@pytest.mark.parametrize("path", [README, REPO / "docs" / "LEAD-SETUP-BRIEF.md"], ids=["readme", "brief"])
+def test_install_guides_name_the_ubuntu_venv_package(path):
+    text = path.read_text(encoding="utf-8")
+    assert "`sudo apt install python3-venv`" in text
+    assert "`python3.14-venv`" in text
+
+
+def test_quick_start_doctor_uses_the_environment_python():
+    started = README.read_text(encoding="utf-8").split("## Get started\n", 1)[1].split("\n## ", 1)[0]
+    introduction = started.split("Windows (PowerShell):", 1)[0]
+    assert "`& $env:AGENTTALK_PY -m agenttalk doctor`" in introduction
+    assert "`agenttalk doctor`" not in introduction
