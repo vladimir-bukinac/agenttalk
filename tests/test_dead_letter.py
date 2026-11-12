@@ -3472,10 +3472,76 @@ def test_728_the_live_copy_refusal_escapes_the_request_id(tmp_path, monkeypatch,
     assert payload.read_bytes() == dead_before
 
 
+@pytest.mark.parametrize("control", ["\n", "\u2028"], ids=["lf", "separator"])
+def test_728_the_store_live_copy_refusal_keeps_the_raw_request_id(tmp_path, monkeypatch, control):
+    s = _requeue_store(tmp_path, monkeypatch, False)
+    rid = f"tk-c{control}FORGED"
+    original = _send(s, "dead", kind="task", meta={"request_id": rid})
+    payload = _dead_payload(s, original)
+    _send(s, "live copy", kind="task", meta={"request_id": rid})
+    before = {path.name: path.read_bytes() for path in s.messages_dir.glob("*.json")}
+    dead_before = payload.read_bytes()
+
+    with pytest.raises(ValueError) as refused:
+        s.send(
+            sender="lead",
+            recipient="beta",
+            kind="task",
+            body="retry",
+            meta={"request_id": rid},
+            _refuse_live_request=True,
+        )
+
+    assert str(refused.value) == (
+        f"beta already has a live copy of request {rid}; nothing was published. "
+        "Use the existing copy, or resend by hand with a new request id."
+    )
+    assert control in str(refused.value) and len(str(refused.value).splitlines()) == 2
+    assert {path.name: path.read_bytes() for path in s.messages_dir.glob("*.json")} == before
+    assert payload.read_bytes() == dead_before
+
+
+@pytest.mark.parametrize("control,escaped", [("\n", "\\x0a"), ("\u2028", "\\u2028")], ids=["lf", "separator"])
+def test_728_the_store_live_copy_refusal_is_escaped_by_the_cli(tmp_path, monkeypatch, capsys, control, escaped):
+    s = _requeue_store(tmp_path, monkeypatch, False)
+    rid = f"tk-c{control}FORGED"
+    original = _send(s, "dead", kind="task", meta={"request_id": rid})
+    payload = _dead_payload(s, original)
+    dead_before = payload.read_bytes()
+    real_send = Store.send
+    copies = []
+
+    def send_with_competing_copy(self, **kwargs):
+        # A copy arriving after the CLI preflight reaches the store's own refusal.
+        if kwargs.get("_refuse_live_request"):
+            copies.append(
+                real_send(
+                    self, sender="lead", recipient="beta", kind="task", body="competing copy", meta={"request_id": rid}
+                )
+            )
+        return real_send(self, **kwargs)
+
+    monkeypatch.setattr(Store, "send", send_with_competing_copy)
+    capsys.readouterr()
+
+    assert _requeue(s, original) == 2
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        f"agenttalk dead-letter requeue: beta already has a live copy of request tk-c{escaped}FORGED; "
+        "nothing was published. Use the existing copy, or resend by hand with a new request id.\n"
+    )
+    assert control not in captured.err.removesuffix("\n") and len(captured.err.splitlines()) == 1
+    assert len(copies) == 1 and [m.id for m in s.valid_messages()] == [copies[0].id]
+    assert payload.read_bytes() == dead_before
+
+
 def test_728_the_requeued_line_never_holds_a_line_separator(tmp_path, monkeypatch, capsys):
     s = _requeue_store(tmp_path, monkeypatch, False)
     original = _send(s, "the work", kind="review-request", meta={"request_id": "tk-c"})
     _dead_payload(s, original)
+    # Windows forbids colons in file names; this test needs only U+2028, so it runs everywhere.
     odd = f"{original.id}\u2028FORGED run do-evil"
     for sidecar in s.dead_letter_dir.joinpath("beta").glob(f"{original.id}.*"):
         sidecar.rename(sidecar.with_name(sidecar.name.replace(original.id, odd, 1)))
