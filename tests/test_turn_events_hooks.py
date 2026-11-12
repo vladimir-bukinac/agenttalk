@@ -712,6 +712,63 @@ def test_the_same_loop_scenario_behaves_identically_with_the_journal_on_or_off(t
     assert sink.kinds().count("dispatch_started") == sink.kinds().count("dispatch_ended") == off["spawns"]
 
 
+def _close_wait_problem(close_seconds, joins, took):
+    """Why a close was not the wait of exactly one deadline for a stuck writer, or None when it was.
+
+    ``joins`` is what the close did while waiting for the writer thread, one entry per wait: (when it began, counted
+    from the start of the close; how long it asked to wait; how long it really waited). ``took`` is the whole close.
+
+    Nothing here is a fixed number of seconds for the whole close, and nothing is measured against a timer of the test's
+    own, so a pause by the scheduler cannot fail a correct close or hide a wrong one:
+    - The deadline is set after the close begins, and each wait asks for what is left of it. So what the waits ask for
+      can never be more than one deadline, and what they ask for plus the time that passed before the first one always
+      covers the whole deadline. A pause before the wait eats into what it asks for, never into that sum. A wait that is
+      missing, switched off or shortened leaves the sum short; a longer or a second wait makes the request too big.
+      (A little slack for the resolution of the clock.)
+    - The time of the close outside its waits is the close's own work: microseconds. A pause by the scheduler is
+      tolerated up to a second; a sleep of 1.5 s after (or before) the wait is not. A wait that returns late is not
+      counted here, since it is the timer, not the close.
+    """
+    if not joins:
+        return "close did not wait for the writer at all"
+    asked = sum(float("inf") if ask is None else ask for _begin, ask, _spent in joins)
+    if asked > close_seconds + 0.001:
+        return f"close asked to wait {asked:.3f} s in all, more than its one deadline of {close_seconds} s"
+    if joins[0][0] + asked < close_seconds - 0.05:
+        return (
+            f"close began waiting {joins[0][0]:.3f} s in and asked for {asked:.3f} s, which does not cover its "
+            f"deadline of {close_seconds} s: the wait is shortened or missing"
+        )
+    outside = took - sum(spent for _begin, _ask, spent in joins)
+    if outside > 1.0:
+        return f"close spent {outside:.3f} s outside its wait for the writer"
+    return None
+
+
+@pytest.mark.parametrize(
+    "joins, took, problem",
+    [
+        pytest.param([(0.0, 0.3, 0.3)], 0.3, None, id="healthy"),
+        pytest.param([(0.0, 0.3, 1.1)], 1.1, None, id="healthy-the-timer-returned-late"),
+        pytest.param([(0.25, 0.049, 0.049)], 0.3, None, id="healthy-a-pause-ate-part-of-the-deadline"),
+        pytest.param([(0.0, 0.3, 0.3)], 0.55, None, id="healthy-a-pause-after-the-wait"),
+        pytest.param([(0.0, 0.0, 0.0)], 0.0, "does not cover", id="wait-switched-off"),
+        pytest.param([(0.0, 0.1, 0.1)], 0.1, "does not cover", id="wait-shortened"),
+        pytest.param([], 0.3, "did not wait", id="wait-missing"),
+        pytest.param([(0.0, 1.8, 1.8)], 1.8, "more than its one deadline", id="deadline-1.5-s-too-long"),
+        pytest.param([(0.0, 0.3, 0.3), (0.3, 0.3, 0.3)], 0.6, "more than its one deadline", id="wait-restarted"),
+        pytest.param([(0.0, None, 0.3)], 0.3, "more than its one deadline", id="wait-without-a-limit"),
+        pytest.param([(0.0, 0.3, 0.3)], 1.8, "outside its wait", id="sleep-1.5-s-after-the-wait"),
+        pytest.param([(1.5, 0.3, 0.3)], 2.1, "outside its wait", id="sleep-1.5-s-before-the-wait"),
+        # codex-rev's control: the extra 1.5 s must stay visible when a timer returns late, as that timer is not counted
+        pytest.param([(0.0, 0.3, 1.1)], 2.6, "outside its wait", id="sleep-1.5-s-after-a-wait-that-returned-late"),
+    ],
+)
+def test_the_close_wait_accounting_tells_a_pause_from_a_wrong_wait(joins, took, problem):
+    found = _close_wait_problem(0.3, joins, took)
+    assert (found is None) if problem is None else (found is not None and problem in found)
+
+
 def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path):
     """The journal's writer is stuck for the whole run. The loop must still behave exactly as without a journal, never
     waiting for the writer, and closing the journal must take no longer than its own wait.
@@ -766,22 +823,26 @@ def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path)
         assert sum(calls) < close_seconds, f"the loop waited {sum(calls):.3f} s in {len(calls)} calls to the journal"
         assert not files.gave_up.is_set(), "the writer freed itself during the run, so the run proved nothing"
 
-        # Closing waits for the stuck writer for its own deadline and no longer. The length of the wait it asked for is
-        # checked exactly (a longer, a second or a missing wait), and the time it took against a plain wait of the same
-        # length on this machine now, with a second of room for the scheduler: a timer wait overshoots under load, so
-        # the room is measured from what a timer does here, never a fixed number of seconds for the whole turn.
-        waits = []
+        # Closing waits for the stuck writer for its own deadline and no longer. What the wait asked for and when it
+        # began are recorded (the waits are `join`s on the writer's thread), and `_close_wait_problem` judges them
+        # without a fixed time for the whole close or a timer of this test's own, so a pause by the scheduler neither
+        # fails a correct close nor hides a wrong one.
+        joins = []
         real_join = sink._thread.join
-        sink._thread.join = lambda timeout=None: (waits.append(timeout), real_join(timeout))[1]
-        begin = time.monotonic()
-        threading.Event().wait(close_seconds)
-        plain_wait = time.monotonic() - begin
+
+        def recording_join(timeout=None):
+            began = time.monotonic()
+            try:
+                return real_join(timeout)
+            finally:
+                joins.append((began - begin, timeout, time.monotonic() - began))
+
+        sink._thread.join = recording_join
         begin = time.monotonic()
         sink.close()
         took = time.monotonic() - begin
-        assert waits and None not in waits
-        assert close_seconds / 3 <= sum(waits) <= close_seconds, f"close asked to wait {waits}"
-        assert close_seconds * 0.5 <= took < max(plain_wait, close_seconds) + 1.0, f"close took {took:.3f} s"
+        problem = _close_wait_problem(close_seconds, joins, took)
+        assert problem is None, f"{problem} (waits: {joins})"
     finally:
         files.unblock.set()
 
