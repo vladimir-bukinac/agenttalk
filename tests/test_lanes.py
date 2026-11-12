@@ -2609,6 +2609,74 @@ def test_plain_abandon_says_which_running_launch_kept_the_worktree(
         assert lanes.load_lanes(Store(root)) == before
 
 
+def _lane_whose_own_record_names_another_lane(tmp_path: Path):
+    """A valid lane under the registry key "keyid" whose record says it is "otherid": launch requests are
+    bound to a lane by its registry key, never by the id written inside the record."""
+    root, base = _repo(tmp_path)
+    lane = _assign_worktree(root, base, "keyid")
+    wt = Path(lane["worktree_path"])
+    store = Store(root)
+    data = lanes.load_lanes(store)
+    data["lanes"]["keyid"]["lane_id"] = "otherid"
+    lanes.save_lanes(store, data)
+    # The removal's own safety check derives the lane branch from the id inside the record, so give it what it
+    # looks for: a clean checkout, detached at the tip of the branch lane/otherid. Without this the checkout is kept
+    # for an unrelated reason (branch mismatch) and the launch check under test would not be what decides.
+    _git(root, "branch", "lane/otherid", "lane/keyid")
+    _git(wt, "checkout", "-q", "--detach")
+    return root, store, wt
+
+
+def test_plain_abandon_refuses_a_running_launch_bound_to_the_registry_key(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """The running-launch check before anything is changed used to look for the id inside the record, so a
+    launched request for this lane was missed: exit 0, the lane retired and its clean checkout removed."""
+    root, store, wt = _lane_whose_own_record_names_another_lane(tmp_path)
+    store.write_launch_request({"request_id": "lr-key", "state": "launched", "lane_id": "keyid"})
+    before = lanes.load_lanes(store)
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "abandon", "--id", "keyid"], root) == 3
+    err = capsys.readouterr().err
+    assert "active or pending launch" in err and "'lr-key'" in err and "nothing was changed" in err
+    assert wt.exists() and lanes.load_lanes(store) == before
+
+
+def test_plain_abandon_keeps_the_checkout_for_a_queued_launch_bound_to_the_registry_key(
+        tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+    """The check just before `git worktree remove` used to miss a queued request bound to the key and removed the
+    checkout. It is kept now, with the reason, exactly as for a lane whose record names itself."""
+    root, store, wt = _lane_whose_own_record_names_another_lane(tmp_path)
+    store.write_launch_request({"request_id": "lr-key", "state": "queued", "lane_id": "keyid"})
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "abandon", "--id", "keyid"], root) == 0
+    err = capsys.readouterr().err
+    saved = lanes.load_lanes(store)["lanes"]["keyid"]
+    assert wt.exists()
+    assert saved["status"] == lanes.STATUS_ABANDONED and saved["worktree_state"] == lanes.STATUS_CLEANUP_PENDING
+    assert "active or pending launch" in err and "'lr-key'" in err and "was not removed" in err
+    assert saved["lane_id"] == "otherid"  # the saved record is not rewritten
+
+
+@pytest.mark.parametrize("state", ["launched", "queued"])
+def test_plain_abandon_is_not_blocked_by_a_launch_bound_to_the_id_inside_the_record(
+        tmp_path: Path, capsys: pytest.CaptureFixture, state: str) -> None:
+    """A request bound to another lane ("otherid", only named inside this record) is not this lane's launch: the
+    running check (launched) and the check before removal (queued) used to refuse or keep the checkout for it."""
+    root, store, wt = _lane_whose_own_record_names_another_lane(tmp_path)
+    store.write_launch_request({"request_id": "lr-other", "state": state, "lane_id": "otherid"})
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "abandon", "--id", "keyid"], root) == 0
+    captured = capsys.readouterr()
+    saved = lanes.load_lanes(store)["lanes"]["keyid"]
+    assert not wt.exists()
+    assert saved["status"] == lanes.STATUS_ABANDONED and saved["worktree_state"] == lanes.STATUS_ABANDONED
+    assert "lr-other" not in captured.err
+    assert saved["lane_id"] == "otherid"  # the saved record is not rewritten
+
+
 def test_plain_abandon_prints_no_warning_when_the_worktree_was_removed(
         tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     root, base = _repo(tmp_path)

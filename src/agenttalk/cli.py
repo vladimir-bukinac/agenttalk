@@ -6756,7 +6756,9 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                     )
                     return 2
                 if not acknowledge:
-                    running = _lane_worktree_launch_use(store, lane, queued_ok=True)
+                    # Launches are matched by the registry key just validated, never by a `lane_id` written inside
+                    # the record (which can name another lane); the saved record itself is not changed.
+                    running = _lane_worktree_launch_use(store, {**lane, "lane_id": lane_id}, queued_ok=True)
                     if running is not None:
                         sys.stderr.write(f"agenttalk lane abandon: {running}; nothing was changed.\n")
                         return 3
@@ -6834,7 +6836,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         "proven unused")
                 elif lane.get("worktree_path"):
                     branch_delete_block_reason = "worktree cleanup did not complete"
-                    in_use = _lane_worktree_launch_use(store, lane)
+                    in_use = _lane_worktree_launch_use(store, {**lane, "lane_id": lane_id})
                     if in_use is None:
                         try:
                             _verify_lane_worktree(store, lane)
