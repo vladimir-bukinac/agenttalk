@@ -537,9 +537,13 @@ def _end_all(pidfile: Path) -> None:
     """Stop every process the stand-in started (see `_end_one`): first by asking them to leave by themselves (the
     stop file), then, for one that did not, through a reference that is bound to it. A helper that cannot be proven or
     stopped does not keep the later helpers from being cleaned up: every one is looked at, and the failures are raised
-    after the last (the only one, as it was; several together in one message)."""
-    _ask_to_stop(pidfile)
+    after the last (the only one, as it was; several together in one message). The stop file is only the first, gentle
+    step: if writing it fails, that error is kept and reported with the rest, and the bound clean-up still runs."""
     failures = []
+    try:
+        _ask_to_stop(pidfile)
+    except Exception as exc:  # noqa: BLE001 - reported below, after the bound clean-up of every helper
+        failures.append(exc)
     for pid, recorded in _helpers(pidfile):
         try:
             _end_one(pid, recorded)
@@ -732,7 +736,7 @@ def test_end_all_ends_a_real_helper_without_signalling_it_by_number_or_reference
     """A real helper (the stand-in's survivor) leaves when the stop file appears: nothing is sent to it."""
     pidfile = tmp_path / "pids.txt"
     subprocess.run(_argv(model, "survivor-default-null", pidfile), capture_output=True, text=True, timeout=60)
-    (pid, _identity_then), = _helpers(pidfile)
+    ((pid, _identity_then),) = _helpers(pidfile)
     assert _state(pid) == "alive"  # it is really running before the clean-up
     sent = []
     real_kill = os.kill  # a look (signal 0) is how the probe sees a process; only a real stop is recorded
@@ -742,6 +746,61 @@ def test_end_all_ends_a_real_helper_without_signalling_it_by_number_or_reference
     _end_all(pidfile)
 
     assert _state(pid) == "ended" and sent == []
+
+
+def _stop_file_write_fails(monkeypatch, pidfile, code=errno.ENOSPC):
+    """Make ONLY the write of the stop file fail, as a full disk or a permission error would."""
+    real_write = Path.write_text
+    stop_file = str(pidfile) + ".stop"
+
+    def write_text(path, *args, **kwargs):
+        if str(path) == stop_file:
+            raise OSError(code, "injected stop-file write failure")
+        return real_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", write_text)
+
+
+def test_end_all_still_stops_and_closes_a_bound_helper_when_the_stop_file_cannot_be_written(tmp_path, monkeypatch):
+    """The stop file is a courtesy: if writing it fails, the bound clean-up of every helper still runs (#749 review) and
+    the write error is reported afterwards, neither swallowed nor replaced by a stop by number."""
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _stop_file_write_fails(monkeypatch, pidfile)
+    stopped, closed = [], []
+
+    class Reference:
+        def identity(self):
+            return SAME
+
+        def terminate(self):
+            stopped.append(4242)
+
+        def close(self):
+            closed.append(4242)
+
+    monkeypatch.setattr(sys.modules[__name__], "_open_reference", lambda pid: Reference())
+    monkeypatch.setattr(sys.modules[__name__], "_state", lambda pid: "ended" if stopped else "alive")
+    by_number = _stops_by_number(monkeypatch)
+
+    with pytest.raises(OSError, match="injected stop-file write failure"):
+        _end_all(pidfile)
+
+    assert stopped == [4242] and closed == [4242] and by_number == []
+
+
+def test_end_all_reports_a_stop_file_error_together_with_what_else_it_could_not_clean_up(tmp_path, monkeypatch):
+    pidfile = _pidfile_for(tmp_path, 4242)
+    _stop_file_write_fails(monkeypatch, pidfile)
+    monkeypatch.setattr(sys.modules[__name__], "_state", lambda pid: "alive")
+    monkeypatch.setattr(sys.modules[__name__], "_open_reference", lambda pid: _ReadOnlyReference(pid))
+    monkeypatch.setattr(sys.modules[__name__], "_process_identity", lambda pid: SAME)
+    by_number = _stops_by_number(monkeypatch)
+
+    with pytest.raises(AssertionError) as raised:
+        _end_all(pidfile)
+
+    assert "injected stop-file write failure" in str(raised.value) and "cannot be stopped safely" in str(raised.value)
+    assert by_number == []
 
 
 def test_end_all_refuses_to_stop_a_helper_it_cannot_bind_a_stop_to(tmp_path, monkeypatch):
