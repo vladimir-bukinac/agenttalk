@@ -15119,7 +15119,7 @@ def _close_dead_letter_notice_threads(
     """
     if resolution is None:
         sys.stderr.write(
-            f"agenttalk dead-letter: no recorded resolution for {agent}/{msg_id}; notices left open.\n"
+            f"agenttalk dead-letter: no recorded resolution for {agent}/{pc.meta_text(msg_id)}; notices left open.\n"
         )
         return 0
     actor = resolution["actor"]
@@ -15147,7 +15147,7 @@ def _close_dead_letter_notice_threads(
                 recipient=agent,
                 kind="message",
                 subject=f"dead-letter resolved ({msg_id})",
-                body=f"Dead-letter {agent}/{msg_id} was resolved by {actor}: {reason}",
+                body=f"Dead-letter {agent}/{pc.meta_text(msg_id)} was resolved by {actor}: {reason}",
                 meta=meta,
             )
             closed += 1
@@ -15177,13 +15177,13 @@ def _cmd_dead_letter_resolve(store: Store, args: argparse.Namespace) -> int:
         return 2
     if not _is_listed_dead_letter(store, args.agent, args.id):
         sys.stderr.write(f"agenttalk dead-letter resolve: no dead-letter "
-                         f"{args.agent}/{args.id}.\n")
+                         f"{args.agent}/{pc.meta_text(args.id)}.\n")
         return 2
     entry = next((m for m in store.list_dead_letters(args.agent)
                   if m.get("message_id") == args.id), None)
     if entry is None:
         sys.stderr.write(f"agenttalk dead-letter resolve: no dead-letter "
-                         f"{args.agent}/{args.id}.\n")
+                         f"{args.agent}/{pc.meta_text(args.id)}.\n")
         return 2
     src_hash = A.dead_letter_entry_source_hash(entry)
     recorded = _recorded_dead_letter_resolution(store, agent=args.agent, msg_id=args.id)
@@ -15199,7 +15199,7 @@ def _cmd_dead_letter_resolve(store: Store, args: argparse.Namespace) -> int:
         _close_dead_letter_notice_threads(
             store, agent=args.agent, msg_id=args.id, resolution=recorded,
         )
-        print(f"dead-letter {args.agent}/{args.id} already resolved")
+        print(f"dead-letter {args.agent}/{pc.meta_text(args.id)} already resolved")
         return 0
     event_id = "att-" + uuid.uuid4().hex[:12]
     A.append_disposition(store, {
@@ -15227,7 +15227,7 @@ def _cmd_dead_letter_resolve(store: Store, args: argparse.Namespace) -> int:
         resolution=_recorded_dead_letter_resolution(store, agent=args.agent, msg_id=args.id),
     )
     extra = f"; closed {closed} related escalation thread(s)" if closed else ""
-    print(f"resolved dead-letter {args.agent}/{args.id} by {actor} "
+    print(f"resolved dead-letter {args.agent}/{pc.meta_text(args.id)} by {actor} "
           f"(payload preserved; requeue with --force-resolved --reason to reopen{extra})")
     return 0
 
@@ -15393,7 +15393,7 @@ def cmd_dead_letter(args: argparse.Namespace) -> int:
         raw = store.read_dead_letter_payload(args.agent, args.id)
         if meta is None and raw is None:
             sys.stderr.write(
-                f"agenttalk dead-letter show: no dead-letter {args.agent}/{args.id}.\n")
+                f"agenttalk dead-letter show: no dead-letter {args.agent}/{pc.meta_text(args.id)}.\n")
             return 2
         body = ""
         if raw is not None:
@@ -15438,12 +15438,12 @@ def cmd_dead_letter(args: argparse.Namespace) -> int:
             return 2
         if not _is_listed_dead_letter(store, args.agent, args.id):   # F5 traversal/typo guard
             sys.stderr.write(
-                f"agenttalk dead-letter requeue: no dead-letter {args.agent}/{args.id}.\n")
+                f"agenttalk dead-letter requeue: no dead-letter {args.agent}/{pc.meta_text(args.id)}.\n")
             return 2
         raw = store.read_dead_letter_payload(args.agent, args.id)
         if raw is None:
             sys.stderr.write(
-                f"agenttalk dead-letter requeue: no dead-letter {args.agent}/{args.id}.\n")
+                f"agenttalk dead-letter requeue: no dead-letter {args.agent}/{pc.meta_text(args.id)}.\n")
             return 2
         # A RESOLVED dead-letter requires an explicit --force-resolved + a non-empty --reason
         # to requeue. We VALIDATE + resolve authority here, but BUILD the reopen audit event
@@ -15474,7 +15474,7 @@ def cmd_dead_letter(args: argparse.Namespace) -> int:
                           if m.get("message_id") == args.id), None)
             if entry is None:
                 sys.stderr.write(
-                    f"agenttalk dead-letter requeue: no dead-letter {args.agent}/{args.id}.\n")
+                    f"agenttalk dead-letter requeue: no dead-letter {args.agent}/{pc.meta_text(args.id)}.\n")
                 return 2
             reopen_event = {
                 "schema_version": A.SCHEMA_VERSION, "event_id": "att-" + uuid.uuid4().hex[:12],
@@ -15526,7 +15526,7 @@ def cmd_dead_letter(args: argparse.Namespace) -> int:
                 f"The copy {retry} cannot be retried as it is ({problem}); it needs attention. " if problem else ""
             )
             sys.stderr.write(
-                f"agenttalk dead-letter requeue: {e} "
+                f"agenttalk dead-letter requeue: {pc.line(str(e))} "
                 + (
                     "Retry that copy instead: "
                     + pc.cmd("agenttalk dead-letter requeue --agent {a} --id {i}", a=args.agent, i=retry)
@@ -15538,7 +15538,7 @@ def cmd_dead_letter(args: argparse.Namespace) -> int:
             )
             return 2
         except (ValueError, FileNotFoundError) as e:
-            sys.stderr.write(f"agenttalk dead-letter requeue: {e}\n")
+            sys.stderr.write(f"agenttalk dead-letter requeue: {pc.line(str(e))}\n")
             return 2
         # Send SUCCEEDED - NOW record the reopen audit (ordering closes fable-max #6).
         if reopen_event is not None:
@@ -15547,10 +15547,11 @@ def cmd_dead_letter(args: argparse.Namespace) -> int:
         if getattr(store, "requeue_mark_failure", None):
             sys.stderr.write(
                 f"agenttalk dead-letter requeue: warning: the copy was published, but its record could not be marked "
-                f"published ({store.requeue_mark_failure}); it stays claimed. Do not requeue {args.id} again "
+                f"published ({pc.line(str(store.requeue_mark_failure))}); it stays claimed. "
+                f"Do not requeue {pc.meta_text(args.id)} again "
                 f"while the copy is in the store.\n"
             )
-        print(f"requeued dead-letter {args.id} as fresh message {new.id} "
+        print(f"requeued dead-letter {pc.meta_text(args.id)} as fresh message {new.id} "
               "(new id, own fresh attempt count; original evidence preserved in the sink)")
         return 0
     sys.stderr.write("agenttalk dead-letter: expected list, show, requeue, resolve, or purge.\n")
@@ -15711,7 +15712,7 @@ def cmd_reply_refusal(args: argparse.Namespace) -> int:
         record = reply_refusals.read_reply_refusal(store, args.agent, args.id)
         if record is None:
             sys.stderr.write(
-                f"agenttalk reply-refusal show: no reply-refusal {args.agent}/{args.id}.\n")
+                f"agenttalk reply-refusal show: no reply-refusal {args.agent}/{pc.meta_text(args.id)}.\n")
             return 2
         resolved = reply_refusals.is_resolved(store, args.agent, args.id)
         out = {"record": record, "resolved": resolved}
@@ -15749,7 +15750,7 @@ def cmd_reply_refusal(args: argparse.Namespace) -> int:
         except FileNotFoundError as e:
             sys.stderr.write(f"agenttalk reply-refusal resolve: {e}\n")
             return 2
-        print(f"resolved reply-refusal {args.agent}/{args.id}")
+        print(f"resolved reply-refusal {args.agent}/{pc.meta_text(args.id)}")
         return 0
     sys.stderr.write("agenttalk reply-refusal: expected list, show, or resolve.\n")
     return 2
