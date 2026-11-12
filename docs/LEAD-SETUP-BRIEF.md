@@ -12,8 +12,9 @@ that cannot be undone.
 
 **Written for:** the AI assistant (Claude Code or Codex) that a person has told to
 "read this brief and set up agenttalk".
-**Covers:** agenttalk **v0.101.1**, a released version, on Windows, Linux and macOS. A newer release,
-v0.104.0, exists; the last section lists what changed after v0.101.1.
+**Installs:** agenttalk **v0.104.0**, the same released version as the README, on Windows, Linux and macOS.
+**Earlier checks:** the commands were originally checked against v0.101.1. The last section records those runs
+and the later changes; it does not claim a new run on v0.104.0.
 **Leaves out on purpose:** the supervisor (it needs Windows today) and the managed
 model gateway.
 **How it relates to the lead guide:** this brief is for the first setup of a team, without the
@@ -40,14 +41,10 @@ item is explained in the step named after it.
 ## How to use this brief
 
 - Do the steps in order. Most steps say how to check that they worked.
-- The commands here come from the `--help` of v0.101.1. Which ones were also run, and
-  which were not, is listed in the last section, "What this brief was checked against". Run
-  `agenttalk --version` first. If it does not say `0.101.1`, run
-  `agenttalk <command> --help` before you trust a flag.
-- **Newer versions.** The README installs v0.104.0, which includes the later fixes listed below.
-  This brief was checked against v0.101.1. Where something here changed later, a sentence that
-  starts "Since 0.101.1" says so. Those sentences come from reading the code and the changelog,
-  not from a new run.
+- Step 2a installs v0.104.0, matching the README. Run `agenttalk --version` to check which version you installed,
+  then read `agenttalk <command> --help` before using a flag.
+- **Earlier checks.** The original command-help checks and trials used v0.101.1. The last section says what was
+  run. Notes that start “Since 0.101.1” describe later changes read from the code and changelog, not new trial runs.
 - If your window is not inside the team folder, put `--root "<team>"` right after
   `agenttalk` (before the subcommand), as the examples do.
 - Wherever a person must act or decide, you will see **Tell your human:**. Say it in
@@ -173,22 +170,22 @@ outside the team folder you will make in step 2c. Then install the released vers
 agenttalk is installed from its GitHub release tag, not from the Python package index.
 
 ```powershell
-# Windows (checked)
+# Windows (recipe originally checked on v0.101.1; release pin updated)
 python -m venv "<env>"
-& "<env>\Scripts\python.exe" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.101.1"
+& "<env>\Scripts\python.exe" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
 $env:AGENTTALK_PY = "<env>\Scripts\python.exe"
 & $env:AGENTTALK_PY -m agenttalk --version
 ```
 
 ```sh
-# Linux (checked) and macOS (not yet checked)
+# Linux (recipe originally checked on v0.101.1; release pin updated); macOS not yet checked
 python3 -m venv --copies "<env>"
-"<env>/bin/python" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.101.1"
+"<env>/bin/python" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.104.0"
 export AGENTTALK_PY="<env>/bin/python"
 "$AGENTTALK_PY" -m agenttalk --version
 ```
 
-Expected last line: `agenttalk 0.101.1`. Write `<env>` as an absolute path (for example
+Expected last line: `agenttalk 0.104.0`. Write `<env>` as an absolute path (for example
 `/home/you/tools/agenttalk-env`), because the start script runs from other folders.
 
 **Why `--copies` on Linux and macOS.** In 0.101.1, a wrapped seat on Linux or macOS

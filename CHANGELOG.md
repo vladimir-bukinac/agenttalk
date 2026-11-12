@@ -120,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The lead setup brief installs the same release as the README (#716).** Its Windows and Linux/macOS commands now install v0.104.0 instead of v0.101.1; the original trial records still name v0.101.1.
+
 - **A requeue refusal no longer prints stored file names as they are, and its lookup no longer reads one folder
   twice (#728, part 1).** What you will notice: a dead letter or requeue record whose file name holds a line
   break (possible on Linux and macOS) can no longer add a fake line, such as a recovery command, to a refusal;
