@@ -3970,6 +3970,19 @@ class Store:
                     )
                 if meta.get("external_deliverable") is True and kind in work_tags.OPENERS:
                     work_tags._external_opener(self, sender, kind, meta)
+                # Reset can remove a payload staged before publication acquired its lock.
+                try:
+                    current_pending = os.lstat(pending)
+                except OSError as exc:
+                    raise OSError(
+                        "the store was reset while this message was waiting to be published; "
+                        "nothing was published; send it again"
+                    ) from exc
+                if not _same_file(current_pending, pending_identity):
+                    raise OSError(
+                        "the store was reset while this message was waiting to be published; "
+                        "nothing was published; send it again"
+                    )
                 claimed = None
                 if _requeue_source is not None:
                     claimed = self._claim_requeue(_requeue_source, msg.id, str(cfg.get("session_id") or ""))

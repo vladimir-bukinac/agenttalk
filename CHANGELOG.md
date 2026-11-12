@@ -120,6 +120,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A send interrupted by a reset now asks you to send it again without leaving a missing message in the store's order list (#740, part of #728).
+
 - **Reset and dead-letter retry now take turns (#728, item 2).** A reset that finishes no longer lets a retry repeat completed work while messages are being cleared. Stop agents before reset: sends wait, and a wait longer than 10 seconds fails. A send prepared before reset can fail when reset removes its temporary file or lock marker; restart agents and retry after reset. An interrupted plain reset and older reset writers that bypass the lock remain outside this protection.
 
 - **`agenttalk status` no longer reads as if anyone can safely run `drain` for another seat (#726).**
