@@ -713,32 +713,77 @@ def test_the_same_loop_scenario_behaves_identically_with_the_journal_on_or_off(t
 
 
 def test_a_writer_that_never_returns_leaves_the_loop_exactly_as_it_was(tmp_path):
+    """The journal's writer is stuck for the whole run. The loop must still behave exactly as without a journal, never
+    waiting for the writer, and closing the journal must take no longer than its own wait.
+
+    What is timed is only what the writer could hold up: each call the loop makes into the journal, and the close. The
+    rest of the scenario (the store's own files, process start, a busy machine) is not timed, so it cannot fail this
+    test (#766: a whole-turn limit of 10 s failed at 11.3 s on a loaded runner, with the loop never waiting for the
+    writer). The writer is stuck until the test frees it, and the test says if it ever freed itself."""
+    close_seconds = 0.3
+
     class Blocking(te.JournalFiles):
         def __init__(self):
             self.entered = threading.Event()
             self.unblock = threading.Event()
+            self.gave_up = threading.Event()  # the writer's own safety timeout ran out: it was not stuck all along
 
         def write(self, handle, data):
             if b'"seq"' in data:
                 self.entered.set()
-                self.unblock.wait(20)
+                # Stuck until the test frees it. The limit is only so a loop that really waits cannot hang the run for
+                # ever; once it has run out the writer stays free, so a failing run ends instead of waiting again.
+                if not self.gave_up.is_set() and not self.unblock.wait(120):
+                    self.gave_up.set()
             super().write(handle, data)
 
     off = _scenario(tmp_path / "off", observe=False)
     files = Blocking()
-    sink = te.TurnEventSink(tmp_path / "journal", "beta", files=files, close_seconds=0.3, queue_max=4)
+    sink = te.TurnEventSink(tmp_path / "journal", "beta", files=files, close_seconds=close_seconds, queue_max=4)
     assert sink.start() is True
-    begin = time.monotonic()
-    on = _scenario(tmp_path / "on", observe=True, sink=sink)
-    assert time.monotonic() - begin < 10
-    assert files.entered.wait(5)  # the writer really was stuck while the loop ran
-    off.pop("disposed")
-    on.pop("disposed")
-    assert on == off
-    start = time.monotonic()
-    sink.close()
-    assert time.monotonic() - start < 2.0
-    files.unblock.set()
+    calls = []  # how long each call into the journal held the loop up
+    real_emit = sink.emit
+
+    def timed_emit(kind, **fields):
+        begin = time.monotonic()
+        try:
+            real_emit(kind, **fields)
+        finally:
+            calls.append(time.monotonic() - begin)
+
+    sink.emit = timed_emit
+    try:
+        on = _scenario(tmp_path / "on", observe=True, sink=sink)
+        assert files.entered.wait(60)  # the writer really was stuck while the loop ran
+        off.pop("disposed")
+        on.pop("disposed")
+        assert on == off
+        # More events than the queue holds went through while the writer was stuck, so a call that waited for the
+        # writer or for room in its queue would have waited. Together they must cost the loop less than one close wait:
+        # the only timeout the journal has, and so the least a call that waited for the writer could add. (A call
+        # costs microseconds; the bound leaves a loaded machine two orders of magnitude.)
+        assert len(calls) > 4
+        assert sum(calls) < close_seconds, f"the loop waited {sum(calls):.3f} s in {len(calls)} calls to the journal"
+        assert not files.gave_up.is_set(), "the writer freed itself during the run, so the run proved nothing"
+
+        # Closing waits for the stuck writer for its own deadline and no longer. The length of the wait it asked for is
+        # checked exactly (a longer, a second or a missing wait), and the time it took against a plain wait of the same
+        # length on this machine now, with a second of room for the scheduler: a timer wait overshoots under load, so
+        # the room is measured from what a timer does here, never a fixed number of seconds for the whole turn.
+        waits = []
+        real_join = sink._thread.join
+        sink._thread.join = lambda timeout=None: (waits.append(timeout), real_join(timeout))[1]
+        begin = time.monotonic()
+        threading.Event().wait(close_seconds)
+        plain_wait = time.monotonic() - begin
+        begin = time.monotonic()
+        sink.close()
+        took = time.monotonic() - begin
+        assert waits and None not in waits
+        assert close_seconds / 3 <= sum(waits) <= close_seconds, f"close asked to wait {waits}"
+        assert close_seconds * 0.5 <= took < max(plain_wait, close_seconds) + 1.0, f"close took {took:.3f} s"
+    finally:
+        files.unblock.set()
 
 
 # --- privacy through the real hooks -----------------------------------------------------
