@@ -122,16 +122,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The first `agenttalk doctor` run reads less like a failure (Part of #716).** Three lines
   changed their words; no result, exit code, check name or JSON field changed.
-  In a folder that is not set up, `store.initialized` now says "not set up yet" and its fix reads
-  `agenttalk init --here --agents <your agent names>` instead of the example names `claude,codex`.
-  On Windows, when PowerShell 7 is already installed, `powershell_host` no longer says to install
-  it: it says where it found it and gives the one missing step, `agenttalk supervise --select-pwsh`
-  (only the supervisor needs it). It only checks that the file exists and runs nothing. With no
-  PowerShell 7 found, the install advice is as before. A folder that has just been set up can still
-  end with `overall: ERROR` on Windows until that step is done.
+  In a folder that is not set up, `store.initialized` now says "not set up yet" and names the missing
+  `.agenttalk/config.json` (a folder with a `.agenttalk/` but no `config.json` counts as not set up
+  too). Its fix reads `agenttalk init --here --agents <your agent names>` instead of the example
+  names `claude,codex`.
+  On Windows, when a PowerShell 7 file is found where `agenttalk supervise --select-pwsh` looks,
+  `powershell_host` no longer says to install it: it says where it found it and gives the one missing
+  step, `agenttalk supervise --select-pwsh`, which checks the file and selects it (only the
+  supervisor needs it). Doctor only checks that the file exists and runs nothing, so "found" is not a
+  promise that it works. With no PowerShell 7 found, the install advice is as before. A folder that
+  has just been set up can still end with `overall: ERROR` on Windows until that step is done.
   `skill_currency` now says that bundled skills last reviewed against an older version are a note
-  for the maintainers and nothing to do for the reader; with blocking findings, its fix says the
-  maintenance advice is for the maintainers.
+  for the maintainers and nothing to do for the reader; with blocking findings, its fix says to report
+  it to the agenttalk maintainers and that the maintenance advice is for them.
 
 - **Running doctor in a folder that is not set up leaves it untouched (#769).**
   The PowerShell check no longer creates a store lock there, so a later run in a

@@ -609,25 +609,29 @@ def _check_ovh_qwen_gateway(store: Store) -> Check | None:
     )
 
 
-def _installed_pwsh_fix() -> str:
-    """The fix text when PowerShell 7 is already installed but not selected, else "".
+def _found_pwsh_fix() -> str:
+    """The fix text when a PowerShell 7 file is found but none is selected, else "".
 
     Looks in the places `agenttalk supervise --select-pwsh` looks (its standard Program Files
-    search, then the PATH hints it prints). A file-existence test only: nothing is executed."""
+    search, then the PATH hints it prints). A file-existence test only: nothing is executed, so
+    the file is reported as found, never as a working install; `--select-pwsh` is what checks it."""
     try:
         for candidate in psh.program_files_candidates():
             if os.path.isfile(candidate):
                 return (
-                    f"PowerShell 7 is already installed at {candidate}; run "
-                    "`agenttalk supervise --select-pwsh` to select it (only the supervisor needs this)"
+                    f"PowerShell 7 found at {candidate}; run `agenttalk supervise --select-pwsh` "
+                    "to check and select it (only the supervisor needs this)"
                 )
         command = next(iter(psh.path_candidate_remediations()), "")
     except (OSError, ValueError):
         return ""
     if not command:
         return ""
+    # the command names the file it found: ... --pwsh "<path>"
+    found = re.search(r'--pwsh "(.*)"$', command)
+    where = f" at {found.group(1)}" if found else ""
     return (
-        f"PowerShell 7 is already installed; run `{command}` to select it "
+        f"PowerShell 7 found{where}; run `{command}` to check and select it "
         "(only the supervisor needs this)"
     )
 
@@ -649,10 +653,10 @@ def _check_powershell_host(store: Store) -> Check:
     except (OSError, supervisor_lifecycle.SupervisorLifecycleError) as exc:
         message = str(exc)
         fix = psh.INSTALL_REMEDIATION
-        installed_fix = _installed_pwsh_fix()
-        if installed_fix:
-            # PowerShell 7 is already here; "install it" would send the reader the wrong way.
-            fix = installed_fix
+        found_fix = _found_pwsh_fix()
+        if found_fix:
+            # A PowerShell 7 file is already there; "install it" would send the reader the wrong way.
+            fix = found_fix
             message = message.removesuffix(f"; {psh.INSTALL_REMEDIATION}")
         return Check(
             name="powershell_host",
@@ -1799,7 +1803,7 @@ def _check_init(store: Store) -> Check:
         return Check(
             name="store.initialized",
             status="error",
-            details=f"not set up yet: no .agenttalk/ found at {store.root}",
+            details=f"not set up yet: .agenttalk/config.json not found at {store.root}",
             fix="run `agenttalk init --here --agents <your agent names>` from the project root",
         )
     try:
@@ -1942,9 +1946,10 @@ def _check_skill_currency() -> Check:
         name="skill_currency", status="warn",
         details=f"{len(errors)} blocking + {len(warnings)} advisory skill-currency "
                 f"issue(s): {sample}{more}",
-        fix="for the maintainers of the bundled skills (the problem is in the agenttalk package, "
-            "not in your project): fix blocking drift (stamps/CLI tokens/parity); re-stamp "
-            "reviewed-against on review (see docs/skill-devkit-evolution-design.md)",
+        fix="report it to the agenttalk maintainers: the problem is in the bundled skills of the "
+            "agenttalk package, not in your project. For the maintainers: fix blocking drift "
+            "(stamps/CLI tokens/parity); re-stamp reviewed-against on review "
+            "(see docs/skill-devkit-evolution-design.md)",
         data=data,
     )
 

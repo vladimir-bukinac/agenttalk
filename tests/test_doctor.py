@@ -78,7 +78,7 @@ def test_doctor_leaves_empty_folders_unset_up(
             assert checks["multi_store"]["data"]["stores"] == []
         else:
             assert f"root: {folder.resolve()}" in output
-            assert f"no .agenttalk/ found at {folder.resolve()}" in output
+            assert f".agenttalk/config.json not found at {folder.resolve()}" in output
         assert not (folder / ".agenttalk").exists()
         assert sorted(parent.rglob("*")) == [child]
 
@@ -130,22 +130,24 @@ def _windows_without_selection(monkeypatch: pytest.MonkeyPatch, program_files, o
     monkeypatch.setattr(doctor.psh, "path_candidate_remediations", lambda *a, **k: tuple(on_path))
 
 
-def test_doctor_powershell_check_says_so_when_pwsh_is_installed_but_not_selected(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("content", [b"", b"not a real program"], ids=["zero-byte", "not-a-program"])
+def test_doctor_powershell_check_says_found_not_verified_when_pwsh_is_present_but_not_selected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: bytes
 ) -> None:
     pwsh = tmp_path / "pf" / "PowerShell" / "7" / "pwsh.exe"
     pwsh.parent.mkdir(parents=True)
-    pwsh.write_bytes(b"")  # only its existence is tested; nothing is run
+    pwsh.write_bytes(content)  # only its existence is tested; nothing is run, so it cannot be vouched for
     _windows_without_selection(monkeypatch, [str(pwsh)])
     check = doctor._check_powershell_host(Store(tmp_path / "project"))
     assert (check.name, check.status, check.data) == (
         "powershell_host", "error", {"status": "error", "task_status": "unknown"},
     )
-    assert str(pwsh) in check.fix
-    assert "already installed" in check.fix
-    assert "`agenttalk supervise --select-pwsh`" in check.fix
+    assert f"found at {pwsh}" in check.fix
+    assert "`agenttalk supervise --select-pwsh` to check and select it" in check.fix
+    # finding a file is not proof of a working install, and doctor never runs it to find out
+    assert "installed" not in check.fix
     assert "install PowerShell" not in check.fix and "aka.ms" not in check.fix
-    # the message no longer tells the reader to install what is installed
+    # the message no longer tells the reader to install what is there
     assert "no PowerShell host is selected" in check.details
     assert "aka.ms" not in check.details
     assert check.details.endswith("; task status UNKNOWN")
@@ -154,12 +156,14 @@ def test_doctor_powershell_check_says_so_when_pwsh_is_installed_but_not_selected
 def test_doctor_powershell_check_names_the_path_command_for_a_path_only_install(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    command = 'agenttalk supervise --select-pwsh --pwsh "C:\\tools\\pwsh.exe"'
+    where = "C:\\tools\\pwsh.exe"
+    command = f'agenttalk supervise --select-pwsh --pwsh "{where}"'
     _windows_without_selection(monkeypatch, [], on_path=[command])
     check = doctor._check_powershell_host(Store(tmp_path))
     assert check.status == "error"
-    assert f"`{command}`" in check.fix
-    assert "already installed" in check.fix
+    assert f"found at {where}" in check.fix
+    assert f"`{command}` to check and select it" in check.fix
+    assert "installed" not in check.fix
     assert "aka.ms" not in check.fix
 
 
@@ -202,9 +206,22 @@ def test_doctor_powershell_install_advice_constant_is_unchanged() -> None:
 def test_doctor_not_set_up_check_says_not_set_up_yet(tmp_path: Path) -> None:
     check = doctor._check_init(Store(tmp_path))
     assert (check.name, check.status) == ("store.initialized", "error")
-    assert check.details == f"not set up yet: no .agenttalk/ found at {tmp_path}"
+    assert check.details == f"not set up yet: .agenttalk/config.json not found at {tmp_path}"
     assert "`agenttalk init --here --agents <your agent names>`" in check.fix
     assert "claude,codex" not in check.fix
+
+
+def test_doctor_partly_set_up_folder_names_the_missing_config_file(tmp_path: Path) -> None:
+    """Store.initialized() is true only when .agenttalk/config.json exists, so a folder that has a
+    .agenttalk/ but no config.json is still "not set up", and the text must say which file is missing
+    rather than claim the whole folder is absent."""
+    (tmp_path / ".agenttalk").mkdir()
+    check = doctor._check_init(Store(tmp_path))
+    assert (check.name, check.status) == ("store.initialized", "error")
+    assert check.details == f"not set up yet: .agenttalk/config.json not found at {tmp_path}"
+    assert ".agenttalk/ found" not in check.details
+    assert "`agenttalk init --here --agents <your agent names>`" in check.fix
+    assert [p.name for p in (tmp_path / ".agenttalk").iterdir()] == []  # a diagnostic adds nothing
 
 
 def test_doctor_not_set_up_run_keeps_result_exit_code_and_json_shape(
@@ -219,7 +236,7 @@ def test_doctor_not_set_up_run_keeps_result_exit_code_and_json_shape(
     assert set(check) == {"name", "status", "details", "fix", "data"}  # the same keys as before
     assert check["data"] is None
     assert (check["name"], check["status"]) == ("store.initialized", "error")
-    assert check["details"].startswith("not set up yet: no .agenttalk/ found at ")
+    assert check["details"].startswith("not set up yet: .agenttalk/config.json not found at ")
     assert cli.main(["doctor"]) == 2
     text = capsys.readouterr().out
     assert "not set up yet" in text
@@ -276,8 +293,9 @@ def test_skill_currency_with_blocking_findings_also_names_the_maintainers(
     assert check.status == "warn"
     assert check.details.startswith("1 blocking + 2 advisory skill-currency issue(s): ")
     assert "skills/a.md:3 unknown CLI command" in check.details
-    # the maintainer advice is kept, but it now says who it is for
+    # the maintainer advice is kept, but it now says who it is for and what the reader should do
     assert "maintainers" in check.fix
+    assert "report it" in check.fix
     assert "fix blocking drift" in check.fix
     assert "re-stamp reviewed-against" in check.fix
     assert len(check.data["findings"]) == 3
