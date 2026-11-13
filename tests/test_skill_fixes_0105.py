@@ -109,7 +109,12 @@ def test_the_clean_check_sees_new_files_and_quotes_the_worktree_path(path: Path)
 # ------------------------------------------------------------------------------ smaller slips
 
 
-@pytest.mark.parametrize("path", [*SEND, *LISTEN, *LEAD], ids=ids([*SEND, *LISTEN, *LEAD]))
+HANDOFF = [SKILLS / "claude" / "agenttalk.handoff.md", SKILLS / "codex" / "agenttalk-handoff" / "SKILL.md"]
+PROPOSE = [SKILLS / "claude" / "agenttalk.propose.md", SKILLS / "codex" / "agenttalk-propose" / "SKILL.md"]
+SENDER_NAMED = [*SEND, *LISTEN, *LEAD, *HANDOFF, *PROPOSE]
+
+
+@pytest.mark.parametrize("path", SENDER_NAMED, ids=ids(SENDER_NAMED))
 def test_every_reply_example_names_the_sender(path: Path) -> None:
     assert not re.findall(r"agenttalk reply (?!--from)--to-", read(path))
 
@@ -136,7 +141,6 @@ def test_na_reason_is_described_as_a_bus_requirement_with_the_accepted_spellings
     assert "`na_reason_<field>`, `na_reason.<field>` or `na_reason`" in flat_text
 
 
-HANDOFF = [SKILLS / "claude" / "agenttalk.handoff.md", SKILLS / "codex" / "agenttalk-handoff" / "SKILL.md"]
 BATCH2 = [
     SKILLS / "claude" / "agenttalk.challenge.md",
     SKILLS / "claude" / "agenttalk.consult.md",
@@ -156,7 +160,7 @@ def test_the_files_the_pilot_read_in_full_carry_the_0105_stamp(path: Path) -> No
 def test_the_handoff_skills_do_not_end_the_session_on_a_bare_end(path: Path) -> None:
     text = flat(path)
     assert "the session is over" not in text
-    assert "bare `kind=end`" in text and "ignored" in text
+    assert "even one from the lead" in text and "carries no authority and is ignored" in text
     assert re.search(r'^reviewed-against: "0\.(43|55|75)"$', read(path), re.MULTILINE)  # not stamped: not re-read yet
 
 
@@ -164,3 +168,78 @@ def test_the_lead_and_listen_notes_do_not_call_every_inline_body_unsafe() -> Non
     for path in [*LEAD, *LISTEN]:
         text = flat(path)
         assert "has quotes in it" in text, path
+
+
+# ------------------------------------------------------------------------------ round 2: batch 2 (handoff, propose)
+
+
+@pytest.mark.parametrize("path", HANDOFF, ids=ids(HANDOFF))
+def test_the_handoff_status_example_sees_untracked_files_and_says_why(path: Path) -> None:
+    text = flat(path)
+    assert "`git status --short --untracked-files=all`" in text
+    assert "status.showUntrackedFiles" in text
+    assert not re.search(r"<paste `git status --short` ", text)
+
+
+@pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
+def test_the_proposal_keeps_the_chosen_decision_maker(path: Path) -> None:
+    """The send step must not set the target back to the default peer after step 2 chose one."""
+    text = read(path)
+    assert re.search(r'TARGET="\$\{TARGET:-|if \(-not \$TARGET\)', text)
+    assert not re.search(r'^\s*\$?TARGET\s*=\s*(?:if \(\$env:AGENTTALK_PEER\)|"\$\{AGENTTALK_PEER)', text, re.M)
+
+
+@pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
+def test_a_managed_wrapper_turn_sends_the_proposal_with_an_await_and_returns(path: Path) -> None:
+    text = flat(path)
+    assert "AGENTTALK_WRAPPER_GENERATION" in text
+    assert re.search(r"send --from \S+ --to \S+ --kind proposal", text)
+    assert "--await-reply" in text and "records no across-turn wait" in text
+    assert "There is no `propose --await-reply`" in text
+    assert "return immediately to the wrapper" in text
+    assert "In a manual (unwrapped) session, wait for the response" in text
+
+
+@pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
+def test_the_counter_example_names_the_proposal_it_closes(path: Path) -> None:
+    text = flat(path)
+    assert re.search(r"reply --from \S+ --to-request <old-request-id> --kind proposal-response", text)
+    assert "newest message you received" in text
+
+
+# ------------------------------------------------------------------------------ round 2: batch 3 (devkit)
+
+DEVKIT = SKILLS / "devkit"
+
+
+def test_the_close_recipe_names_the_isolation_flags_and_the_hold_code() -> None:
+    text = flat(DEVKIT / "system-review-protocol" / "SKILL.md")
+    assert "`--lane-artifact <path>`" in text and "`--non-lane-isolation-not-asserted`" in text
+    assert (
+        text.count("worktree_isolation_unverified") == 2
+    )  # at open (what happens without a flag) and in the HOLD list
+
+
+def test_the_pin_check_compares_after_turning_crlf_into_lf() -> None:
+    text = flat(DEVKIT / "definition-of-done" / "SKILL.md")
+    assert "after turning any CRLF line endings into LF" in text
+    assert "git hash-object --stdin" in text
+    assert "On a seat, `git hash-object --no-filters <installed file>` for each file" not in text
+
+
+def test_the_release_readiness_skill_says_where_secondary_risks_go() -> None:
+    text = flat(DEVKIT / "review-release-readiness" / "SKILL.md")
+    assert "`risk_class` takes exactly ONE value" in text and "`residual_risk`" in text
+
+
+def test_routing_names_each_bus_skill_in_both_vendors_forms() -> None:
+    text = flat(DEVKIT / "_shared" / "references" / "routing.md")
+    assert "agenttalk-lead (Claude: /agenttalk.lead)" in text
+    assert "agenttalk-listen (Claude: /agenttalk.listen)" in text
+    assert "(Claude: /agenttalk.lead, /agenttalk.listen, /agenttalk.handoff, /agenttalk.send)" in text
+
+
+def test_system_review_protocol_names_the_handoff_and_lead_skills_in_both_forms() -> None:
+    text = flat(DEVKIT / "system-review-protocol" / "SKILL.md")
+    assert "use agenttalk-handoff, or /agenttalk.handoff in Claude" in text
+    assert "use agenttalk-lead, or /agenttalk.lead in Claude" in text

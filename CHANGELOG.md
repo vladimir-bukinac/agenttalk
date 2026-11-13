@@ -43,6 +43,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **The handoff skills no longer end a session on any `end` message.** They said "if the peer
     sends `kind=end`, the session is over". A bare `end` has no authority and is ignored, as the
     listen skills and the wrapper already say.
+  - **The propose skills now work inside a managed wrapper turn, and no longer misaddress a
+    proposal.** `propose` records no wait for a reply. In a managed turn the skills now send the
+    proposal with `send --kind proposal --await-reply` and return to the wrapper; a person at a
+    terminal still waits as before. The chosen decision-maker is no longer reset to the default
+    peer, and the "counter" example now names the proposal it closes (`--to-request`), so it
+    cannot close a newer, unrelated one. The handoff and propose reply examples carry `--from`,
+    and the handoff "git status" example uses `--untracked-files=all` for the same reason as the
+    lead skills (#93).
+  - **Four small fixes in the devkit skills.** The close recipe in `system-review-protocol` names
+    `--lane-artifact` and `--non-lane-isolation-not-asserted` and the `worktree_isolation_unverified`
+    HOLD it otherwise always hits. The `definition-of-done` pin check now compares file contents
+    with CRLF turned into LF, so a Windows install no longer reads as a mismatch. The
+    `review-release-readiness` skill says `risk_class` takes one value and where secondary risks
+    go. `routing.md` and `system-review-protocol` name the bus skills in both the Claude and the
+    Codex form.
   - **Review stamps.** These now say `reviewed-against 0.105` because the review read them in
     full: the send, listen and lead skills for each assistant, the shared devkit holder, the
     evidence reference, the Claude challenge, consult, propose and overview skills, and the

@@ -80,19 +80,31 @@ implementation work.
    <for major work (see /agenttalk.challenge): request id, verdict and
    disposition, or exempt:<reason>>
    ```
-4. Send:
+4. Send. Keep the `$TARGET` you chose in step 2; the default below applies only when none was chosen:
    ```powershell
-   $TARGET = if ($env:AGENTTALK_PEER) { $env:AGENTTALK_PEER } else { "codex" }
+   if (-not $TARGET) { $TARGET = if ($env:AGENTTALK_PEER) { $env:AGENTTALK_PEER } else { "codex" } }
    $reqId = "pp-$([guid]::NewGuid().ToString())"
-   agenttalk propose --from $SELF --to $TARGET `
-     --subject "<one-line decision>" `
-     --meta request_id=$reqId `
-     -m $body
+   if ($env:AGENTTALK_WRAPPER_GENERATION) {
+     # managed wrapper turn: record the across-turn wait, then stop and return to the wrapper
+     agenttalk send --from $SELF --to $TARGET --kind proposal `
+       --subject "<one-line decision>" --meta request_id=$reqId `
+       --await-reply -m $body
+   } else {
+     agenttalk propose --from $SELF --to $TARGET `
+       --subject "<one-line decision>" `
+       --meta request_id=$reqId `
+       -m $body
+   }
    ```
-   The command writes `kind=proposal`, auto-mints
+   The `propose` command writes `kind=proposal`, auto-mints
    `meta.request_id=pp-...` if absent. Passing `$reqId` explicitly
    lets the wait below target the proposal thread.
-5. Wait for the response:
+   Inside a managed wrapper turn (`$env:AGENTTALK_WRAPPER_GENERATION` is set), `propose` records no
+   across-turn wait. Send the proposal with `send --kind proposal --await-reply` instead and
+   **return immediately to the wrapper**: it owns the inbox cursor and will deliver the correlated
+   response in a later turn, so do not run `wait`, `sync`, `recv`, or `drain` from that child turn.
+   `--await-reply` needs the tracked `request_id`. There is no `propose --await-reply`.
+5. In a manual (unwrapped) session, wait for the response:
    ```powershell
    agenttalk wait --for $SELF --to-request $reqId --kind proposal-response --timeout 600
    ```
@@ -106,20 +118,21 @@ implementation work.
      closed, then read the fresh counter proposal linked by
      `meta.in_reply_to`.
 
-Scoped wait intentionally ignores unrelated traffic. If the proposal
+In a manual session, scoped wait intentionally ignores unrelated traffic. If the proposal
 stalls or you suspect another urgent thread is waiting on you, run
 `agenttalk sync --for $SELF` and `agenttalk threads --for $SELF`.
 Handle the older or more urgent thread first, then resume the scoped
-wait for your proposal. Use `agenttalk reply --to-id <message_id>` or
+wait for your proposal. Use `agenttalk reply --from $SELF --to-id <message_id>` or
 `--to-request <request_id>` when replying inside a specific thread.
 
 ## Countering a proposal
 
 To counter a proposal you received:
 
-1. Close the old proposal:
+1. Close the old proposal. `--to-request` names the proposal you are countering; without it the
+   reply goes to the newest message you received, which can be a different proposal:
    ```powershell
-   agenttalk reply --from $SELF --kind proposal-response `
+   agenttalk reply --from $SELF --to-request <old-request-id> --kind proposal-response `
      --meta status=countered `
      -m "<why a counter is needed>"
    ```
@@ -144,7 +157,8 @@ To counter a proposal you received:
 
 ## Before stopping
 
-Before declaring the decision handled or going idle, run:
+Before declaring the decision handled or going idle (in a managed wrapper turn skip this: the wrapper
+owns the inbox), run:
 
 ```powershell
 agenttalk sync --for $SELF
