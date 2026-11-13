@@ -1865,9 +1865,12 @@ not remove the per-user items above.
   supervise --select-pwsh --pwsh "<absolute path>"` if you need a
   portable or nonstandard host.
 - Inline `-m "..."` bodies are fragile for multi-line text,
-  apostrophes, backslashes, and Windows paths. Prefer `--file <path>`,
-  or pipe a PowerShell here-string to `--file -`, for `send`, `reply`,
-  `propose`, and `broadcast` bodies.
+  apostrophes, backslashes, and Windows paths. Write the body to a UTF-8
+  file and pass `--file <path>` for `send`, `reply`, `propose`, and
+  `broadcast` bodies. Do not pipe text that has non-ASCII characters
+  (accented letters, an em dash, Japanese text) into `--file -` on
+  Windows: it is read in the Windows code page instead of UTF-8 and is
+  stored garbled, with no warning. A file given by path is read as UTF-8.
 - Supervised agents launch hidden by default on Windows so an
   unattended fleet doesn't open one console per agent. Set
   `"window_style": "minimized"` or `"normal"` in `supervisor.json`

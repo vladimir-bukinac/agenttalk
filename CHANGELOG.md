@@ -10,6 +10,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The bundled skills no longer teach advice that went wrong (skills review of 0.105.0).**
+  A first read of the 0.105.0 skills against the real commands found four pieces of advice
+  that could mislead an agent, and a few smaller slips. All are fixed in both the Claude and
+  the Codex copies. The code is not changed.
+  - **Messages with accented letters could be stored garbled.** The send skills told agents
+    to pipe the text into `--file -`. On Windows that text is read in the Windows code page
+    instead of UTF-8, so "ünïcødé" was stored as "Ã¼nÃ¯cÃ¸dÃ©", with no warning. The send
+    skills and the README now say: write the text to a UTF-8 file and pass `--file <path>`.
+    The piped form itself is a separate fix in the code (#779).
+  - **The listen skills overstated what the bus proves about a sender.** They called a
+    lead work order "authenticated" and said the bus skips "forged" senders. The bus checks
+    that the sender's name is on the roster; it does not prove who wrote the message unless
+    the store is signed (`agenttalk hmac-init`). The wording now says so. No safeguard is
+    removed.
+  - **The listen skills' table said an `end` message always ends the loop.** The same files
+    say, correctly, that an `end` without the full authority markers is ignored. The table
+    rows for `end` and `release` now say it too.
+  - **The "is the worker's folder clean?" check could miss new files (#93).** A git setting,
+    `status.showUntrackedFiles=no`, makes plain `git status --porcelain` print nothing even
+    when there are new files, so a commit that was missing files could pass. The lead skills
+    now use `git status --porcelain --untracked-files=all`, and put each worktree path in
+    quotes so a folder name with a space works.
+  - **Smaller slips.** Reply examples now carry `--from $SELF`, which the command needs when
+    `AGENTTALK_SELF` is not set. Longer briefs and answers in the lead and listen skills now
+    use a file, not an inline `-m`. The evidence reference now says the bus does require a
+    reason for every `n/a` field (it accepts `na_reason_<field>`, `na_reason.<field>` or
+    `na_reason`) and that using the single `na_reason` is the skill's own habit.
+  - **Review stamps.** The eight files the pilot read in full now say `reviewed-against 0.105`:
+    the three send, listen and lead skills for each assistant, the shared devkit holder and the
+    evidence reference. Every other file keeps its older stamp.
+
 ## [0.105.0] - 2026-11-13
 
 This release makes agenttalk safer and clearer when something goes wrong, and shows more of what is really happening. For a Claude agent run by the wrapper, the status views now show how large its current conversation is (other agents still show the size as unknown), and an old size can no longer look current after a failed save. Commands that tell you to "run this" now print only values that are safe to paste, and new request ids are checked when they are made. A backup now skips the temporary files other commands write while they work and, when files vanish while it reads them, tries again within a short limit; if the store keeps changing, it stops, publishes nothing and asks you to run it again. A reset and the retry of a failed message now take turns, and a failed message can be put back in the queue only once. Release lanes are better protected: a lane that an agent is working in is no longer cleaned up underneath it, a lane whose checkout has gone can be retired on purpose, a held lane can be re-stamped, and the cleanup commands say what they refuse and why. The web console says "nothing checked" instead of a green GO when no gate applies, and the status overview no longer suggests that anyone can safely drain another agent's messages. Notes and gate files report their problems more clearly, and code is now written with a short security note first.
