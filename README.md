@@ -198,17 +198,19 @@ In the first terminal, type `$env:AGENTTALK_PY` in PowerShell or `echo "$AGENTTA
 In each new terminal, set `AGENTTALK_PY` again to that same full path. Then put its command folder first on PATH,
 so assistants that run a plain `agenttalk` use this environment too. Do this in every terminal before starting an assistant.
 
-PowerShell:
+Windows (PowerShell):
 
 ```powershell
 $env:PATH = (Split-Path $env:AGENTTALK_PY) + ';' + $env:PATH
 ```
 
-sh:
+Linux and macOS (sh):
 
 ```sh
 export PATH="$(dirname "$AGENTTALK_PY"):$PATH"
 ```
+
+This also makes `python` and `pip` in that terminal the ones in `agenttalk-env`; if your project has its own environment, activate it after this step or call its Python by its full path.
 
 The steps below show PowerShell; on Linux or macOS, replace `& $env:AGENTTALK_PY` with `"$AGENTTALK_PY"`.
 
