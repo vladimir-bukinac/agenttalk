@@ -410,8 +410,8 @@ considered / Tradeoffs / Decision requested.
    `reply` echoes the proposal's `request_id`; if multiple proposal
    threads are open, anchor the reply with `--to-id <message_id>` or
    `--to-request <request_id>`.
-   `<body-file>` is a UTF-8 text file you wrote first, not an inline `-m` and not a
-   pipe into `--file -` (see `/agenttalk.send`, step 3).
+   `<body-file>` is a UTF-8 text file you wrote first (see `/agenttalk.send`,
+   step 3). Use a file for a body that has quotes in it, and do not pipe it into `--file -`.
 4. For a counter, first send `status=countered` to close the old
    proposal, then send a fresh proposal:
    ```powershell

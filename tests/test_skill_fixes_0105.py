@@ -136,9 +136,31 @@ def test_na_reason_is_described_as_a_bus_requirement_with_the_accepted_spellings
     assert "`na_reason_<field>`, `na_reason.<field>` or `na_reason`" in flat_text
 
 
-STAMPED = [*SEND, *LISTEN, *LEAD, EVIDENCE, HOLDER]
+HANDOFF = [SKILLS / "claude" / "agenttalk.handoff.md", SKILLS / "codex" / "agenttalk-handoff" / "SKILL.md"]
+BATCH2 = [
+    SKILLS / "claude" / "agenttalk.challenge.md",
+    SKILLS / "claude" / "agenttalk.consult.md",
+    SKILLS / "claude" / "agenttalk.propose.md",
+    SKILLS / "claude" / "agenttalk.md",
+    SKILLS / "devkit" / "review-code" / "SKILL.md",
+]
+STAMPED = [*SEND, *LISTEN, *LEAD, EVIDENCE, HOLDER, *BATCH2]
 
 
 @pytest.mark.parametrize("path", STAMPED, ids=ids(STAMPED))
-def test_the_eight_files_the_pilot_read_in_full_carry_the_0105_stamp(path: Path) -> None:
+def test_the_files_the_pilot_read_in_full_carry_the_0105_stamp(path: Path) -> None:
     assert re.search(r'^reviewed-against: "0\.105"$', read(path), re.MULTILINE)
+
+
+@pytest.mark.parametrize("path", HANDOFF, ids=ids(HANDOFF))
+def test_the_handoff_skills_do_not_end_the_session_on_a_bare_end(path: Path) -> None:
+    text = flat(path)
+    assert "the session is over" not in text
+    assert "bare `kind=end`" in text and "ignored" in text
+    assert re.search(r'^reviewed-against: "0\.(43|55|75)"$', read(path), re.MULTILINE)  # not stamped: not re-read yet
+
+
+def test_the_lead_and_listen_notes_do_not_call_every_inline_body_unsafe() -> None:
+    for path in [*LEAD, *LISTEN]:
+        text = flat(path)
+        assert "has quotes in it" in text, path

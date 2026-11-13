@@ -484,8 +484,8 @@ the agents you plan.
      --meta lane_id=<lane-id> \
      --file "<brief-file>"
    ```
-   `<brief-file>` is a UTF-8 text file you wrote first (see `$agenttalk-send`, step 3): not an
-   inline `-m` for a multi-line brief, and not a pipe into `--file -`.
+   `<brief-file>` is a UTF-8 text file you wrote first (see `$agenttalk-send`, step 3). Use a file for a
+   body that has quotes in it, and do not pipe it into `--file -`.
    Ask for the reply in this form. A task response needs a closing `status`
    next to its `verdict`; without one, the task can stay open:
    ```bash

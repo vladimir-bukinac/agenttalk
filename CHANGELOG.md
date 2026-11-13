@@ -36,12 +36,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     quotes so a folder name with a space works.
   - **Smaller slips.** Reply examples now carry `--from $SELF`, which the command needs when
     `AGENTTALK_SELF` is not set. Longer briefs and answers in the lead and listen skills now
-    use a file, not an inline `-m`. The evidence reference now says the bus does require a
+    use a file. The risky case is a typed `-m "..."` with quotes inside it; a body held in a
+    PowerShell 7 variable and passed as `-m $body` is stored exactly. The evidence reference now says the bus does require a
     reason for every `n/a` field (it accepts `na_reason_<field>`, `na_reason.<field>` or
     `na_reason`) and that using the single `na_reason` is the skill's own habit.
-  - **Review stamps.** The eight files the pilot read in full now say `reviewed-against 0.105`:
-    the three send, listen and lead skills for each assistant, the shared devkit holder and the
-    evidence reference. Every other file keeps its older stamp.
+  - **The handoff skills no longer end a session on any `end` message.** They said "if the peer
+    sends `kind=end`, the session is over". A bare `end` has no authority and is ignored, as the
+    listen skills and the wrapper already say.
+  - **Review stamps.** These now say `reviewed-against 0.105` because the review read them in
+    full: the send, listen and lead skills for each assistant, the shared devkit holder, the
+    evidence reference, the Claude challenge, consult, propose and overview skills, and the
+    devkit review-code skill. Every other file keeps its older stamp, including the two handoff
+    skills, which have not been read again since this fix.
 
 ## [0.105.0] - 2026-11-13
 
