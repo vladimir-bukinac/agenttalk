@@ -58,11 +58,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `review-release-readiness` skill says `risk_class` takes one value and where secondary risks
     go. `routing.md` and `system-review-protocol` name the bus skills in both the Claude and the
     Codex form.
+  - **A counter-proposal in a managed turn now waits for its answer.** The propose skills told an
+    agent to send a counter-proposal with plain `propose`, which records no wait. In a managed
+    wrapper turn they now send it with `send --kind proposal --await-reply`, linked to the old
+    proposal, and return to the wrapper; a person at a terminal still uses `propose`.
+  - **The assurance-scan skill no longer overpromises.** It said the scan never installs anything
+    and never uses the network by default. The release profile's `python-build` step runs
+    `python -m build` with build isolation, which can install build requirements (and so may use
+    the network) even when the manifest does not allow network; the skill now says so. It also
+    says the `deep` profile runs the same checks as `change` unless the manifest adds more. Three
+    reference pages are corrected: the runner can exit 1 and still leave its artifact in place,
+    `paths.include` is accepted but does not narrow a scan, and a baseline needs only
+    `schema_version` because the loader fills in `baseline_id` and `findings`. The refactor-code
+    description now fits both assistants.
   - **Review stamps.** These now say `reviewed-against 0.105` because the review read them in
     full: the send, listen and lead skills for each assistant, the shared devkit holder, the
-    evidence reference, the Claude challenge, consult, propose and overview skills, and the
-    devkit review-code skill. Every other file keeps its older stamp, including the two handoff
-    skills, which have not been read again since this fix.
+    evidence reference, the Claude challenge, consult, propose and overview skills, the devkit
+    review-code skill, and (from the later reads) the devkit migration, plain-language,
+    write-for-humans, write-docs, thinking-games, test-docs, qa-strategy, tester-qa,
+    test-coverage, test-integration, test-performance and test-security files. Every other file
+    keeps its older stamp, including the two handoff skills, the Codex propose skill, craft-code,
+    refactor-code, fix-ci and the assurance-scan files, which have an open finding or have not been
+    read again since a fix.
 
 ## [0.105.0] - 2026-11-13
 

@@ -21,6 +21,11 @@ GO/HOLD, never auto-installs tools, and never enables network checks by default.
 The gate, close, release-readiness, or human reviewer consumes the artifact and
 owns policy.
 
+One exception to know about: the `release` profile's built-in `python-build` step runs
+`python -m build` with build isolation. That can install the project's build
+requirements, so it may use the network, even when the manifest does not allow network
+for the profile.
+
 Run the package module:
 
 ```text
@@ -34,7 +39,8 @@ Profiles:
   installed applicable scanners.
 - `release`: change checks plus packaging, non-editable install smoke, and
   generated executable artifact evidence.
-- `deep`: a broader evidence profile for explicit manual use.
+- `deep`: chosen explicitly. With the built-in defaults it runs the same checks as `change`;
+  any extra depth has to come from the manifest.
 
 When a configured coverage command yields a fresh CI-attested measurement, each profile emits
 exactly one blocker gate with the matching producer identity: `coverage:change`,

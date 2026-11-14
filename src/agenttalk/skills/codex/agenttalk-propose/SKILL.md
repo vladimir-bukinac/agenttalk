@@ -152,12 +152,22 @@ To counter a proposal you received:
      --meta status=countered \
      -m "<why a counter is needed>"
    ```
-2. Send the counter as a fresh proposal:
+2. Send the counter as a fresh proposal with a NEW request id, linked to the old one. The same
+   managed or manual choice as step 4 applies: `propose` records no across-turn wait, so inside a managed
+   wrapper turn send it with `send --kind proposal --await-reply` and return immediately to the wrapper:
    ```bash
-   python -m agenttalk propose --from "$SELF" --to "$TARGET" \
-     --in-reply-to <old-request-id> \
-     --subject "<counter proposal>" \
-     -m "$BODY"
+   COUNTER_ID="pp-$(uuidgen 2>/dev/null || python -c 'import uuid; print(uuid.uuid4())')"
+   if [ -n "${AGENTTALK_WRAPPER_GENERATION:-}" ]; then
+     # managed wrapper turn: record the across-turn wait, then stop and return to the wrapper
+     python -m agenttalk send --from "$SELF" --to "$TARGET" --kind proposal \
+       --meta request_id="$COUNTER_ID" --meta in_reply_to=<old-request-id> \
+       --subject "<counter proposal>" --await-reply -m "$BODY"
+   else
+     python -m agenttalk propose --from "$SELF" --to "$TARGET" \
+       --in-reply-to <old-request-id> --meta request_id="$COUNTER_ID" \
+       --subject "<counter proposal>" \
+       -m "$BODY"
+   fi
    ```
 
 ## Rescinding a proposal (0.14.0)

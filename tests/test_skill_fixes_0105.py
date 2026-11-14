@@ -109,6 +109,7 @@ def test_the_clean_check_sees_new_files_and_quotes_the_worktree_path(path: Path)
 # ------------------------------------------------------------------------------ smaller slips
 
 
+DEVKIT_DIR = SKILLS / "devkit"
 HANDOFF = [SKILLS / "claude" / "agenttalk.handoff.md", SKILLS / "codex" / "agenttalk-handoff" / "SKILL.md"]
 PROPOSE = [SKILLS / "claude" / "agenttalk.propose.md", SKILLS / "codex" / "agenttalk-propose" / "SKILL.md"]
 SENDER_NAMED = [*SEND, *LISTEN, *LEAD, *HANDOFF, *PROPOSE]
@@ -148,7 +149,24 @@ BATCH2 = [
     SKILLS / "claude" / "agenttalk.md",
     SKILLS / "devkit" / "review-code" / "SKILL.md",
 ]
-STAMPED = [*SEND, *LISTEN, *LEAD, EVIDENCE, HOLDER, *BATCH2]
+ROUND3 = [
+    DEVKIT_DIR / rel
+    for rel in (
+        "definition-of-done/references/migration.md",
+        "_shared/references/plain-language.md",
+        "write-for-humans/SKILL.md",
+        "write-docs/SKILL.md",
+        "thinking-games/SKILL.md",
+        "test-docs/SKILL.md",
+        "qa-strategy/SKILL.md",
+        "tester-qa/SKILL.md",
+        "test-coverage/SKILL.md",
+        "test-integration/SKILL.md",
+        "test-performance/SKILL.md",
+        "test-security/SKILL.md",
+    )
+]
+STAMPED = [*SEND, *LISTEN, *LEAD, EVIDENCE, HOLDER, *BATCH2, *ROUND3]
 
 
 @pytest.mark.parametrize("path", STAMPED, ids=ids(STAMPED))
@@ -189,15 +207,56 @@ def test_the_proposal_keeps_the_chosen_decision_maker(path: Path) -> None:
     assert not re.search(r'^\s*\$?TARGET\s*=\s*(?:if \(\$env:AGENTTALK_PEER\)|"\$\{AGENTTALK_PEER)', text, re.M)
 
 
+def managed_commands(path: Path) -> list[str]:
+    """The managed-turn command of every fenced block that tests AGENTTALK_WRAPPER_GENERATION: the lines between that
+    test and its `else`, comments dropped and continuation lines joined into one line."""
+    found = []
+    for block in re.findall(r"```\w*\n(.*?)```", read(path), re.S):
+        if "AGENTTALK_WRAPPER_GENERATION" not in block:
+            continue
+        match = re.search(r"AGENTTALK_WRAPPER_GENERATION[^\n]*\n(.*?)\n\s*(?:\} )?else", block, re.S)
+        assert match, block
+        lines = [line for line in match.group(1).splitlines() if not line.strip().startswith("#")]
+        found.append(" ".join(re.sub(r"\s*[\\`]$", "", line).strip() for line in lines))
+    return found
+
+
 @pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
 def test_a_managed_wrapper_turn_sends_the_proposal_with_an_await_and_returns(path: Path) -> None:
     text = flat(path)
     assert "AGENTTALK_WRAPPER_GENERATION" in text
-    assert re.search(r"send --from \S+ --to \S+ --kind proposal", text)
-    assert "--await-reply" in text and "records no across-turn wait" in text
+    assert "records no across-turn wait" in text
     assert "There is no `propose --await-reply`" in text
     assert "return immediately to the wrapper" in text
     assert "In a manual (unwrapped) session, wait for the response" in text
+
+
+@pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
+def test_the_managed_command_of_the_proposal_and_of_the_counter_carries_the_await_the_id_and_the_kind(
+    path: Path,
+) -> None:
+    """Two managed blocks: the proposal (step 4) and the counter (the counter section). Each managed command is a
+    `send --kind proposal` with a tracked request id and `--await-reply`; the counter also links the old proposal."""
+    commands = managed_commands(path)
+    assert len(commands) == 2, commands
+    for command in commands:
+        assert re.match(r"(?:python -m )?agenttalk send --from \S+ --to \S+ --kind proposal ", command), command
+        assert re.search(r"--meta request_id=\S+", command), command
+        assert re.search(r"--await-reply(?: |$)", command), command
+        assert "propose" not in command.split("--subject")[0], command
+    assert "in_reply_to=<old-request-id>" in commands[1], commands[1]
+    assert "in_reply_to" not in commands[0]
+
+
+@pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
+def test_the_manual_branch_of_each_block_is_still_a_plain_propose(path: Path) -> None:
+    blocks = [b for b in re.findall(r"```\w*\n(.*?)```", read(path), re.S) if "AGENTTALK_WRAPPER_GENERATION" in b]
+    assert len(blocks) == 2
+    for block in blocks:
+        manual = re.split(r"\n\s*(?:\} )?else[^\n]*\n", block, maxsplit=1)[1]
+        assert re.search(r"agenttalk propose --from \S+ --to \S+", manual) and "--await-reply" not in manual
+    counter_manual = re.split(r"\n\s*(?:\} )?else[^\n]*\n", blocks[1], maxsplit=1)[1]
+    assert "--in-reply-to <old-request-id>" in counter_manual  # the manual counter still links the old proposal
 
 
 @pytest.mark.parametrize("path", PROPOSE, ids=ids(PROPOSE))
@@ -243,3 +302,67 @@ def test_system_review_protocol_names_the_handoff_and_lead_skills_in_both_forms(
     text = flat(DEVKIT / "system-review-protocol" / "SKILL.md")
     assert "use agenttalk-handoff, or /agenttalk.handoff in Claude" in text
     assert "use agenttalk-lead, or /agenttalk.lead in Claude" in text
+
+
+# ------------------------------------------------------------------------------ round 3: batches 4 and 5
+
+ASSURANCE = DEVKIT / "assurance-scan"
+
+
+def test_refactor_code_is_described_for_any_agent_not_for_codex_only() -> None:
+    text = flat(DEVKIT / "refactor-code" / "SKILL.md")
+    assert "Use when an agent is asked for behavior-preserving cleanup" in text
+    assert "Use when Codex is asked" not in text
+
+
+def test_assurance_scan_names_the_release_build_step_and_its_install_and_network_reach() -> None:
+    text = flat(ASSURANCE / "SKILL.md")
+    assert "`python-build` step runs `python -m build` with build isolation" in text
+    assert "can install the project's build requirements, so it may use the network" in text
+    assert "even when the manifest does not allow network" in text
+
+
+def test_assurance_scan_says_deep_adds_nothing_by_default() -> None:
+    text = flat(ASSURANCE / "SKILL.md")
+    assert "With the built-in defaults it runs the same checks as `change`" in text
+    assert "a broader evidence profile" not in text
+
+
+def test_the_artifact_schema_says_a_finalization_failure_exits_1_with_the_artifact_left_in_place() -> None:
+    text = flat(ASSURANCE / "references" / "artifact-schema.md")
+    assert "the coverage finalization that follows succeeds" in text
+    assert "the runner exits 1 but leaves the artifact in place" in text
+
+
+def test_the_manifest_schema_says_paths_include_does_not_narrow_a_scan() -> None:
+    text = flat(ASSURANCE / "references" / "manifest-schema.md")
+    assert "`paths.include` is accepted but the built-in file discovery does not read it" in text
+    assert "Use top-level `paths.include` and `paths.exclude`" not in text
+
+
+def test_the_baseline_policy_says_which_fields_the_loader_defaults() -> None:
+    text = flat(ASSURANCE / "references" / "baseline-policy.md")
+    assert "The loader itself requires only `schema_version: 1`" in text
+    assert "when `baseline_id` is missing it uses `baseline`" in text
+    assert "when `findings` is missing it uses an empty list" in text
+    assert not re.search(r"^Required fields:", read(ASSURANCE / "references" / "baseline-policy.md"), re.M)
+
+
+NOT_STAMPED_YET = [
+    DEVKIT_DIR / rel
+    for rel in (
+        "craft-code/SKILL.md",
+        "refactor-code/SKILL.md",
+        "fix-ci/SKILL.md",
+        "assurance-scan/SKILL.md",
+    )
+] + [*HANDOFF, PROPOSE[1]]  # the Claude propose skill already carried 0.105 from an earlier round
+
+
+@pytest.mark.parametrize("path", NOT_STAMPED_YET, ids=ids(NOT_STAMPED_YET))
+def test_files_with_an_open_finding_or_not_yet_read_again_keep_their_old_stamp(path: Path) -> None:
+    assert not re.search(r'^reviewed-against: "0\.105"$', read(path), re.MULTILINE)
+
+
+def test_the_security_reference_without_a_stamp_field_did_not_get_one() -> None:
+    assert "reviewed-against" not in read(DEVKIT_DIR / "review-code" / "references" / "security.md")

@@ -136,12 +136,22 @@ To counter a proposal you received:
      --meta status=countered `
      -m "<why a counter is needed>"
    ```
-2. Send the counter as a fresh proposal:
+2. Send the counter as a fresh proposal with a NEW request id, linked to the old one. The same
+   managed or manual choice as step 4 applies: `propose` records no across-turn wait, so inside a managed
+   wrapper turn send it with `send --kind proposal --await-reply` and return immediately to the wrapper:
    ```powershell
-   agenttalk propose --from $SELF --to $TARGET `
-     --in-reply-to <old-request-id> `
-     --subject "<counter proposal>" `
-     -m $body
+   $counterId = "pp-$([guid]::NewGuid().ToString())"
+   if ($env:AGENTTALK_WRAPPER_GENERATION) {
+     # managed wrapper turn: record the across-turn wait, then stop and return to the wrapper
+     agenttalk send --from $SELF --to $TARGET --kind proposal `
+       --meta request_id=$counterId --meta in_reply_to=<old-request-id> `
+       --subject "<counter proposal>" --await-reply -m $body
+   } else {
+     agenttalk propose --from $SELF --to $TARGET `
+       --in-reply-to <old-request-id> --meta request_id=$counterId `
+       --subject "<counter proposal>" `
+       -m $body
+   }
    ```
 
 ## Rescinding a proposal (0.14.0)
