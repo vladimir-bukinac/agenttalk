@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Running doctor in a folder that is not set up leaves it untouched (#769).**
+  The PowerShell check no longer creates a store lock there, so a later run in a
+  child folder still checks the child. Its result and exit code stay the same.
+  If an earlier doctor run left a `.agenttalk/` folder containing only
+  `.powershell-host.lock.generation`, you can safely delete that folder: it
+  holds no messages or roster, but can still make folders below it look like
+  part of the same project. Do not delete it if it contains anything else.
+
 - **The bundled skills no longer teach advice that went wrong (skills review of 0.105.0).**
   A first read of the 0.105.0 skills against the real commands found four pieces of advice
   that could mislead an agent, and a few smaller slips. All are fixed in both the Claude and
