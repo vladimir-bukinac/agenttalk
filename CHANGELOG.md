@@ -21,9 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agenttalk` it uses everywhere else. A reader without a pinned runtime sees no change. This
   is wording only: a command form cannot say which release a runtime is, so nothing here
   changes the version that runs.
-- **The skill lint now checks the rule.** A plain `python -m agenttalk` is flagged in a Claude
-  skill, and in a Codex or devkit skill unless that skill states the rule (names
-  `AGENTTALK_PY`).
+- **The skill lint now checks the rule.** A plain module form (`python`, `python3` or `py` with
+  `-m agenttalk`, with any spacing, in a code block, in a continued command or in text) is flagged
+  in a Claude skill, and in a Codex or devkit skill unless that skill states the rule itself: when
+  `AGENTTALK_PY` is set, use it, and otherwise the form the project's agent manual gives. A mention
+  of the name, or the name in a comment, does not count. The lint's ignore comments work as they
+  do for the command check.
 
 ### Fixed
 

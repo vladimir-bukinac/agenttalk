@@ -27,6 +27,16 @@ SKILLS = iskl.SKILLS_ROOT
 TOKEN = "python -m agenttalk"
 DEVKIT_RUNNERS = ["craft-code", "refactor-code", "fix-ci", "assurance-scan"]
 FRONT = '---\nname: x\ndescription: d\nreviewed-against: "0.105"\n---\n'
+RULE = (
+    'Run agenttalk commands with `"$AGENTTALK_PY" -m agenttalk` when `AGENTTALK_PY` is set '
+    "(the seat's pinned runtime); "
+    "otherwise use the form your project's agent manual gives.\n"
+)
+CODEX_RULE = (
+    "If `AGENTTALK_PY` is set, invoke the bus with the pinned interpreter:\n\n"
+    '```powershell\n& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...\n```\n\n'
+    "If `AGENTTALK_PY` is not set, fall back to the runnable module form.\n"
+)
 
 
 def pinned_findings(tmp_path: Path, kind: str, body: str) -> list[sc.Finding]:
@@ -74,17 +84,16 @@ def test_a_plain_python_form_is_flagged_in_a_codex_or_devkit_skill_that_does_not
 
 @pytest.mark.parametrize("kind", ["codex", "devkit"])
 def test_the_same_form_is_clean_when_the_skill_states_the_rule(tmp_path, kind) -> None:
-    body = (
-        'Run agenttalk with `"$AGENTTALK_PY" -m agenttalk` when `AGENTTALK_PY` is set.\n'
-        "Run `python -m agenttalk lane workspace --id x` first.\n"
-    )
-    assert pinned_findings(tmp_path, kind, body) == []
+    assert pinned_findings(tmp_path, kind, RULE + "Run `python -m agenttalk lane workspace --id x` first.\n") == []
 
 
 def test_the_assurance_module_form_needs_the_rule_in_a_devkit_skill_too(tmp_path) -> None:
     body = "Run `python -m agenttalk.assurance --root .` first.\n"
     assert len(pinned_findings(tmp_path, "devkit", body)) == 1
-    assert pinned_findings(tmp_path, "devkit", body + "Set AGENTTALK_PY first.\n") == []
+    assert (
+        len(pinned_findings(tmp_path, "devkit", body + "Set AGENTTALK_PY first.\n")) == 1
+    )  # a mention is not the rule
+    assert pinned_findings(tmp_path, "devkit", body + RULE) == []
 
 
 def test_the_ignore_comment_silences_one_line(tmp_path) -> None:
@@ -163,3 +172,118 @@ def test_the_changelog_entry_says_only_what_the_change_does() -> None:
     assert match and "when there is one" in unreleased[max(0, match.start() - 200) : match.end() + 200]
     for promise in ("same version", "never an older install", "prevents older client", "never an older client"):
         assert promise not in unreleased.lower(), promise
+
+
+# ------------------------------------------------------- equivalent spellings (codex-dev's probes)
+
+BACKSLASH = chr(92)
+SPELLINGS = [
+    "python -m agenttalk lane workspace --id x",
+    "python  -m agenttalk lane workspace --id x",
+    "python\t-m\tagenttalk lane workspace --id x",
+    "python3 -m agenttalk lane workspace --id x",
+    "py -m agenttalk lane workspace --id x",
+    "python -m " + BACKSLASH + "\n  agenttalk lane workspace --id x",
+    "python3  -m " + BACKSLASH + "\n\tagenttalk lane workspace --id x",
+]
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "devkit"])
+@pytest.mark.parametrize("command", SPELLINGS, ids=[f"s{i}" for i in range(len(SPELLINGS))])
+def test_every_spelling_of_the_plain_module_form_is_found_in_a_fenced_block(tmp_path, kind, command) -> None:
+    assert pinned_findings(tmp_path, kind, f"```bash\n{command}\n```\n")
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "devkit"])
+@pytest.mark.parametrize(
+    "command", ["python3 -m agenttalk", "py -m agenttalk", "python  -m agenttalk", "python -m agenttalk"]
+)
+def test_every_spelling_of_the_plain_module_form_is_found_inline(tmp_path, kind, command) -> None:
+    assert pinned_findings(tmp_path, kind, f"Run `{command} lane workspace --id x`.\n")
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "devkit"])
+def test_the_plain_form_is_found_in_prose_too(tmp_path, kind) -> None:
+    assert pinned_findings(tmp_path, kind, "Then run python -m agenttalk lane workspace --id x yourself.\n")
+
+
+@pytest.mark.parametrize("command", SPELLINGS, ids=[f"s{i}" for i in range(len(SPELLINGS))])
+def test_every_spelling_is_clean_in_a_codex_or_devkit_skill_that_states_the_rule(tmp_path, command) -> None:
+    for kind in ("codex", "devkit"):
+        assert pinned_findings(tmp_path / kind, kind, RULE + f"```bash\n{command}\n```\n") == []
+        assert pinned_findings(tmp_path / (kind + "2"), kind, CODEX_RULE + f"```bash\n{command}\n```\n") == []
+
+
+@pytest.mark.parametrize(
+    "not_a_command", ["agenttalk-send", "/agenttalk.lead", "copy -m agenttalk", "python -m agenttalkish"]
+)
+def test_names_that_only_look_like_the_form_are_not_flagged(tmp_path, not_a_command) -> None:
+    assert pinned_findings(tmp_path, "claude", f"Use `{not_a_command}` here.\n") == []
+
+
+# ------------------------------------------------------------------------------ the ignore comments follow the scanner
+
+
+@pytest.mark.parametrize("gap", ["", "\n", "```bash\n"], ids=["next-line", "blank-line", "opening-fence"])
+def test_ignore_next_holds_over_a_blank_line_and_an_opening_fence(tmp_path, gap) -> None:
+    body = "<!-- agenttalk-skill-lint: ignore-next -->\n" + gap + "`python -m agenttalk lane workspace --id x`\n"
+    if gap.startswith("```"):
+        body += "```\n"
+    spans, dangling = sc._command_spans(body)  # the scanner the CLI-token lint uses: the same boundaries
+    assert spans == [] and dangling == []
+    assert pinned_findings(tmp_path, "claude", body) == []
+
+
+def test_ignore_next_covers_only_the_one_command_after_it(tmp_path) -> None:
+    body = "<!-- agenttalk-skill-lint: ignore-next -->\n\n`python -m agenttalk x`\n`python -m agenttalk y`\n"
+    assert [f.line for f in pinned_findings(tmp_path, "claude", body)] == [len(FRONT.splitlines()) + 4]
+
+
+# ------------------------------------------------------------------------------ what counts as stating the rule
+
+
+@pytest.mark.parametrize("kind", ["codex", "devkit"])
+@pytest.mark.parametrize(
+    "mention",
+    [
+        "<!-- AGENTTALK_PY -->",
+        "<!-- when `AGENTTALK_PY` is set use it; otherwise not -->",
+        "The variable NOT_AGENTTALK_PY is unrelated.",
+        "AGENTTALK_PY_OTHER is unrelated; otherwise nothing.",
+        "Set AGENTTALK_PY first.",
+        "Use `AGENTTALK_PY` when you can.",
+        "When `AGENTTALK_PY` is set, use it.",
+        "if you like: `AGENTTALK_PY` (is set elsewhere), otherwise whatever",
+        "When `NOT_AGENTTALK_PY` is set, use it; otherwise stop.",
+        "When `AGENTTALK_PY_OTHER` is set, use it; otherwise stop.",
+        "The variable AGENTTALK_PY is set by the wrapper; otherwise nothing.",
+    ],
+    ids=[
+        "comment",
+        "comment-with-the-rule",
+        "other-name",
+        "longer-name",
+        "imperative",
+        "mention",
+        "no-fallback",
+        "loose",
+        "prefixed-name-in-a-rule",
+        "suffixed-name-in-a-rule",
+        "a-statement-not-a-condition",
+    ],
+)
+def test_a_mention_a_comment_or_half_a_rule_does_not_state_the_rule(tmp_path, kind, mention) -> None:
+    body = mention + "\nRun `python -m agenttalk lane workspace --id x`.\n"
+    assert pinned_findings(tmp_path, kind, body)
+
+
+@pytest.mark.parametrize("kind", ["codex", "devkit"])
+def test_the_rule_must_sit_near_its_fallback(tmp_path, kind) -> None:
+    far = "When `AGENTTALK_PY` is set, use it.\n" + "filler line.\n" * 80 + "Otherwise something unrelated.\n"
+    assert pinned_findings(tmp_path, kind, far + "Run `python -m agenttalk x`.\n")
+
+
+def test_the_rule_in_either_bundled_wording_is_recognised() -> None:
+    assert sc._states_pinned_rule(RULE) and sc._states_pinned_rule(CODEX_RULE)
+    assert not sc._states_pinned_rule("<!-- " + RULE + " -->")
+    assert not sc._states_pinned_rule("")
