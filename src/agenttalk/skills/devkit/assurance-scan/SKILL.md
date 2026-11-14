@@ -21,7 +21,8 @@ GO/HOLD, never auto-installs tools, and never enables network checks by default.
 The gate, close, release-readiness, or human reviewer consumes the artifact and
 owns policy.
 
-Run the package module:
+Run the package module. When `AGENTTALK_PY` is set (the seat's pinned runtime), run it as
+`"$AGENTTALK_PY" -m agenttalk.assurance ...`; otherwise as written below:
 
 ```text
 python -m agenttalk.assurance --root . --profile change --out .agenttalk/assurance/runs

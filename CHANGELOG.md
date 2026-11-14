@@ -10,6 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The coding skills now say to use the seat's pinned runtime when there is one.**
+  The craft-code, refactor-code, fix-ci and assurance-scan skills said to run
+  `python -m agenttalk ...`, which runs whichever Python is first on the path. Each now states
+  one rule: run agenttalk commands with `"$AGENTTALK_PY" -m agenttalk` when `AGENTTALK_PY` is
+  set, and otherwise use the form your project's agent manual gives (`python -m agenttalk`
+  under Codex, `agenttalk` elsewhere). The Claude lead skill's two lane lines use the plain
+  `agenttalk` it uses everywhere else. A reader without a pinned runtime sees no change. This
+  is wording only: a command form cannot say which release a runtime is, so nothing here
+  changes the version that runs.
+- **The skill lint now checks the rule.** A plain `python -m agenttalk` is flagged in a Claude
+  skill, and in a Codex or devkit skill unless that skill states the rule (names
+  `AGENTTALK_PY`).
+
 ### Fixed
 
 - **Running doctor in a folder that is not set up leaves it untouched (#769).**

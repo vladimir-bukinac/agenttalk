@@ -13,6 +13,9 @@ lead-loop/relay refresh exposed). This module adds a DETERMINISTIC source-conten
     warns (patch-lag does not), forcing periodic re-read.
   * frontmatter well-formedness - required fields present (name/description/reviewed-against
     + category/evidence-profile for devkit).
+  * pinned-runtime rule - a plain ``python -m agenttalk`` is flagged in a Claude skill (whose own
+    form is the bare ``agenttalk``), and in a Codex or devkit skill unless that skill states the
+    rule by naming ``AGENTTALK_PY`` (use ``"$AGENTTALK_PY" -m agenttalk`` when it is set).
 
 It is MECHANICAL: it proves referenced commands/flags EXIST and metadata is present. It does
 NOT prove the surrounding prose is semantically correct (that stays a human review job). The
@@ -31,6 +34,10 @@ from pathlib import Path
 _PLACEHOLDER_RE = re.compile(r"^(<.*>|REPLACE:.*|[A-Z][A-Z0-9_]{1,}|\.{3}|\$\{.*\}|%.*%)$")
 _IGNORE_NEXT = "agenttalk-skill-lint: ignore-next"
 _IGNORE_LINE = "agenttalk-skill-lint: ignore-line"
+# The plain module form (also `python -m agenttalk.assurance`), and the variable that names the seat's pinned runtime.
+_PLAIN_PYTHON_RE = re.compile(r"python -m agenttalk\b")
+_PIN_VARIABLE = "AGENTTALK_PY"
+_PLAIN_PYTHON_FORM = "python -m agenttalk"
 
 
 @dataclass(frozen=True)
@@ -316,6 +323,34 @@ def current_major_minor(version: str) -> tuple[int, int]:
 
 # --------------------------------------------------------------------------- per-file
 
+def _pinned_runtime_findings(rel: str, text: str, kind: str) -> list[Finding]:
+    """The pinned-runtime rule. A Claude skill uses the bare ``agenttalk``, so a plain ``python -m agenttalk`` is
+    flagged on every line it appears. A Codex or devkit skill may use it only when it states the rule, which it does by
+    naming ``AGENTTALK_PY``; otherwise one finding for the file, at the first such line. A line can opt out with the
+    same ignore comments the CLI-token lint honours. This checks what the skills SAY; it cannot make any agenttalk
+    newer or prove which release a runtime is."""
+    if kind not in {"claude", "codex", "devkit"}:
+        return []
+    hits: list[int] = []
+    skip_next = False
+    for number, line in enumerate(text.splitlines(), start=1):
+        skipped = skip_next or _IGNORE_LINE in line
+        skip_next = _IGNORE_NEXT in line
+        if not skipped and _PLAIN_PYTHON_RE.search(line):
+            hits.append(number)
+    if not hits:
+        return []
+    if kind == "claude":
+        return [Finding(rel, n, _PLAIN_PYTHON_FORM,
+                        "plain `python -m agenttalk` in a Claude skill: use the bare `agenttalk` form this skill "
+                        "family uses (the seat's shim resolves its pinned runtime)") for n in hits]
+    if _PIN_VARIABLE in text:
+        return []
+    return [Finding(rel, hits[0], _PLAIN_PYTHON_FORM,
+                    "plain `python -m agenttalk` without the pinned-runtime rule: say once that agenttalk commands run "
+                    f'as `"$AGENTTALK_PY" -m agenttalk` when {_PIN_VARIABLE} is set, and what to use otherwise')]
+
+
 _DEVKIT_CATEGORIES = {"coordination", "production", "assurance", "reference"}
 
 
@@ -492,6 +527,7 @@ def check_skill_file(path: Path, *, kind: str, inventory: _Node,
     for line_no, tail in spans:
         for reason in _validate_command(tail, inventory):
             findings.append(Finding(rel, line_no, "agenttalk", reason))
+    findings.extend(_pinned_runtime_findings(rel, text, kind))
     return findings
 
 

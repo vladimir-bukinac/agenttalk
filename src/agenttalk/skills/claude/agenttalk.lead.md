@@ -477,10 +477,10 @@ the agents you plan.
    carries those texts itself. Settle a known conflict between a protection and a
    stated contract in the brief, before the build, instead of leaving the builder to
    choose.
-   For implementation lanes, run `python -m agenttalk lane assign ...` first; it
+   For implementation lanes, run `agenttalk lane assign ...` first; it
    provisions the isolated worktree by default. Include `--meta lane_id=<id>` in
    the work request so the worker can resolve
-   `python -m agenttalk lane workspace --id <id>`.
+   `agenttalk lane workspace --id <id>`.
    Prefer point-to-point work requests for owned implementation,
    dispatched as a typed task per the Work-item protocol above:
    ```powershell
