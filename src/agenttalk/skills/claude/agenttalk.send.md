@@ -75,10 +75,11 @@ cross-reviewed via `/agenttalk.handoff`.
    # $body holds the message text
    [System.IO.File]::WriteAllText($BODYFILE, $body, [System.Text.UTF8Encoding]::new($false))
    ```
-   Do **not** pipe the body into `--file -`. On Windows the CLI reads piped text
-   in the Windows code page (such as cp1252), not UTF-8, so accented letters, an em dash or
-   Japanese text come out garbled and nothing warns you. A file given by path
-   is read as UTF-8 and arrives exactly.
+   Do **not** pipe the body into `--file -`. When standard input uses the Windows code page
+   (such as cp1252, the usual case on Windows), piped text is read in that code page, not
+   UTF-8, so accented letters, an em dash or Japanese text come out garbled and nothing warns
+   you. A UTF-8 standard input is exact, but a file given by path is read as UTF-8 on every
+   setup.
    For point-to-point, send:
    ```powershell
    $TARGET = "<agent-name-or-$PEER>"

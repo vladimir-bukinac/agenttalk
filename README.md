@@ -1869,8 +1869,10 @@ not remove the per-user items above.
   file and pass `--file <path>` for `send`, `reply`, `propose`, and
   `broadcast` bodies. Do not pipe text that has non-ASCII characters
   (accented letters, an em dash, Japanese text) into `--file -` on
-  Windows: it is read in the Windows code page instead of UTF-8 and is
-  stored garbled, with no warning. A file given by path is read as UTF-8.
+  Windows: when standard input uses the Windows code page (the usual case)
+  it is read in that code page instead of UTF-8 and is stored garbled, with
+  no warning. A UTF-8 standard input is exact; a file given by path is read
+  as UTF-8 on every setup.
 - Supervised agents launch hidden by default on Windows so an
   unattended fleet doesn't open one console per agent. Set
   `"window_style": "minimized"` or `"normal"` in `supervisor.json`

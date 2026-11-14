@@ -15,6 +15,8 @@ The tests read the shipped files as text; they need no network and no store.
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -166,7 +168,7 @@ ROUND3 = [
         "test-security/SKILL.md",
     )
 ]
-STAMPED = [*SEND, *LISTEN, *LEAD, EVIDENCE, HOLDER, *BATCH2, *ROUND3]
+STAMPED = [*SEND, *LISTEN, LEAD[1], EVIDENCE, HOLDER, *BATCH2, *ROUND3]  # LEAD[0], the Claude one, waits for B4-1
 
 
 @pytest.mark.parametrize("path", STAMPED, ids=ids(STAMPED))
@@ -356,7 +358,7 @@ NOT_STAMPED_YET = [
         "fix-ci/SKILL.md",
         "assurance-scan/SKILL.md",
     )
-] + [*HANDOFF, PROPOSE[1]]  # the Claude propose skill already carried 0.105 from an earlier round
+] + [*HANDOFF, PROPOSE[1], LEAD[0]]  # the Claude propose skill carried 0.105 from an earlier round
 
 
 @pytest.mark.parametrize("path", NOT_STAMPED_YET, ids=ids(NOT_STAMPED_YET))
@@ -366,3 +368,54 @@ def test_files_with_an_open_finding_or_not_yet_read_again_keep_their_old_stamp(p
 
 def test_the_security_reference_without_a_stamp_field_did_not_get_one() -> None:
     assert "reviewed-against" not in read(DEVKIT_DIR / "review-code" / "references" / "security.md")
+
+
+# ------------------------------------------------------------------------------ round 4
+
+CONDITIONAL_WARNING = "standard input uses the Windows code page"
+
+
+@pytest.mark.parametrize("path", SEND, ids=ids(SEND))
+def test_the_powershell_body_file_block_sets_the_path_before_it_writes(path: Path) -> None:
+    blocks = [b for b in re.findall(r"```powershell\n(.*?)```", read(path), re.S) if "WriteAllText" in b]
+    assert len(blocks) == 1, blocks
+    block = blocks[0]
+    assert re.search(r'^\s*\$BODYFILE\s*=\s*"', block, re.M), block
+    assert block.index("$BODYFILE =") < block.index("WriteAllText")
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="PowerShell 7 is not installed")
+@pytest.mark.parametrize("path", SEND, ids=ids(SEND))
+def test_the_powershell_body_file_block_really_writes_a_utf8_file_without_a_bom(path: Path, tmp_path: Path) -> None:
+    """The block as documented, run in a fresh `pwsh -NoProfile`: only the path and the body are filled in."""
+    block = next(b for b in re.findall(r"```powershell\n(.*?)```", read(path), re.S) if "WriteAllText" in b)
+    target = tmp_path / "body.txt"
+    block = block.replace("<full path of the body file>", str(target))
+    body = '$body = "caf" + [char]0xE9 + " " + [char]0x2014 + " " + [char]0x65E5 + [char]0x672C'
+    done = subprocess.run(
+        ["pwsh", "-NoProfile", "-NonInteractive", "-Command", body + "\n" + block],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert done.returncode == 0, done.stderr
+    assert target.read_bytes() == "café — 日本".encode("utf-8")  # UTF-8, no BOM, no added newline
+
+
+@pytest.mark.parametrize("path", [*SEND, README], ids=ids([*SEND, README]))
+def test_the_windows_warning_says_when_it_happens_and_that_a_utf8_stdin_is_exact(path: Path) -> None:
+    text = flat(path)
+    assert CONDITIONAL_WARNING in text
+    assert "A UTF-8 standard input is exact" in text
+    assert "On Windows the CLI reads piped text" not in text
+
+
+def test_the_changelog_warning_says_when_it_happens() -> None:
+    assert CONDITIONAL_WARNING in " ".join(read(ROOT / "CHANGELOG.md").split())
+
+
+def test_the_claude_lead_skill_keeps_its_old_stamp_until_the_plain_python_lines_are_fixed() -> None:
+    text = read(LEAD[0])
+    assert re.search(r'^reviewed-against: "0\.75"$', text, re.MULTILINE)
+    assert "python -m agenttalk lane workspace --id" in text  # the B4-1 line that is still open
+    assert "The Claude lead skill also keeps its older stamp" in " ".join(read(ROOT / "CHANGELOG.md").split())

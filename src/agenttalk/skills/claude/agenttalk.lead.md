@@ -1,6 +1,6 @@
 ---
 description: Coordinate a named multi-agent team over agenttalk as a lead. Use when Claude should decompose work, dispatch to named agents or groups, track replies with threads, and report back without starting a teammate's assistant directly.
-reviewed-against: "0.105"
+reviewed-against: "0.75"
 ---
 
 # /agenttalk.lead - Coordinate a named team

@@ -17,8 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that could mislead an agent, and a few smaller slips. All are fixed in both the Claude and
   the Codex copies. The code is not changed.
   - **Messages with accented letters could be stored garbled.** The send skills told agents
-    to pipe the text into `--file -`. On Windows that text is read in the Windows code page
-    instead of UTF-8, so "ünïcødé" was stored as "Ã¼nÃ¯cÃ¸dÃ©", with no warning. The send
+    to pipe the text into `--file -`. When standard input uses the Windows code page (the
+    usual case on Windows), that text is read in it instead of UTF-8, so "ünïcødé" was stored as "Ã¼nÃ¯cÃ¸dÃ©", with no warning. The send
     skills and the README now say: write the text to a UTF-8 file and pass `--file <path>`.
     The piped form itself is a separate fix in the code (#779).
   - **The listen skills overstated what the bus proves about a sender.** They called a
@@ -72,14 +72,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `schema_version` because the loader fills in `baseline_id` and `findings`. The refactor-code
     description now fits both assistants.
   - **Review stamps.** These now say `reviewed-against 0.105` because the review read them in
-    full: the send, listen and lead skills for each assistant, the shared devkit holder, the
+    full: the send and listen skills for each assistant, the Codex lead skill, the shared devkit holder, the
     evidence reference, the Claude challenge, consult, propose and overview skills, the devkit
     review-code skill, and (from the later reads) the devkit migration, plain-language,
     write-for-humans, write-docs, thinking-games, test-docs, qa-strategy, tester-qa,
     test-coverage, test-integration, test-performance and test-security files. Every other file
     keeps its older stamp, including the two handoff skills, the Codex propose skill, craft-code,
     refactor-code, fix-ci and the assurance-scan files, which have an open finding or have not been
-    read again since a fix.
+    read again since a fix. The Claude lead skill also keeps its older stamp: two of its lines still
+    name a plain `python -m agenttalk`, which the next change fixes and then stamps.
 
 ## [0.105.0] - 2026-11-13
 
