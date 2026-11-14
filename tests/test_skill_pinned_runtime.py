@@ -287,3 +287,105 @@ def test_the_rule_in_either_bundled_wording_is_recognised() -> None:
     assert sc._states_pinned_rule(RULE) and sc._states_pinned_rule(CODEX_RULE)
     assert not sc._states_pinned_rule("<!-- " + RULE + " -->")
     assert not sc._states_pinned_rule("")
+
+
+# ------------------------------------------- more spellings of the interpreter (zteam reviewer-1, P3)
+
+MORE_SPELLINGS = [
+    "python.exe -m agenttalk lane workspace --id x",
+    "py -3.14 -m agenttalk lane workspace --id x",
+    "py -3 -u -m agenttalk lane workspace --id x",
+    "python -I -m agenttalk lane workspace --id x",
+    "python3.14 -m agenttalk lane workspace --id x",
+    '"python" -m agenttalk lane workspace --id x',
+    "'python' -m agenttalk lane workspace --id x",
+    "/usr/bin/python3 -m agenttalk lane workspace --id x",
+    "C:" + BACKSLASH + "Python314" + BACKSLASH + "python.exe -m agenttalk lane workspace --id x",
+]
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "devkit"])
+@pytest.mark.parametrize("command", MORE_SPELLINGS, ids=[f"m{i}" for i in range(len(MORE_SPELLINGS))])
+def test_the_extra_interpreter_spellings_are_found_in_a_fenced_block_and_inline(tmp_path, kind, command) -> None:
+    assert pinned_findings(tmp_path / "fence", kind, f"```bash\n{command}\n```\n")
+    assert pinned_findings(tmp_path / "inline", kind, f"Run `{command}` first.\n")
+
+
+@pytest.mark.parametrize("command", MORE_SPELLINGS, ids=[f"m{i}" for i in range(len(MORE_SPELLINGS))])
+def test_the_extra_interpreter_spellings_are_clean_in_a_codex_or_devkit_skill_that_states_the_rule(
+    tmp_path, command
+) -> None:
+    for kind in ("codex", "devkit"):
+        assert pinned_findings(tmp_path / kind, kind, RULE + f"```bash\n{command}\n```\n") == []
+
+
+@pytest.mark.parametrize("kind", ["claude", "codex", "devkit"])
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python -m pytest tests/test_x.py",
+        "python -m build",
+        "py -3 -m venv .venv",
+        "pytest -m agenttalk",
+        "pypy3 -m pytest",
+        "python -m agenttalk_other",
+        '"$AGENTTALK_PY" -m agenttalk lane workspace --id x',
+        "agenttalk lane workspace --id x",
+    ],
+)
+def test_nothing_else_is_taken_for_the_plain_form(tmp_path, kind, command) -> None:
+    assert pinned_findings(tmp_path, kind, f"```bash\n{command}\n```\n") == []
+
+
+# --------------------------------------------- the rule, wrapped at a line end (zteam reviewer-1, P2)
+
+WRAPPED_RULES = {
+    "when-then-newline": (
+        'Run agenttalk with the pinned runtime. When\nAGENTTALK_PY is set, use `"$AGENTTALK_PY" -m agenttalk`;\n'
+        "otherwise use the form your project's agent manual gives.\n"
+    ),
+    "if-then-newline-and-backticks": (
+        'If\n`AGENTTALK_PY` is set, use `"$AGENTTALK_PY" -m agenttalk`; otherwise use the form your manual gives.\n'
+    ),
+    "wrapped-inside-the-condition": (
+        'Run agenttalk commands with `"$AGENTTALK_PY" -m agenttalk` when\n  `AGENTTALK_PY`\nis\nset '
+        "(the seat's pinned runtime); otherwise use the form your manual gives.\n"
+    ),
+    "wrapped-before-otherwise": (
+        'When `AGENTTALK_PY` is set, use `"$AGENTTALK_PY" -m agenttalk`,\nand when it is not set use the\n'
+        "form your manual gives.\n"
+    ),
+}
+
+
+@pytest.mark.parametrize("kind", ["codex", "devkit"])
+@pytest.mark.parametrize("name", sorted(WRAPPED_RULES))
+def test_a_rule_wrapped_at_a_line_end_still_counts_as_the_rule(tmp_path, kind, name) -> None:
+    body = WRAPPED_RULES[name] + "\n```bash\npython -m agenttalk lane workspace --id x\n```\n"
+    assert pinned_findings(tmp_path, kind, body) == []
+    assert sc._states_pinned_rule(body)
+
+
+@pytest.mark.parametrize("kind", ["codex", "devkit"])
+def test_a_wrapped_mention_that_is_not_the_rule_is_still_flagged(tmp_path, kind) -> None:
+    body = (
+        "The variable\nAGENTTALK_PY is set by the wrapper.\n\n```bash\npython -m agenttalk lane workspace --id x\n```\n"
+    )
+    assert pinned_findings(tmp_path, kind, body)
+    assert not sc._states_pinned_rule(body)
+    far = "When the seat starts" + "\n" * 3 + "x" * 80 + " AGENTTALK_PY is set, otherwise ...\n"
+    assert not sc._states_pinned_rule(far)  # the condition must be close to the variable
+
+
+# ------------------------------------------- the merge with the skill-fix branch (zteam reviewer-1, P2)
+
+
+def test_assurance_scan_keeps_the_release_build_exception_before_the_pinned_sentence() -> None:
+    """The skill-fix branch's release-build / network exception comes first, then the pinned-module sentence, then the
+    module examples, which keep the module form."""
+    text = " ".join((SKILLS / "devkit" / "assurance-scan" / "SKILL.md").read_text(encoding="utf-8").split())
+    exception = text.index("One exception to know about: the `release` profile's built-in `python-build` step")
+    pinned = text.index("Run the package module. When `AGENTTALK_PY` is set (the seat's pinned runtime)")
+    example = text.index("python -m agenttalk.assurance --root . --profile change")
+    assert exception < pinned < example
+    assert text.count("Run the package module.") == 1  # the two branches' sentences were joined, not both kept

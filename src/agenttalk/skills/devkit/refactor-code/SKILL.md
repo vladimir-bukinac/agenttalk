@@ -4,7 +4,7 @@ description: >-
   Restructure existing production code while preserving behavior: simplify
   boundaries, reduce duplication, improve names/layout, extract or inline
   abstractions, and make code easier to maintain without changing the observable
-  contract. Use when Codex is asked for behavior-preserving cleanup, internal
+  contract. Use when an agent is asked for behavior-preserving cleanup, internal
   restructuring, simplification, or refactoring after scope is clear. Do NOT use
   for feature work, bug fixes or product changes that alter behavior (use
   craft-code), writing tests directly as the primary task (use test-coverage),

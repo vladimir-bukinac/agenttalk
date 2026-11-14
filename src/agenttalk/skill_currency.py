@@ -35,15 +35,23 @@ from pathlib import Path
 _PLACEHOLDER_RE = re.compile(r"^(<.*>|REPLACE:.*|[A-Z][A-Z0-9_]{1,}|\.{3}|\$\{.*\}|%.*%)$")
 _IGNORE_NEXT = "agenttalk-skill-lint: ignore-next"
 _IGNORE_LINE = "agenttalk-skill-lint: ignore-line"
-# The plain module form in any spelling of the interpreter and the spaces (`python`, `python3`, `py`; also
-# `python -m agenttalk.assurance`). A shell continuation is joined before this is applied, so it is one command here.
-_PLAIN_PYTHON_RE = re.compile(r"(?:^|[\s(;&|])(?:python3?|py)\s+-m\s+agenttalk(?![\w-])")
+# The plain module form in any spelling of the interpreter and the spaces (`python`, `python3`, `python3.14`,
+# `python.exe`, `py`, `py.exe`, a quoted name, a path ending in the name; also `python -m agenttalk.assurance`), with
+# flags that take no value between the interpreter and `-m` (`py -3.14`, `python -I`). A shell continuation is joined
+# before this is applied, so it is one command here. Known limit: a flag WITH a separate value (`python -X utf8 -m
+# agenttalk`, `python -W ignore -m agenttalk`) and an interpreter under another name are not recognised.
+_PLAIN_PYTHON_RE = re.compile(
+    r"""(?:^|[\s(;&|"'\\/])"""
+    r"""(?:python[\d.]*(?:\.exe)?|py(?:\.exe)?)["']?"""
+    r"""(?:\s+-(?!m\s)[\w.-]+)*"""
+    r"""\s+-m\s+agenttalk(?![\w-])"""
+)
 _PLAIN_PYTHON_FORM = "python -m agenttalk"
 # The pinned-runtime RULE, as the skills state it: a condition on AGENTTALK_PY being set, followed by what to do
-# otherwise, close by (the Codex wording spans a fenced example). The name inside a comment, as part of a longer name,
-# or as a bare mention is not the rule.
+# otherwise, close by (the Codex wording spans a fenced example). The condition may wrap at a line end, and the name
+# may sit in backticks. The name inside a comment, as part of a longer name, or as a bare mention is not the rule.
 _RULE_RE = re.compile(
-    r"\b(?:if|when)\b[^.\n]{0,60}?(?<![\w])AGENTTALK_PY(?![\w])`?\s+is\s+set"
+    r"\b(?:if|when)\b[^.]{0,60}?(?<![\w])AGENTTALK_PY(?![\w])`?\s+is\s+set"
     r"[\s\S]{0,600}?(?:\botherwise\b|\bis\s+not\s+set\b|\bfall(?:s)?\s*back\b)",
     re.IGNORECASE,
 )

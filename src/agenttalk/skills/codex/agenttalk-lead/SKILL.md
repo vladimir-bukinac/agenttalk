@@ -1,7 +1,7 @@
 ---
 name: agenttalk-lead
 description: Coordinate a named multi-agent team over agenttalk as a lead. Use when Codex should decompose work, dispatch to named agents or groups, track replies with threads, and report back without starting a teammate's assistant directly.
-reviewed-against: "0.75"
+reviewed-against: "0.105"
 ---
 
 # agenttalk-lead - Coordinate a named team (codex side)
@@ -482,23 +482,25 @@ the agents you plan.
      --meta work_item=<slug> \
      --meta stage=<stage> \
      --meta lane_id=<lane-id> \
-     -m "<goal, scope, verification, expected reply>"
+     --file "<brief-file>"
    ```
+   `<brief-file>` is a UTF-8 text file you wrote first (see `$agenttalk-send`, step 3). Use a file for a
+   body that has quotes in it, and do not pipe it into `--file -`.
    Ask for the reply in this form. A task response needs a closing `status`
    next to its `verdict`; without one, the task can stay open:
    ```bash
-   python -m agenttalk reply --to-request <request_id> --kind task-response \
-     --meta status=done --meta verdict=<verdict> -m "<result>"
+   python -m agenttalk reply --from "$SELF" --to-request <request_id> --kind task-response \
+     --meta status=done --meta verdict=<verdict> --file "<result-file>"
    ```
 5. Use broadcast for shared awareness or parallel input:
    ```bash
    python -m agenttalk broadcast --from "$SELF" --to-group <group> --kind question \
      --subject "<decision/input needed>" \
-     -m "<what each recipient should answer>"
+     --file "<question-file>"
    ```
    Broadcast fan-out creates one message per recipient with the same
    `request_id` / `broadcast_id`. Recipients reply to you with
-   `python -m agenttalk reply --to-request <b-id>`. There is no special
+   `python -m agenttalk reply --from "$SELF" --to-request <b-id>`. There is no special
    reply-all primitive in this pass; a follow-up to everyone is a new
    `python -m agenttalk broadcast`.
 6. Track open work:
@@ -514,7 +516,7 @@ the agents you plan.
    python -m agenttalk wait --for "$SELF" --to-request <request_id>
    ```
    If a worker is unsure where a reply will route, tell them to run
-   `python -m agenttalk reply --to-request <request_id> --dry-run` first; dry-run
+   `python -m agenttalk reply --from "$SELF" --to-request <request_id> --dry-run` first; dry-run
    prints the recipient, request id, and kind without sending.
 7. Collect results, request cross-review for implemented pieces, and
    summarize the outcome to the user with unresolved blockers called
@@ -798,12 +800,15 @@ lead publishes on its behalf. Three failures live in that one step, and the
 first two are silent.
 
 1. **Require a clean-SHA handoff.** The worker's reply must carry the final
-   full SHA and an empty `git status --porcelain` for its worktree. Pushing a
+   full SHA and an empty `git status --porcelain --untracked-files=all` for its
+   worktree (`--untracked-files=all` is needed because a git setting,
+   `status.showUntrackedFiles=no`, makes plain `git status --porcelain` hide new
+   files). Pushing a
    branch publishes the committed HEAD, never uncommitted edits — so a dirty
    worktree publishes a tree nobody tested.
    ```bash
-   git -C <worktree> status --porcelain     # must be empty
-   git -C <worktree> log -1 --format=%H     # must equal the reported SHA
+   git -C "<worktree>" status --porcelain --untracked-files=all     # must be empty
+   git -C "<worktree>" log -1 --format=%H     # must equal the reported SHA
    ```
 
 2. **Never let the current directory choose which commit is pushed.** This is
@@ -819,7 +824,7 @@ first two are silent.
    ```bash
    git push origin <full-sha>:refs/heads/<branch>
    ```
-   `git -C <worktree> push origin HEAD:<branch>` also works. Prefer the
+   `git -C "<worktree>" push origin HEAD:<branch>` also works. Prefer the
    explicit SHA.
 
    **`--force-with-lease` does not protect you here.** The lease asserts what
