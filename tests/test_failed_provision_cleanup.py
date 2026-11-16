@@ -739,6 +739,8 @@ def test_assignment_add_timeout_keeps_checkout_and_branch(tmp_path, monkeypatch,
             if state["registered"]:
                 listing += f"worktree {target.as_posix()}\0branch refs/heads/lane/slow\0\0"
             return 0, listing
+        if argv == ["config", "--bool", "--get", "core.ignoreStat"]:
+            return 1, ""
         assert argv == ["rev-parse", "--verify", "refs/heads/lane/slow^{commit}"]
         return (0, "a" * 40) if state["branch"] else (1, "")
 
