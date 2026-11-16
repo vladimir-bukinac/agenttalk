@@ -51,6 +51,7 @@ def test_close_subfolder_refuses_hidden_work(subfolder_store, capsys, action, ca
         assert run_close(store, revision, "open")["revision_clean"] is True
     capsys.readouterr()
     relative = "outside.txt" if case.endswith("outside") else "sub/a.txt"
+    assert not case.endswith("outside") or not (root / relative).is_relative_to(store.root)
     option = "--skip-worktree" if case.startswith("skip") else "--assume-unchanged"
     git(root, "update-index", option, "--", relative)
     if case.startswith("assume"):

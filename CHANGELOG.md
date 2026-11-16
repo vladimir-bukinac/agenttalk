@@ -31,7 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Index checks accept legal Linux and macOS filenames containing colons or starting with backslashes (#808).
+- **Index checks now handle drive-like names on Linux and macOS (#808).**
+  A checkout with a file or folder named like a Windows drive (`C:`), or starting
+  with a backslash, is now checked normally. Before, close and cleanup said they
+  could not check it and kept the checkout. When Git cannot name the top folder,
+  the help now says "Folder checked:".
 
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup
   and the scratch janitor keep checkouts when Git could be hiding tracked work,
