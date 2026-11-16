@@ -21,13 +21,13 @@ def test_templates_disable_automatic_maintenance(request, template_name):
 
 def test_templates_disable_maintenance_before_any_commit(tmp_path_factory, monkeypatch):
     import conftest
+
     original = subprocess.check_output
     commits = []
 
     def checked(args, *a, **kw):
         if args[3] == "commit":
-            for key, expected in (("gc.auto", b"0"), ("maintenance.auto", b"false"),
-                                  ("gc.autoDetach", b"false")):
+            for key, expected in (("gc.auto", b"0"), ("maintenance.auto", b"false"), ("gc.autoDetach", b"false")):
                 assert original(args[:3] + ["config", "--get", key]).strip() == expected
             commits.append(args)
         return original(args, *a, **kw)
@@ -42,6 +42,7 @@ def test_templates_disable_maintenance_before_any_commit(tmp_path_factory, monke
 def test_cli_metadata_scope_is_limited_to_close(monkeypatch, cmd, expected_reads):
     from agenttalk import cli
     from agenttalk.acceptance_git import read_once
+
     reads = []
 
     def handler(args):
@@ -94,13 +95,20 @@ def test_command_reads_project_metadata_once_but_rechecks_live_state(case, monke
 
     def counted(args, *a, **kw):
         if args[:3] == ["git", "-C", str(case["project"])]:
-            calls.append(args[3:])
+            command = args[3:]
+            while command[:1] == ["-c"]:
+                command = command[2:]
+            calls.append(command)
+            if command[:1] == ["ls-files"]:
+                assert args[:3] == ["git", "-C", str(case["project"])]
+                assert not any(key.upper().startswith("GIT_") for key in kw["env"])
         return original(args, *a, **kw)
 
     monkeypatch.setattr(subprocess, "run", counted)
     assert open_attempt(case) == 0
     assert sum("--show-toplevel" in args for args in calls) == 1
     assert sum(args[0] == "status" for args in calls) == 2
+    assert sum(args[0] == "ls-files" for args in calls) == 2
     calls.clear()
     assert command(case, "check", "--id", "attempt", "--json") == 3
     assert sum("--show-toplevel" in args for args in calls) == 1
@@ -138,6 +146,7 @@ def test_project_revision_still_requires_one_verified_commit(case, revision):
 
 def test_project_read_scopes_reset_on_nested_calls_and_exceptions(case, monkeypatch):
     from agenttalk.acceptance_git import command_scope
+
     calls = []
     original = subprocess.run
 
@@ -177,6 +186,7 @@ def test_template_copy_keeps_objects_index_and_config_independent(case, acceptan
 
 def test_symbolic_revision_is_resolved_again_within_a_command(case):
     from agenttalk.acceptance_git import command_scope
+
     with command_scope():
         before = acceptance.verify_project(case["project"], "HEAD", live=False)
         (case["project"] / "source.txt").write_text("new revision\n", encoding="utf-8")

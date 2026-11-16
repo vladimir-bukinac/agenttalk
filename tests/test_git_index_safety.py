@@ -189,7 +189,7 @@ def test_status_visibility_arguments(tmp_path, monkeypatch):
 
 
 def test_unsafe_recovery_values_are_templates(tmp_path, monkeypatch):
-    monkeypatch.setattr(safety(), "_checkout_root", lambda folder: folder)
+    monkeypatch.setattr(safety(), "_checkout_root", lambda folder, **kwargs: folder)
     note = safety().inspection_guidance("folder\n; touch BAD")
     assert "not a ready command" in note and "<folder>" in note and "<file>" in note
     assert "\n;" not in note and "\n&" not in note

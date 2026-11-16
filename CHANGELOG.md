@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Lane and live acceptance checks refuse hidden tracked files and expose tracked submodule changes; acceptance also checks nested untracked files. Lane assignment and live acceptance refuse `core.ignoreStat` until it is disabled and the saved work is inspected. Ordinary sparse checkouts still work.
+
 - Index checks accept legal Linux and macOS filenames containing colons or starting with backslashes (#808).
 
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup

@@ -5014,11 +5014,16 @@ def _verify_lane_worktree(store, lane: dict, *, expected_base: str | None = None
         if head != branch_tip:
             raise lane_mod.LaneError("detached worktree HEAD is not at the lane branch tip")
         detached_at_lane_tip = True
-    rc, status = _git(wt, ["status", "--porcelain", "--untracked-files=no"])
+    rc, status = _git(toplevel, index_safety.status_args("no"))
     if rc != 0:
         raise lane_mod.LaneError(f"could not verify worktree tracked status (git rc={rc})")
     if status.strip():
         raise lane_mod.LaneError("worktree has staged/unstaged tracked changes")
+    inspection = index_safety.check_hidden_index_at_root(toplevel)
+    if inspection.state != "safe":
+        sys.stderr.write(index_safety.inspection_guidance(
+            toplevel, uncertain=inspection.state == "unverifiable") + "\n")
+        raise lane_mod.LaneError(f"worktree tracked state is not verified clean: {inspection.reason}")
     return {
         "head": head,
         "worktree_toplevel_canonical": toplevel_c,
@@ -6342,6 +6347,12 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 f"(known: {sorted((reg.data.get('domains') or {}))}).\n")
             return 2
         try:
+            if provision_worktree:
+                rc, ignore_stat = _git(store.root, ["config", "--bool", "--get", "core.ignoreStat"])
+                if rc not in {0, 1} or (rc == 0 and ignore_stat.strip() not in {"true", "false"}):
+                    raise lane_mod.LaneError("could not verify core.ignoreStat before creating a lane checkout")
+                if rc == 0 and ignore_stat.strip() == "true":
+                    raise lane_mod.LaneError(index_safety.IGNORE_STAT)
             base = _lane_resolve(store, args.base)
             target_head = _lane_resolve(store, args.target)
             prefixes = lane_mod.normalize_prefixes(args.path, casefold=False)
