@@ -44,20 +44,20 @@ def run_close(store, revision, action):
 
 
 @pytest.mark.parametrize("action", ["open", "reopen"])
-@pytest.mark.parametrize("case", ["assume-inside", "assume-outside", "skip-inside"])
+@pytest.mark.parametrize("case", ["assume-inside", "assume-outside", "skip-inside", "skip-outside"])
 def test_close_subfolder_refuses_hidden_work(subfolder_store, capsys, action, case):
     root, store, revision = subfolder_store
     if action == "reopen":
         assert run_close(store, revision, "open")["revision_clean"] is True
     capsys.readouterr()
-    relative = "outside.txt" if case == "assume-outside" else "sub/a.txt"
-    option = "--skip-worktree" if case == "skip-inside" else "--assume-unchanged"
+    relative = "outside.txt" if case.endswith("outside") else "sub/a.txt"
+    option = "--skip-worktree" if case.startswith("skip") else "--assume-unchanged"
     git(root, "update-index", option, "--", relative)
     if case.startswith("assume"):
         (root / relative).write_bytes(b"hidden edit\n")
     before = (root / relative).read_bytes()
     listing = git(root, "ls-files", "-v", "-z", "--full-name")
-    assert ("S " if case == "skip-inside" else "h ") + relative + "\0" in listing
+    assert ("S " if case.startswith("skip") else "h ") + relative + "\0" in listing
     assert git(store.root, *safety.STATUS_ARGS).strip() == ""
 
     record = run_close(store, revision, action)
@@ -112,5 +112,7 @@ def test_failed_top_level_resolution_records_false(subfolder_store, monkeypatch,
     assert run_close(store, revision, action)["revision_clean"] is False
     error = capsys.readouterr().err
     assert safety.UNKNOWN in error
+    assert "Folder checked:" in error
+    assert "Checkout folder:" not in error
     assert "--show-toplevel" in error
     assert "--no-assume-unchanged" not in error

@@ -31,6 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Index checks accept legal Linux and macOS filenames containing colons or starting with backslashes (#808).
+
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup
   and the scratch janitor keep checkouts when Git could be hiding tracked work,
   including unedited files marked assume-unchanged or present skipped files. Files

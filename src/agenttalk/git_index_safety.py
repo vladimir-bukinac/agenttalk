@@ -74,8 +74,9 @@ def _path(raw):
     if (
         os.fsencode(name) != raw
         or not name
-        or ntpath.splitdrive(name)[0]
-        or name.startswith(("/", "\\"))
+        or (os.name == "nt" and ntpath.splitdrive(name)[0])
+        or name.startswith("/")
+        or (os.name == "nt" and name.startswith("\\"))
         or (os.name == "nt" and ":" in name)
     ):
         raise ValueError("invalid index path")
@@ -164,9 +165,11 @@ def keep_reason(root) -> str | None:
 
 
 def inspection_guidance(folder, *, uncertain=False) -> str:
+    label = "Checkout folder"
     try:
         folder = _checkout_root(folder)
     except (OSError, ValueError, UnicodeError, subprocess.TimeoutExpired):
+        label = "Folder checked"
         templates = ["git -C {folder} rev-parse --show-toplevel"]
         uncertain = True
     else:
@@ -184,7 +187,7 @@ def inspection_guidance(folder, *, uncertain=False) -> str:
         lookup="use the full checkout path from this operation; select a file only after inspection",
     )
     text = (
-        f"Checkout folder: {pc.line(str(folder))}. First save or inspect the work. "
+        f"{label}: {pc.line(str(folder))}. First save or inspect the work. "
         "List the files: lowercase tags mean assume-unchanged, "
         "and S means skip-worktree. "
     )

@@ -69,7 +69,6 @@ def test_valid_listings(tmp_path, monkeypatch, listing):
         b"H \0",
         b"H /absolute\0",
         b"S ../escape\0",
-        b"S C:/outside\0",
         b"H file\0\0",
         b"HH file\0",
     ],
