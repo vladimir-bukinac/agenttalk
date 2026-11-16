@@ -69,7 +69,15 @@ def test_hidden_work_survives_all_lane_cleanup_routes(tmp_path, capsys, monkeypa
             _commit(wt, "src/core/a.py", "base\ndelivered\n")
         if action == "gc":
             _abandon_with_the_worktree_kept(root, lane_id)
-        file, data = _flagged(wt, flag)
+        planted = []
+        real_write = cli._git_write
+
+        def write(git_root, argv, **kwargs):
+            if argv[:2] == ["worktree", "remove"]:
+                planted.append(_flagged(wt, flag))
+            return real_write(git_root, argv, **kwargs)
+
+        monkeypatch.setattr(cli, "_git_write", write)
         if action == "gc":
             item = _gc_item(capsys, root, lane_id)
             assert item["worktree_removed"] is False and not item.get("branch_deleted")
@@ -85,6 +93,8 @@ def test_hidden_work_survives_all_lane_cleanup_routes(tmp_path, capsys, monkeypa
                 assert saved["status"] == lanes.STATUS_DELIVERED and saved["cleanup_pending"] is True
             else:
                 assert saved["status"] == lanes.STATUS_ABANDONED
+        assert len(planted) == 1, "must reach the final removal guard"
+        file, data = planted[0]
     assert wt.is_dir() and file.read_bytes() == data
     assert _lane_branch_present(root, lane_id)
     assert _safety().check_hidden_index(wt).state == "hidden"

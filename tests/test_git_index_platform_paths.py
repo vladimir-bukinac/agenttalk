@@ -20,14 +20,15 @@ def test_index_names_follow_platform(tmp_path, monkeypatch, name, platform, tag,
     monkeypatch.setattr(safety, "os", SimpleNamespace(name=platform, fsencode=os.fsencode, fsdecode=os.fsdecode))
     monkeypatch.setattr(safety, "Path", PureWindowsPath if platform == "nt" else PurePosixPath)
     monkeypatch.setattr(safety, "_checkout_root", lambda root: root)
-    monkeypatch.setattr(safety, "_records", lambda root, option: [tag + b" " + os.fsencode(name)])
-    assert safety.check_hidden_index(tmp_path).state == ("unverifiable" if platform == "nt" else state)
+    monkeypatch.setattr(safety, "_records", lambda root, option, **kwargs: [tag + b" " + os.fsencode(name)])
+    root = PureWindowsPath("C:/checkout") if platform == "nt" else PurePosixPath("/checkout")
+    assert safety.check_hidden_index(root).state == ("unverifiable" if platform == "nt" else state)
 
 
 @pytest.mark.parametrize("uncertain", [False, True])
 @pytest.mark.parametrize("resolved", [False, True])
 def test_guidance_labels_only_resolved_checkout(tmp_path, monkeypatch, uncertain, resolved):
-    def checkout(root):
+    def checkout(root, **kwargs):
         if not resolved:
             raise ValueError("lookup failed")
         return root

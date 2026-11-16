@@ -14,10 +14,11 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import stat
+import sys
 import subprocess  # nosec B404 - fixed Git argv lists; shell is never used
 import uuid
 
-from agenttalk import acceptance_git, close
+from agenttalk import acceptance_git, close, git_index_safety as index_safety
 from agenttalk.acceptance_schema import capabilities as schema
 
 MAX_BYTES = 1024 * 1024
@@ -286,12 +287,14 @@ def verify_project(repo, revision, *, live=True):
     # Ambient Git redirection must not let the bus checkout answer for the project.
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
 
-    def git(*args):
+    def git(*args, missing=False):
         try:
             result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,  # noqa: S603,S607  # nosec B603 B607
                                     text=True, encoding="utf-8", errors="replace", timeout=10, env=env)
         except (OSError, subprocess.TimeoutExpired) as exc:
             raise AcceptanceError("acceptance_project_unverified", "project Git unavailable") from exc
+        if missing and result.returncode == 1:
+            return ""
         if result.returncode:
             _fail("project Git verification failed", "acceptance_project_unverified")
         return result.stdout.strip()
@@ -323,13 +326,27 @@ def verify_project(repo, revision, *, live=True):
     project = acceptance_git.read_once(key, metadata) if _SHA.fullmatch(revision) else metadata()
     if live and (head if head is not None else git("rev-parse", "HEAD")) != project["revision"]:
         _fail("project HEAD must equal the verified SHA", "acceptance_project_unverified")
-    dirty = git("status", "--porcelain", "--untracked-files=all") if live else ""
+    if live:
+        ignore_stat = git("config", "--bool", "--get", "core.ignoreStat", missing=True)
+        if ignore_stat == "true":
+            sys.stderr.write(index_safety.IGNORE_STAT + "\n")
+            _fail(index_safety.IGNORE_STAT, "acceptance_project_unverified")
+        if ignore_stat not in {"", "false"}:
+            _fail("could not verify core.ignoreStat", "acceptance_project_unverified")
+    dirty = git(*index_safety.status_args("all")) if live else ""
     if dirty:
         lines = dirty.splitlines()
         details = "\n".join(lines[:20])
         if len(lines) > 20:
             details += f"\n... {len(lines) - 20} more entries"
         _fail(f"acceptance project checkout is dirty:\n{details}", "acceptance_project_unverified")
+    if live:
+        inspection = index_safety.check_hidden_index_at_root(repo, env=env)
+        if inspection.state != "safe":
+            sys.stderr.write(index_safety.inspection_guidance(
+                repo, uncertain=inspection.state == "unverifiable", env=env) + "\n")
+            _fail(f"acceptance project checkout is not verified clean: {inspection.reason}",
+                  "acceptance_project_unverified")
     return project
 
 

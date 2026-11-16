@@ -11,7 +11,7 @@ from test_git_index_safety import safety
 
 @pytest.mark.parametrize("folder", [r"C:\checkout folder\project", "/checkout folder/project"])
 def test_guidance_shows_plain_checkout_and_literal_file_placeholder(monkeypatch, folder):
-    monkeypatch.setattr(safety(), "_checkout_root", lambda root: folder)
+    monkeypatch.setattr(safety(), "_checkout_root", lambda root, **kwargs: folder)
 
     text = safety().inspection_guidance("nested/store")
 

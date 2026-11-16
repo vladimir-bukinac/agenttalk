@@ -19,6 +19,28 @@ SUBMODULE = (
     "yourself before retrying"
 )
 SUBMODULE_UNKNOWN = "could not check whether this checkout contains a materialized submodule"
+IGNORE_STAT = (
+    "core.ignoreStat is enabled: Git can skip checks on tracked files; save or inspect the work, "
+    "disable that setting and refresh the index before retrying"
+)
+
+
+def status_args(untracked="normal"):
+    """Fixed policies for tracked lanes, removals and complete acceptance checks."""
+    if untracked not in {"no", "normal", "all"}:
+        raise ValueError("unsupported untracked policy")
+    return [
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "core.untrackedCache=false",
+        "status",
+        "--porcelain",
+        f"--untracked-files={untracked}",
+        "--ignore-submodules=untracked" if untracked == "no" else "--ignore-submodules=none",
+    ]
+
+
 STATUS_ARGS = [
     "-c",
     "core.fsmonitor=false",
@@ -37,10 +59,10 @@ class Inspection:
     reason: str | None = None
 
 
-def _checkout_root(root):
+def _checkout_root(root, *, env=None):
     command = ["git", "-C", str(root), "rev-parse", "--show-toplevel"]
     # Fixed read-only Git command, with no shell or user-selected operation.
-    result = subprocess.run(command, capture_output=True, timeout=15)  # noqa: S603  # nosec B603
+    result = subprocess.run(command, capture_output=True, timeout=15, env=env)  # noqa: S603  # nosec B603
     if result.returncode != 0 or not isinstance(result.stdout, bytes) or not result.stdout.endswith(b"\n"):
         raise ValueError("checkout root read failed")
     raw = result.stdout[:-1]
@@ -51,13 +73,14 @@ def _checkout_root(root):
     return checkout
 
 
-def _records(root, option):
+def _records(root, option, *, env=None):
     command = ["git", "-C", str(root), "ls-files", "--cached", option, "-z", "--full-name"]
     # Fixed read-only Git command, with no shell or user-selected operation.
     result = subprocess.run(  # noqa: S603  # nosec B603
         command,
         capture_output=True,
         timeout=15,
+        env=env,
     )
     if result.returncode != 0 or not isinstance(result.stdout, bytes):
         raise ValueError("index read failed")
@@ -117,9 +140,23 @@ def _entry(root, relative):
 
 def check_hidden_index(root) -> Inspection:
     try:
-        root = _checkout_root(root)
+        return check_hidden_index_at_root(_checkout_root(root))
+    except (OSError, ValueError, UnicodeError, subprocess.TimeoutExpired):
+        return Inspection("unverifiable", UNKNOWN)
+
+
+def check_hidden_index_at_root(root, *, env=None) -> Inspection:
+    """Inspect an absolute checkout top level already verified by the caller.
+
+    This entry does not discover or authenticate a root. Acceptance verifies it
+    earlier in its command and rechecks live HEAD at every original boundary.
+    """
+    try:
+        root = Path(root)
+        if not root.is_absolute():
+            raise ValueError("relative checkout root")
         hidden = False
-        for record in _records(root, "-v"):
+        for record in _records(root, "-v", env=env):
             if len(record) < 3 or record[1:2] != b" " or record[:1] not in [bytes([c]) for c in b"HSMRCK?hsmrck"]:
                 raise ValueError("invalid index tag")
             tag, path = record[:1], _path(record[2:])
@@ -164,10 +201,10 @@ def keep_reason(root) -> str | None:
     return flags.reason or check_materialized_submodules(root).reason
 
 
-def inspection_guidance(folder, *, uncertain=False) -> str:
+def inspection_guidance(folder, *, uncertain=False, env=None) -> str:
     label = "Checkout folder"
     try:
-        folder = _checkout_root(folder)
+        folder = _checkout_root(folder, env=env)
     except (OSError, ValueError, UnicodeError, subprocess.TimeoutExpired):
         label = "Folder checked"
         templates = ["git -C {folder} rev-parse --show-toplevel"]

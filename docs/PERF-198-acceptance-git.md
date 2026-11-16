@@ -2,7 +2,13 @@
 
 Audience: maintainers evaluating the Windows acceptance-test cost in issue #198.
 
-The supplied 22-test sample used **927 Git processes instead of 1,576**, a
+In plain words: acceptance checks reuse facts about a commit during one command.
+They still check the current checkout each time a live decision needs it. The
+checks now also look for files Git may be hiding, so the old measurements below
+do not describe their current cost. Historical commit reads remain available
+without inspecting current files.
+
+The historical sample, before the #797 visibility checks, used **927 Git processes instead of 1,576**, a
 **41.2% reduction**. Median elapsed time fell from **96.15 s to 75.70 s** (21.3%).
 The requested 50% process-reduction target was **not reached**. These are local
 sample measurements, not a prediction of the complete Windows CI job time.
@@ -43,6 +49,12 @@ The batched queries preserve the original checks:
   and tree together. Both inputs are controlled at that point; a nonzero exit
   still fails, and HEAD must equal the verified commit. The separate status
   query retains `--porcelain --untracked-files=all` and the same dirty diagnostic.
+  Live checks now disable Git's filesystem-monitor and untracked caches and
+  explicitly show submodule changes. Each otherwise-clean live verification
+  also reads the index once to detect hidden tracked files; neither status nor
+  index visibility is cached. A fresh boolean `core.ignoreStat` read refuses
+  that setting before Git can silently skip tracked-file checks. The historical
+  measurements above do not include these additional reads.
 - Source-history queries retain `GIT_NO_REPLACE_OBJECTS=1`, complete-history
   checks, full-SHA validation and their existing return-code interpretation.
   The cache does not retain large diff/patch inputs; only the validated change
