@@ -332,3 +332,20 @@ def test_assignment_refuses_a_flag_planted_before_initial_verification(tmp_path,
     assert wt.is_dir() and file.read_bytes() == data
     assert _lane_branch_present(root, "initial-flag")
     assert "initial-flag" not in lanes.load_lanes(Store(root)).get("lanes", {})
+
+
+def test_acceptance_ignore_stat_refuses_before_status(tmp_path, monkeypatch):
+    root, base = _repo(tmp_path)
+    _git(root, "config", "core.ignoreStat", "true")
+    original = acceptance.subprocess.run
+
+    def run(argv, **kwargs):
+        if "status" in argv or "ls-files" in argv:
+            pytest.fail("ignoreStat must refuse before status or index inspection")
+        return original(argv, **kwargs)
+
+    monkeypatch.setattr(acceptance.subprocess, "run", run)
+    with pytest.raises(acceptance.AcceptanceError, match="core.ignoreStat") as error:
+        acceptance.verify_project(root, base)
+    assert error.value.code == "acceptance_project_unverified"
+    assert _git(root, "config", "--bool", "--get", "core.ignoreStat") == "true"

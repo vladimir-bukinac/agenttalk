@@ -6352,7 +6352,9 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 if rc not in {0, 1} or (rc == 0 and ignore_stat.strip() not in {"true", "false"}):
                     raise lane_mod.LaneError("could not verify core.ignoreStat before creating a lane checkout")
                 if rc == 0 and ignore_stat.strip() == "true":
-                    raise lane_mod.LaneError(index_safety.IGNORE_STAT)
+                    raise lane_mod.LaneError(
+                        "core.ignoreStat is enabled: turn core.ignoreStat off in the source repository, "
+                        "then assign again")
             base = _lane_resolve(store, args.base)
             target_head = _lane_resolve(store, args.target)
             prefixes = lane_mod.normalize_prefixes(args.path, casefold=False)

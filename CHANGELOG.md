@@ -37,7 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   could not check it and kept the checkout. When Git cannot name the top folder,
   the help now says "Folder checked:".
 
-- Lane and live acceptance checks refuse hidden tracked files and expose tracked submodule changes; acceptance also checks nested untracked files. Lane assignment and live acceptance refuse `core.ignoreStat` until it is disabled and the saved work is inspected. Ordinary sparse checkouts still work.
+- **Lane and acceptance checks catch files Git may hide (#797).**
+  Checks now refuse tracked files Git has been told to skip and detect changes
+  to tracked files in submodules. Acceptance also checks untracked files in
+  nested folders. Turn off `core.ignoreStat` before assigning a lane; for an
+  existing checkout, inspect and save the work before refreshing the index
+  and retrying acceptance. Ordinary sparse checkouts still work.
 
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup
   and the scratch janitor keep checkouts when Git could be hiding tracked work,

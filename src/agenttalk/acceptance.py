@@ -329,7 +329,6 @@ def verify_project(repo, revision, *, live=True):
     if live:
         ignore_stat = git("config", "--bool", "--get", "core.ignoreStat", missing=True)
         if ignore_stat == "true":
-            sys.stderr.write(index_safety.IGNORE_STAT + "\n")
             _fail(index_safety.IGNORE_STAT, "acceptance_project_unverified")
         if ignore_stat not in {"", "false"}:
             _fail("could not verify core.ignoreStat", "acceptance_project_unverified")

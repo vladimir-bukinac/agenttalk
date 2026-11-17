@@ -157,7 +157,7 @@ def test_acceptance_names_ignore_stat(project_reads, capsys):
     with pytest.raises(acceptance.AcceptanceError, match="core.ignoreStat") as error:
         acceptance.verify_project(root, SHA)
     assert error.value.code == "acceptance_project_unverified"
-    assert "core.ignoreStat" in capsys.readouterr().err
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize(
@@ -222,7 +222,12 @@ def test_assignment_checks_boolean_setting_before_any_preparation(tmp_path, monk
     )
     assert cli._cmd_lane(args) == 2
     assert calls == [(tmp_path, ["config", "--bool", "--get", "core.ignoreStat"])]
-    assert "core.ignoreStat" in capsys.readouterr().err
+    output = capsys.readouterr().err
+    assert "core.ignoreStat" in output
+    if value == "true":
+        assert "turn core.ignoreStat off" in output
+        assert "assign again" in output
+        assert "save or inspect" not in output
 
 
 @pytest.mark.parametrize("consumer", ["lane", "acceptance"])
@@ -265,3 +270,46 @@ def test_acceptance_status_cannot_accept_plausible_cached_clean(project_reads, m
     monkeypatch.setattr(subprocess, "run", run)
     with pytest.raises(acceptance.AcceptanceError, match="dirty"):
         acceptance.verify_project(project_reads[0], SHA)
+
+
+@pytest.mark.parametrize("hidden", ["ignoreStat", "assume"])
+def test_acceptance_cli_prints_refusal_once(project_reads, monkeypatch, capsys, hidden):
+    root, _, state = project_reads
+    state["config"] = "true" if hidden == "ignoreStat" else "false"
+    state["listing"] = b"H file\0" if hidden == "ignoreStat" else b"h file\0"
+    store = SimpleNamespace(root=root, load_config=lambda: {"agents": ["lead"]})
+    monkeypatch.setattr(cli, "_get_store", lambda args: store)
+
+    def prepare(*args, **kwargs):
+        return acceptance.verify_project(root, SHA)
+
+    monkeypatch.setattr(acceptance, "prepare", prepare)
+    assert (
+        cli.main(
+            [
+                "close",
+                "open",
+                "--id",
+                "attempt",
+                "--from",
+                "lead",
+                "--scope",
+                "milestone",
+                "--revision",
+                SHA,
+                "--acceptance-plan",
+                "plan.json",
+                "--project-repo",
+                str(root),
+            ]
+        )
+        == 3
+    )
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert output.count("acceptance_project_unverified") == 1
+    if hidden == "ignoreStat":
+        assert output.count(safety.IGNORE_STAT) == 1
+    else:
+        assert output.count("First save or inspect") == 1
+        assert output.count("not verified clean") == 1
