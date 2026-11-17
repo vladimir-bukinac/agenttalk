@@ -348,4 +348,4 @@ def test_acceptance_ignore_stat_refuses_before_status(tmp_path, monkeypatch):
     with pytest.raises(acceptance.AcceptanceError, match="core.ignoreStat") as error:
         acceptance.verify_project(root, base)
     assert error.value.code == "acceptance_project_unverified"
-    assert _git(root, "config", "--bool", "--get", "core.ignoreStat") == "true"
+    assert _git(root, "config", "--bool", "--get", "core.ignoreStat").strip() == "true"
