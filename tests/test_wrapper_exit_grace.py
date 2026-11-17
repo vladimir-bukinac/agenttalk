@@ -938,10 +938,16 @@ STALL = 0.5  # a separate process that went this long without ticking shows the 
 
 # It writes the time every 50 ms, from a process of its own, so nothing the wrapper does in the test's process
 # (a wait, a wait that holds the GIL) can stop it. Both sides read time.monotonic(), which is one system-wide clock.
+#
+# A test can stop it on purpose: while the file "<ticks file>.pause" exists, it does not tick. Plain file checks work
+# the same on Windows, Linux and macOS; suspending a process needs a different call on each of them.
 _TICKER = textwrap.dedent("""
-    import sys, time
+    import os, sys, time
+    pause = sys.argv[1] + ".pause"
     with open(sys.argv[1], "w") as out:
         while True:
+            while os.path.exists(pause):
+                time.sleep(0.01)
             out.write(repr(time.monotonic()) + chr(10))
             out.flush()
             time.sleep(0.05)
@@ -981,6 +987,13 @@ class _Ticker:
     def __exit__(self, *args) -> None:
         self._proc.kill()
         self._proc.wait(10.0)
+
+    def pause(self) -> None:
+        """Stop the ticks on purpose, until resume()."""
+        Path(str(self.path) + ".pause").touch()
+
+    def resume(self) -> None:
+        Path(str(self.path) + ".pause").unlink(missing_ok=True)
 
     def times(self) -> list[float]:
         lines = self.path.read_text().split("\n")[:-1] if self.path.exists() else []  # the last line may be partial
@@ -1048,8 +1061,13 @@ def test_output_still_arriving_after_the_model_exits_is_kept(model: Path, tmp_pa
     assert wrote.exists(), "the helper never wrote its line"
     (grace,) = output_waits.graces
     assert grace._since is not None, "the grace never started"
-    delay = _read_late_record(wrote)[1] - grace._since
-    silent = _longest_silence(ticker.times(), grace._since, box["done_at"])
+    _judge_a_missing_line(grace._since, box["done_at"], _read_late_record(wrote)[1], ticker.times())
+
+
+def _judge_a_missing_line(since: float, reader_ended: float, finished_writing: float, ticks: list[float]) -> None:
+    """The verdict for a late line the reader did not return: a skip (no verdict on the wrapper) or a failure."""
+    delay = finished_writing - since
+    silent = _longest_silence(ticks, since, reader_ended)
     if delay > LATE_WINDOW:
         pytest.skip(f"the helper wrote {delay:.2f} s after the wrapper saw the exit: no verdict on the wrapper")
     if silent > STALL:

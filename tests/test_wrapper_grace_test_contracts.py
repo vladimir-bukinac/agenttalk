@@ -455,3 +455,60 @@ def test_the_late_output_test_asks_whether_the_grace_was_exercised_when_the_line
     # must come before the kept-line return.
     source = inspect.getsource(integration.test_output_still_arriving_after_the_model_exits_is_kept)
     assert source.index("_skip_unless_the_grace_was_exercised(") < source.index("return")
+
+
+# --- a stalled machine: a ticker paused on purpose past the threshold excuses a dropped line -------------------------
+
+
+# Written out, not taken from the code under test: more than the 0.5 s threshold, so that raising the threshold
+# (or dropping the check) fails these tests.
+PAUSE_SECONDS = 0.8
+
+
+@pytest.mark.subprocess  # it starts the ticker process
+def test_a_ticker_paused_past_the_threshold_makes_a_dropped_line_a_skip(tmp_path):
+    clock = integration.time
+    with integration._Ticker(tmp_path / "ticks.txt") as ticker:
+        ticker.require_baseline_tick()
+        since = clock.monotonic()
+        ticker.pause()
+        # Wait until the ticker has really been silent for PAUSE_SECONDS, however slowly it reacted.
+        deadline = clock.monotonic() + 30.0
+        while clock.monotonic() - ticker.times()[-1] <= PAUSE_SECONDS and clock.monotonic() < deadline:
+            clock.sleep(0.05)
+        ticker.resume()
+        reader_ended = clock.monotonic()
+        assert ticker.wait_for_tick_after(reader_ended), "the ticker did not tick again after it was resumed"
+        ticks = ticker.times()
+    with pytest.raises(pytest.skip.Exception, match="did not run the ticker process"):
+        integration._judge_a_missing_line(since, reader_ended, since + 0.3, ticks)  # written within the window
+
+
+@pytest.mark.subprocess  # it starts the ticker process
+def test_a_ticker_that_keeps_ticking_leaves_a_dropped_line_a_failure(tmp_path):
+    clock = integration.time
+    with integration._Ticker(tmp_path / "ticks.txt") as ticker:
+        ticker.require_baseline_tick()
+        since = clock.monotonic()
+        clock.sleep(PAUSE_SECONDS)  # as long as the pause above, but nobody stops the ticker
+        reader_ended = clock.monotonic()
+        assert ticker.wait_for_tick_after(reader_ended)
+        ticks = ticker.times()
+    with pytest.raises(pytest.fail.Exception, match="the ticker process ran throughout"):
+        integration._judge_a_missing_line(since, reader_ended, since + 0.3, ticks)
+
+
+def test_the_silence_threshold_is_exactly_the_stall_value():
+    # Synthetic ticks, no process: a silence just under STALL fails the dropped line, just over it skips.
+    under = [0.0, 0.05, 0.05 + integration.STALL - 0.05, 1.5]
+    over = [0.0, 0.05, 0.05 + integration.STALL + 0.05, 1.5]
+    with pytest.raises(pytest.fail.Exception):
+        integration._judge_a_missing_line(0.0, 1.0, 0.3, under)
+    with pytest.raises(pytest.skip.Exception, match="did not run the ticker process"):
+        integration._judge_a_missing_line(0.0, 1.0, 0.3, over)
+
+
+def test_a_helper_that_wrote_later_than_the_window_is_no_verdict_even_with_a_healthy_ticker():
+    healthy = [i * 0.05 for i in range(60)]
+    with pytest.raises(pytest.skip.Exception, match="the helper wrote .* after the wrapper saw the exit"):
+        integration._judge_a_missing_line(0.0, 2.0, integration.LATE_WINDOW + 0.5, healthy)
