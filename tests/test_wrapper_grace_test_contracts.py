@@ -422,3 +422,36 @@ def test_without_a_marker_argument_the_limit_counts_from_the_start(monkeypatch):
     monkeypatch.setattr(integration, "time", SimpleNamespace(monotonic=lambda: moment.now))
     monkeypatch.setattr(integration, "threading", SimpleNamespace(Thread=moment.thread()))
     assert integration._attempt(lambda: None).finished is False
+
+
+# --- a kept late line is a verdict only if it was written after the wrapper saw the exit ---------------------------
+
+
+def test_a_line_written_after_the_grace_started_is_a_verdict():
+    integration._skip_unless_the_grace_was_exercised(10.0, 10.0)  # the same moment counts as after
+    integration._skip_unless_the_grace_was_exercised(10.0, 10.3)  # no skip
+
+
+def test_a_line_written_before_the_grace_started_is_no_verdict():
+    with pytest.raises(pytest.skip.Exception, match="the helper wrote before the wrapper saw the exit"):
+        integration._skip_unless_the_grace_was_exercised(10.0, 9.9)
+    with pytest.raises(pytest.skip.Exception, match="the grace was not exercised, no verdict"):
+        integration._skip_unless_the_grace_was_exercised(10.0, 9.9)
+
+
+def test_a_grace_that_never_started_is_no_verdict_either():
+    with pytest.raises(pytest.skip.Exception, match="the wrapper never saw the exit"):
+        integration._skip_unless_the_grace_was_exercised(None, 10.0)
+
+
+def test_the_late_record_gives_when_the_write_began_and_ended(tmp_path):
+    record = tmp_path / "pids.txt.late"
+    record.write_text("10.25 10.5")
+    assert integration._read_late_record(record) == (10.25, 10.5)
+
+
+def test_the_late_output_test_asks_whether_the_grace_was_exercised_when_the_line_is_kept():
+    # The decision is made by the function above; the test body is the one place that must call it, and the call
+    # must come before the kept-line return.
+    source = inspect.getsource(integration.test_output_still_arriving_after_the_model_exits_is_kept)
+    assert source.index("_skip_unless_the_grace_was_exercised(") < source.index("return")

@@ -133,11 +133,12 @@ MODEL = textwrap.dedent(r"""
         open(pidfile + ".ready", "w").close()
         sys.stdin.read()              # returns when the model has exited
         time.sleep(0.3)
+        began = time.monotonic()
         try:
             message("late")
-        finally:                      # when the line was written, on the clock the wrapper's grace also uses
+        finally:                      # when the write began and ended, on the clock the wrapper's grace also uses
             with open(pidfile + ".late.tmp", "w") as handle:
-                handle.write(repr(time.monotonic()))
+                handle.write(repr(began) + " " + repr(time.monotonic()))
             os.replace(pidfile + ".late.tmp", pidfile + ".late")
     elif mode == "quiet-then-tail":   # the model finishes its turn but keeps running, quietly
         turn()
@@ -1010,6 +1011,22 @@ class _Ticker:
         return False
 
 
+def _read_late_record(path: Path) -> tuple[float, float]:
+    """When the late helper began and finished writing its line (the stand-in's monotonic clock)."""
+    began, finished = path.read_text().split()
+    return float(began), float(finished)
+
+
+def _skip_unless_the_grace_was_exercised(since: float | None, began_writing: float) -> None:
+    """A kept line shows the grace works only if the helper began writing it after the wrapper saw the exit. A helper
+    that was run before the OS reported the model's exit wrote while no grace was running, so even a grace of zero
+    would have kept the line: that is no verdict, not a pass."""
+    if since is None:
+        pytest.skip("the wrapper never saw the exit: the grace was not exercised, no verdict")
+    if began_writing < since:
+        pytest.skip("the helper wrote before the wrapper saw the exit: the grace was not exercised, no verdict")
+
+
 def test_output_still_arriving_after_the_model_exits_is_kept(model: Path, tmp_path: Path, output_waits) -> None:
     """Whether the helper really wrote within the grace is established, not assumed: the helper records when it
     wrote, on the same clock as the wrapper's grace. A missing line is no verdict on the wrapper in two cases only:
@@ -1023,13 +1040,15 @@ def test_output_still_arriving_after_the_model_exits_is_kept(model: Path, tmp_pa
         timed_out, box = _read_lines(model, "late-tail", pidfile, settle=wrote)
         assert not timed_out
         if any('"late"' in line for line in box["result"]):
+            (grace,) = output_waits.graces
+            _skip_unless_the_grace_was_exercised(grace._since, _read_late_record(wrote)[0])
             return
         # A ticker stalled right up to the reader's end shows it only by ticking again: do not stop it before that.
         ticker.wait_for_tick_after(box["done_at"])
     assert wrote.exists(), "the helper never wrote its line"
     (grace,) = output_waits.graces
     assert grace._since is not None, "the grace never started"
-    delay = float(wrote.read_text()) - grace._since
+    delay = _read_late_record(wrote)[1] - grace._since
     silent = _longest_silence(ticker.times(), grace._since, box["done_at"])
     if delay > LATE_WINDOW:
         pytest.skip(f"the helper wrote {delay:.2f} s after the wrapper saw the exit: no verdict on the wrapper")
