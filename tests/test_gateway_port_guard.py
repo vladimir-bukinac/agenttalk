@@ -1897,10 +1897,41 @@ def test_guarded_a():
 )
 
 
+def _port_is_free_on_every_address(port: int) -> bool:
+    """Whether `port` can be bound on each address the child run or the outside program may bind it on (#789): the IPv4
+    loopback, the IPv4 wildcard, 127.0.0.2 and `::` both dual-stack and IPv6-only, where this machine has them. Each
+    bind is closed at once; the wildcard binds are the point (a wildcard listener needs every address free) and the
+    sockets live for this call only, with nothing listening."""
+    attempts = [(socket.AF_INET, "127.0.0.1", None), (socket.AF_INET, "0.0.0.0", None)]  # noqa: S104
+    if _second_loopback_works():
+        attempts.append((socket.AF_INET, "127.0.0.2", None))
+    if _ipv6_works():
+        attempts += [(socket.AF_INET6, "::", 0), (socket.AF_INET6, "::", 1)]
+    for family, address, v6only in attempts:
+        try:
+            with socket.socket(family, socket.SOCK_STREAM) as sock:
+                if v6only is not None:
+                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, v6only)
+                sock.bind((address, port))
+        except OSError:
+            return False
+    return True
+
+
+def _free_port_on_every_address() -> int:
+    """A port the IPv4 loopback gave out AND that is free on every address a child listener may bind (#789). Asking one
+    address alone proved nothing about the others: a listener on `::` or `0.0.0.0` needs them all free."""
+    for _ in range(100):
+        port = _free_port()
+        if _port_is_free_on_every_address(port):
+            return port
+    raise AssertionError("no port that is free on every address after 100 tries")
+
+
 def _run_with_own_socket(project, monkeypatch, kind, *, outside, outside_host="127.0.0.1", workers=0, recorded=False):
     """A child pytest run of one guarded test that holds `kind` of listener (or none), with the REAL bind probe and the
     REAL owner lookup: nothing is faked, so what the run returns is what the guard does."""
-    port = _free_port()
+    port = _free_port_on_every_address()
     monkeypatch.setenv("P1_LISTEN_PORT", str(port))
     monkeypatch.setenv("P1_ADDRESSES", json.dumps([["127.0.0.1", port]]))
     monkeypatch.setenv("P1_REAL_PROBE", "1")
