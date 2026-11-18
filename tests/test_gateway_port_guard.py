@@ -1948,6 +1948,8 @@ def _free_port_for(kind: str, *, outside_host: str = "127.0.0.1") -> int:
     The window is narrowed, not closed: the port is closed again before the child run starts (the guard's own bind
     probe must find it free, so it cannot be kept open), so another process could still take it before the child binds.
     A test that can must not use this: see `_run_with_own_socket(ephemeral=True)`."""
+    if kind == "dualstack" and not socket.has_dualstack_ipv6():
+        pytest.skip("socket.has_dualstack_ipv6() is False here")
     needed = {("127.0.0.1", None), (outside_host, None), *CHILD_BINDS[kind]}
     for address, v6only in sorted(needed, key=str):
         if not _can_bind(address, v6only, 0):
@@ -2034,6 +2036,8 @@ def test_a_leftover_listener_of_the_test_is_found_even_when_the_bind_probe_says_
     """667-R33-01 (codex-arch): on Windows a bind to 127.0.0.1 succeeds beside a listener on the IPv4 wildcard or a
     dual-stack `::`, so the probe says "free" and the owner lookup was never asked. The run exits 1 for a leftover the
     lookup proves is the test's own. Nothing is faked: real probe, real lookup, the real recorder next to the guard."""
+    if kind == "dualstack" and not socket.has_dualstack_ipv6():
+        pytest.skip("socket.has_dualstack_ipv6() is False here")
     if kind == "dualstack" and not _ipv6_mode_works(0):
         pytest.skip("no dual-stack IPv6 socket here")
 
@@ -2072,6 +2076,7 @@ def test_a_missing_ipv6_mode_skips_that_mode_and_does_not_blame_the_ports(monkey
 
     monkeypatch.setattr(socket, "socket", Lacking)
 
+    assert socket.has_dualstack_ipv6() is False  # what the leftover test's named skip reads
     assert _ipv6_mode_works(0) is False
     assert _ipv6_mode_works(1) is (missing == "dual-stack")
     for kind in ("exact", "wildcard4"):
