@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import errno
 import json
 import os
 import re
@@ -1870,7 +1871,7 @@ import socket
 KEPT = []
 
 
-def test_guarded_a():
+def test_guarded_a(request):
     port = int(os.environ["P1_LISTEN_PORT"])
     if os.environ.get("P1_GO"):
         open(os.environ["P1_GO"], "w").close()                 # the outside program takes 127.0.0.1:port now
@@ -1893,47 +1894,93 @@ def test_guarded_a():
     sock.bind(address)
     sock.listen(1)
     KEPT.append(sock)                                          # left listening on purpose
+    if os.environ.get("P1_PORT_FILE"):
+        # #789: the port was asked of the system just now (port 0), so no other process can have taken it between a
+        # check and this bind. The guard's teardown check is told the port this test really got, and the outer test
+        # reads it from the file.
+        import gateway_port_guard as guard
+
+        port = sock.getsockname()[1]
+        request.config.pluginmanager.get_plugin(guard.PLUGIN_NAME).addresses = [("127.0.0.1", port)]
+        with open(os.environ["P1_PORT_FILE"], "w", encoding="utf-8") as handle:
+            handle.write(str(port))
 """
 )
 
 
-def _port_is_free_on_every_address(port: int) -> bool:
-    """Whether `port` can be bound on each address the child run or the outside program may bind it on (#789): the IPv4
-    loopback, the IPv4 wildcard, 127.0.0.2 and `::` both dual-stack and IPv6-only, where this machine has them. Each
-    bind is closed at once; the wildcard binds are the point (a wildcard listener needs every address free) and the
-    sockets live for this call only, with nothing listening."""
-    attempts = [(socket.AF_INET, "127.0.0.1", None), (socket.AF_INET, "0.0.0.0", None)]  # noqa: S104
-    if _second_loopback_works():
-        attempts.append((socket.AF_INET, "127.0.0.2", None))
-    if _ipv6_works():
-        attempts += [(socket.AF_INET6, "::", 0), (socket.AF_INET6, "::", 1)]
-    for family, address, v6only in attempts:
-        try:
-            with socket.socket(family, socket.SOCK_STREAM) as sock:
-                if v6only is not None:
-                    sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, v6only)
-                sock.bind((address, port))
-        except OSError:
-            return False
+# What each kind of child listener binds: (address, IPV6_V6ONLY or None for an IPv4 socket). "dualstack" is `::` with
+# IPV6_V6ONLY=0, "v6only" is `::` with IPV6_V6ONLY=1.
+CHILD_BINDS = {
+    "none": (),
+    "exact": (("127.0.0.1", None),),
+    "wildcard4": (("0.0.0.0", None),),  # noqa: S104 - the bind under test, closed at once
+    "other-address": (("127.0.0.2", None),),
+    "v6only": (("::", 1),),
+    "dualstack": (("::", 0),),
+}
+
+
+def _can_bind(address: str, v6only: int | None, port: int) -> bool:
+    """Whether `address:port` can be bound by a socket of that mode here: bound on a separate socket and closed at
+    once, nothing listens. Any OSError (an address this machine lacks, an IPV6_V6ONLY mode it refuses, a port in use)
+    is "no"."""
+    try:
+        with socket.socket(socket.AF_INET if v6only is None else socket.AF_INET6, socket.SOCK_STREAM) as sock:
+            if v6only is not None:
+                sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, v6only)
+            sock.bind((address, port))
+    except OSError:
+        return False
     return True
 
 
-def _free_port_on_every_address() -> int:
-    """A port the IPv4 loopback gave out AND that is free on every address a child listener may bind (#789). Asking one
-    address alone proved nothing about the others: a listener on `::` or `0.0.0.0` needs them all free."""
+def _ipv6_mode_works(v6only: int) -> bool:
+    """Whether this machine has an IPv6 wildcard socket in one mode (#789): IPV6_V6ONLY=0 (dual-stack) and =1 are
+    separate abilities, and a host with IPv6 loopback may lack one of them."""
+    return _can_bind("::", v6only, 0)
+
+
+def _free_port_for(kind: str, *, outside_host: str = "127.0.0.1") -> int:
+    """A port for a fixed-port run, free on the addresses that run uses (#789): the IPv4 loopback (the endpoint the
+    guard probes), the address the outside program holds, and the address(es) the child listener `kind` binds. Only
+    those are required, and a mode this machine cannot bind skips the test as such instead of rejecting every port.
+
+    The window is narrowed, not closed: the port is closed again before the child run starts (the guard's own bind
+    probe must find it free, so it cannot be kept open), so another process could still take it before the child binds.
+    A test that can must not use this: see `_run_with_own_socket(ephemeral=True)`."""
+    needed = {("127.0.0.1", None), (outside_host, None), *CHILD_BINDS[kind]}
+    for address, v6only in sorted(needed, key=str):
+        if not _can_bind(address, v6only, 0):
+            mode = "IPv4" if v6only is None else f"IPv6 with IPV6_V6ONLY={v6only}"
+            pytest.skip(f"this machine cannot bind {address} ({mode})")
     for _ in range(100):
         port = _free_port()
-        if _port_is_free_on_every_address(port):
+        if all(_can_bind(address, v6only, port) for address, v6only in needed):
             return port
-    raise AssertionError("no port that is free on every address after 100 tries")
+    raise AssertionError("no port that is free on every address this run uses, after 100 tries")
 
 
-def _run_with_own_socket(project, monkeypatch, kind, *, outside, outside_host="127.0.0.1", workers=0, recorded=False):
+def _run_with_own_socket(
+    project, monkeypatch, kind, *, outside, outside_host="127.0.0.1", workers=0, recorded=False, ephemeral=False
+):
     """A child pytest run of one guarded test that holds `kind` of listener (or none), with the REAL bind probe and the
-    REAL owner lookup: nothing is faked, so what the run returns is what the guard does."""
-    port = _free_port_on_every_address()
-    monkeypatch.setenv("P1_LISTEN_PORT", str(port))
-    monkeypatch.setenv("P1_ADDRESSES", json.dumps([["127.0.0.1", port]]))
+    REAL owner lookup: nothing is faked, so what the run returns is what the guard does.
+
+    `ephemeral` (#789, for a run without an outside program): the child binds port 0 and reports the port it got, so no
+    port is chosen ahead and none can be taken in between. The collection-time decision then has no endpoint to probe
+    (its address list is empty) and the child hands the real endpoint to the guard's teardown check. What that gives
+    up is only the decision-time probe of this endpoint; the decision's real probe has its own cases."""
+    if ephemeral:
+        assert not outside, "an outside program needs a port chosen ahead"
+        port_file = project.log / "own-port.txt"
+        monkeypatch.setenv("P1_LISTEN_PORT", "0")
+        monkeypatch.setenv("P1_ADDRESSES", "[]")
+        monkeypatch.setenv("P1_PORT_FILE", str(port_file))
+        port = None
+    else:
+        port = _free_port_for(kind, outside_host=outside_host)
+        monkeypatch.setenv("P1_LISTEN_PORT", str(port))
+        monkeypatch.setenv("P1_ADDRESSES", json.dumps([["127.0.0.1", port]]))
     monkeypatch.setenv("P1_REAL_PROBE", "1")
     monkeypatch.setenv("P1_OWN_KIND", kind)
     go, bound, stop = (project.log / name for name in ("go.txt", "outside-bound.txt", "stop.txt"))
@@ -1948,8 +1995,11 @@ def _run_with_own_socket(project, monkeypatch, kind, *, outside, outside_host="1
     try:
         if recorded:
             result, journals = run_recorded(project, monkeypatch, workers=workers)
-            return result, port, journals
-        return run_inner(project, monkeypatch, workers=workers), port, None
+        else:
+            result, journals = run_inner(project, monkeypatch, workers=workers), None
+        if ephemeral:
+            port = int(port_file.read_text(encoding="utf-8")) if port_file.exists() else None
+        return result, port, journals
     finally:
         stop.write_text("stop", encoding="utf-8")
         if process is not None:
@@ -1984,18 +2034,53 @@ def test_a_leftover_listener_of_the_test_is_found_even_when_the_bind_probe_says_
     """667-R33-01 (codex-arch): on Windows a bind to 127.0.0.1 succeeds beside a listener on the IPv4 wildcard or a
     dual-stack `::`, so the probe says "free" and the owner lookup was never asked. The run exits 1 for a leftover the
     lookup proves is the test's own. Nothing is faked: real probe, real lookup, the real recorder next to the guard."""
-    if kind == "dualstack" and not _ipv6_works():
-        pytest.skip("no IPv6 here")
+    if kind == "dualstack" and not _ipv6_mode_works(0):
+        pytest.skip("no dual-stack IPv6 socket here")
 
+    # #789: the child binds port 0 and reports the port it got; nothing picks a port ahead of the bind.
     result, port, journals = _run_with_own_socket(
-        project, monkeypatch, kind, outside=False, workers=workers, recorded=True
+        project, monkeypatch, kind, outside=False, workers=workers, recorded=True, ephemeral=True
     )
 
     output = result.stdout.str()
+    assert port is not None, "the child never bound its listener: " + output
     assert result.ret == 1, output
     left = [line for line in _guard_lines(output) if " left: " in line]
     assert len(left) == 1 and "test_own.py::test_guarded_a" in left[0] and f"127.0.0.1:{port}" in left[0], left
     assert journals["controller" if workers else "serial"] == [([1], [1])], journals
+
+
+@pytest.mark.parametrize("missing", ["dual-stack", "all-ipv6"])
+def test_a_missing_ipv6_mode_skips_that_mode_and_does_not_blame_the_ports(monkeypatch, missing):
+    # #789: a machine can have a working IPv6 loopback and still refuse IPV6_V6ONLY=0 (injected here as ENOPROTOOPT), or
+    # have no IPv6 at all (the IPv4-only control). The cases that need no such mode still get a port; the cases that do
+    # skip as "cannot bind", rather than rejecting all 100 ports.
+    if missing == "dual-stack" and not _ipv6_mode_works(1):
+        pytest.skip("no IPv6-only wildcard socket here to keep working")
+    real_socket = socket.socket
+
+    class Lacking(real_socket):
+        def __init__(self, family=-1, *args, **kwargs):
+            if missing == "all-ipv6" and family == socket.AF_INET6:
+                raise OSError(errno.EAFNOSUPPORT, "injected: no IPv6")
+            super().__init__(family, *args, **kwargs)
+
+        def setsockopt(self, level, option, *value):
+            if missing == "dual-stack" and option == socket.IPV6_V6ONLY and value == (0,):
+                raise OSError(errno.ENOPROTOOPT, "injected: no dual-stack")
+            return super().setsockopt(level, option, *value)
+
+    monkeypatch.setattr(socket, "socket", Lacking)
+
+    assert _ipv6_mode_works(0) is False
+    assert _ipv6_mode_works(1) is (missing == "dual-stack")
+    for kind in ("exact", "wildcard4"):
+        assert isinstance(_free_port_for(kind), int), kind
+    with pytest.raises(pytest.skip.Exception):
+        _free_port_for("dualstack")
+    if missing == "all-ipv6":
+        with pytest.raises(pytest.skip.Exception):
+            _free_port_for("v6only")
 
 
 def test_an_outside_wildcard_listener_is_not_blamed_on_a_clean_test_whatever_the_probe_says(project, monkeypatch):
