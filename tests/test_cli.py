@@ -1582,6 +1582,16 @@ def test_drain_commits_only_records_whose_flush_succeeded(
     assert store.cursor("beta") == first.id
 
 
+def _printed_message_ids(page: str) -> list[str]:
+    """The message ids a drain/recv page printed, in order (one `id` line each)."""
+    return re.findall(r"^  id      (\S+)$", page, flags=re.MULTILINE)
+
+
+def _printed_message_bodies(page: str) -> list[str]:
+    """The message bodies a drain/recv page printed, in order (between the rules)."""
+    return re.findall(r"^-{72}\n(.*?)\n={72}$", page, flags=re.MULTILINE | re.DOTALL)
+
+
 def test_drain_limit_pages_visible_messages_with_control_interleaving(
     store: Store,
     store_root: Path,
@@ -1593,16 +1603,19 @@ def test_drain_limit_pages_visible_messages_with_control_interleaving(
     second = store.send(sender="alpha", recipient="beta", body="two", kind="message")
     trailing = store.send(sender="alpha", recipient="beta", body="after", kind="composing")
 
+    # Compare the printed ids and the printed bodies, never a word anywhere on
+    # the page: a message id ends in random letters and digits that can spell
+    # one of these words (#795).
     assert _run(["drain", "--for", "beta", "-n", "1"], store_root) == 0
     first_page = capsys.readouterr().out
-    assert "one" in first_page and "two" not in first_page
-    assert "before" not in first_page and "between" not in first_page
+    assert _printed_message_ids(first_page) == [first.id]
+    assert _printed_message_bodies(first_page) == ["one"]
     assert store.cursor("beta") == first.id
 
     assert _run(["drain", "--for", "beta", "--limit", "1"], store_root) == 0
     second_page = capsys.readouterr().out
-    assert "two" in second_page and "one" not in second_page
-    assert "between" not in second_page and "after" not in second_page
+    assert _printed_message_ids(second_page) == [second.id]
+    assert _printed_message_bodies(second_page) == ["two"]
     assert store.cursor("beta") == second.id
 
     assert _run(["drain", "--for", "beta", "--quiet"], store_root) == 0
