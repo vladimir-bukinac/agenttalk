@@ -32,7 +32,8 @@ def map_event(obj: object) -> list[Event]:
         err = obj.get("error")
         msg = err.get("message", "") if isinstance(err, dict) else ""
         # terminal failure - NOT retryable (distinct from transient transport).
-        return [Event(EventType.ADAPTER_ERROR, text=msg, retryable=False, raw=obj)]
+        return [Event(EventType.ADAPTER_ERROR, text=msg, retryable=False, raw=obj,
+                      error_code=structured_error_code(obj))]
     if etype == "error":
         # top-level transport error (e.g. "Reconnecting... 2/5"): Codex is
         # self-recovering. Transient -> retryable, log only, never restart.
@@ -42,6 +43,28 @@ def map_event(obj: object) -> list[Event]:
         return _map_item(etype, obj.get("item"), obj)
     # thread.started + any other shape: session metadata, no normalized event.
     return []
+
+
+def structured_error_code(obj: dict) -> str | None:
+    """The structured reason of a terminal ``turn.failed`` (Codex's ``codex_error_info``), or None.
+
+    Looked for in the ``error`` object first, then beside it. None: the failure has no such field. "": the field
+    is present but unusable (not text, empty, or an object that does not hold exactly one key). Otherwise the
+    word, lower-cased: a plain string, or the single key of a one-key object (how a variant that carries data is
+    written). Only the terminal event is asked, never a message, a model output or a tool output. The exact place
+    in Codex's own output is not confirmed by a real sample; both places are read and the wording route still
+    covers a failure with neither."""
+    err = obj.get("error")
+    for holder in (err, obj):
+        if isinstance(holder, dict) and "codex_error_info" in holder:
+            value = holder["codex_error_info"]
+            if isinstance(value, str):
+                return value.strip().lower()
+            if isinstance(value, dict) and len(value) == 1:
+                (key,) = value
+                return key.strip().lower() if isinstance(key, str) else ""
+            return ""
+    return None
 
 
 def _map_item(etype: str, item: object, obj: dict) -> list[Event]:

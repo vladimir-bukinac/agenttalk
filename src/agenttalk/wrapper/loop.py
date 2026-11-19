@@ -52,6 +52,9 @@ CLASS_GATEWAY_HELD = "gateway_held"
 # A message PARKED on a provider usage limit (usage_park): kept at the head, never retried
 # on a timer, never disposed. Its own word - never "config_blocked".
 CLASS_USAGE_LIMIT = usage_park.CLASS_USAGE_LIMIT
+# The provider refused a turn on safety grounds (#857): a bounded number of tries with waits, then a hold with the
+# message kept at the head. Never poison (a refusal alone is not proof against the message), never disposed.
+CLASS_PROVIDER_REFUSAL = usage_park.CLASS_PROVIDER_REFUSAL
 
 # #205: the classifier summary prefix for a child that produced NO turn-start and NO
 # model output before exiting (run._classify_drive_failure's last-resort branch, e.g. a
@@ -917,7 +920,7 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
                 max_turns=max_turns, max_polls=max_polls, max_wall=max_wall,
                 stamp=stamp, on_health_idle=on_health_idle,
                 on_runtime_idle=on_runtime_idle,
-                commit_gate=commit_gate)
+                commit_gate=commit_gate, now_iso=now_iso, wrapper_generation=wait_token)
         return _run_continuous(
             store, agent, drive, idle_interval=idle_interval,
             max_idle_interval=max_idle_interval, heartbeat_interval=heartbeat_interval,
@@ -1428,6 +1431,12 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         if usage_park.is_cooldown(rec):
             # A cool-down names its kind and its next try (the saved wake); it has no window or reset.
             info["usage_limit"].update(kind=usage_park.park_kind(rec), next_try_epoch=usage_park.unused_wake(rec))
+            if usage_park.park_kind(rec) == usage_park.KIND_REFUSED:
+                # Counts and times only: never the provider's words, the prompt or the model's output.
+                info["usage_limit"].update(
+                    tries=usage_park.refusal_total(rec), budget=usage_park.REFUSAL_TRIES,
+                    held=usage_park.is_held(rec), first_at=rec.get("refusal_first_at"),
+                    last_at=rec.get("refusal_last_at"))
         try:
             routed = bool(on_escalate(info))
         except Exception:  # noqa: BLE001 - a notification must never crash the loop
@@ -1452,6 +1461,9 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             try:
                 if not cooling:
                     on_health_parked(record, usage_park.REASON_PARKED)
+                elif usage_park.is_held(rec):
+                    on_health_parked(record, usage_park.REASON_REFUSAL_HELD,
+                                     reason_detail=rec.get("park_detail") or usage_park.REFUSAL_DETAIL)
                 elif rec.get("park_detail"):
                     on_health_parked(record, usage_park.REASON_PROVIDER_WAIT,
                                      reason_detail=rec.get("park_detail"))
@@ -2165,7 +2177,9 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             rec = store.attempt_record(agent, head_id) or {}
         elif usage_limit_park and usage_park.is_parked(rec):
             now_e = _now_epoch()
-            cooling = usage_park.is_cooldown(rec)
+            # A held refusal has used its five tries and has NO saved time: it is not "cooling", so it waits for
+            # the wrapper to be started again, then makes the one try a start gets (never a fresh set of five).
+            cooling = usage_park.is_cooldown(rec) and not usage_park.is_held(rec)
             if cooling:
                 # ONE validated clock for every decision about a cool-down head in this poll: the reading
                 # itself when a wake built from it is displayable, else the real time (the fallback the
@@ -2548,6 +2562,21 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                                                                     _now_epoch())})
             _park_usage_limit(record, store.attempt_record(agent, head_id) or {}, idle=True)
             continue
+        if outcome.failure_class == CLASS_PROVIDER_REFUSAL and not usage_limit_park:
+            # Stopping retries is switched off (AGENTTALK_STOP_RETRIES_AT_LIMIT=0): drive as before this change,
+            # that is, an unknown failure. The switch is the documented way back to the old behaviour.
+            outcome = replace(outcome, failure_class=CLASS_AMBIGUOUS, limit_fact=None, limit_detail=None)
+        if (usage_limit_park and outcome.failure_class == CLASS_PROVIDER_REFUSAL
+                and outcome.limit_fact == usage_park.FACT_REFUSED and not outcome.interrupted):
+            # The provider refused the turn (#857). Record it in the refusal's own count (no disposal counter
+            # moves, the attempt is excluded) and wait on the saved schedule; the fifth refusal makes the hold.
+            # A refusal alone never disposes of the message and never advances the cursor.
+            store.record_attempt_result(
+                agent, head_id, failure_class=CLASS_PROVIDER_REFUSAL, summary=outcome.summary, at=now_iso(),
+                cooldown={"generation": park_generation, "kind": usage_park.KIND_REFUSED,
+                          "detail": outcome.limit_detail or usage_park.REFUSAL_DETAIL, "now_epoch": _now_epoch()})
+            _park_usage_limit(record, store.attempt_record(agent, head_id) or {}, idle=True)
+            continue
         quick_overload = False
         if (usage_limit_park and outcome.limit_fact in usage_park.COOLDOWN_FACTS
                 and outcome.failure_class == CLASS_INFRA and not outcome.interrupted):
@@ -2734,7 +2763,8 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                   stamp: Callable[[], None] | None = None,
                   on_health_idle: Callable[..., None] | None = None,
                   on_runtime_idle: Callable[[], None] | None = None,
-                  commit_gate=None) -> int:
+                  commit_gate=None, now_iso: Callable[[], str] = _iso_now,
+                  wrapper_generation: str | None = None) -> int:
     """SCOPED one-shot loop for an ephemeral reviewer (see run_loop). Receives only
     messages on ``rid`` so unrelated traffic neither starves it nor is consumed from
     the global inbox; bounded so it always terminates."""
@@ -2771,6 +2801,66 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             interrupted_run["at"] = _iso_now()
         else:
             interrupted_run.update({"count": 0, "kind": None, "at": None})
+
+    # #857: a provider safety refusal on a scoped run. This loop has no attempt ledger of its own, so the refusal's
+    # count, waits and hold live in the SAME ledger entry the continuous loop uses (made at the first refusal): a
+    # later invocation reads them, so nothing here forgets a hold and a restart never gives the five tries back.
+    # A refusal alone never consumes the request, never advances anything and never reaches the commit gate's
+    # exhaustion rules: the hold is looked at BEFORE the gate is asked anything.
+    def _wall_epoch() -> float:
+        value = usage_park.iso_epoch(now_iso())
+        return value if value is not None else time.time()
+
+    def _refusal_check(record: dict) -> float | str | None:
+        """None: drive. "held": all five tries are used, stop. A number: seconds to wait first."""
+        head_id = record.get("id")
+        if not isinstance(head_id, str) or not head_id:
+            return None
+        store.reconcile_crash_in_progress(agent, head_id, at=now_iso())
+        rec = store.attempt_record(agent, head_id) or {}
+        if not usage_park.is_refusal_park(rec):
+            return None
+        if usage_park.is_held(rec):
+            return "held"
+        now_e = usage_park.cooldown_clock(_wall_epoch())
+        rec = store.rearm_cooldown_wake(agent, head_id, now_epoch=now_e) or rec
+        wake = usage_park.unused_wake(rec)
+        if wake is not None and now_e < wake:
+            return float(wake - now_e)
+        return None
+
+    def _refusal_admit(record: dict) -> None:
+        """Write ahead the try a parked refusal gets (the existing probe write): a crash in the turn is then
+        counted as a refused try, never a free one."""
+        head_id = record.get("id")
+        rec = store.attempt_record(agent, head_id) if isinstance(head_id, str) else None
+        if not usage_park.is_refusal_park(rec) or rec.get("park_state") != usage_park.PARKED:
+            return
+        store.record_attempt_start(
+            agent, record, attempt_id=uuid.uuid4().hex[:12], at=now_iso(),
+            usage_probe={"generation": wrapper_generation or "scoped",
+                         "consumed_wake": usage_park.unused_wake(rec)})
+
+    def _refusal_settle(record: dict, outcome: DriveOutcome) -> None:
+        """What a drive's result does to the refusal's own record (it never touches any other counter)."""
+        head_id = record.get("id")
+        if not isinstance(head_id, str) or not head_id:
+            return
+        if outcome.failure_class == CLASS_PROVIDER_REFUSAL and not outcome.ok:
+            store.record_refusal_outcome(
+                agent, record, generation=wrapper_generation or "scoped", at=now_iso(),
+                now_epoch=usage_park.cooldown_clock(_wall_epoch()), detail=outcome.limit_detail)
+            return
+        rec = store.attempt_record(agent, head_id)
+        if rec is None or rec.get("last_failure_class") != CLASS_PROVIDER_REFUSAL:
+            return
+        if outcome.ok:
+            store.clear_attempt(agent, head_id)       # it got through: the refusal record is no longer true
+        elif rec.get("probe_marker"):
+            # another kind of failure ends the probe: the park closes, the refusal count stays
+            store.record_attempt_result(
+                agent, head_id, failure_class=outcome.failure_class or CLASS_AMBIGUOUS,
+                summary=outcome.summary, at=now_iso())
 
     def _runtime_idle() -> None:
         if on_runtime_idle is not None:
@@ -2862,6 +2952,17 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             recv_api.commit(store, agent, record)
             _runtime_idle()
             return turns
+        held = _refusal_check(record)
+        if held == "held":
+            _stamp()                    # the hold stays in the ledger: the next invocation reads it, not this one
+            return turns
+        if isinstance(held, float):
+            if max_wall is not None and (clock() - start) + held > max_wall:
+                _stamp()
+                return turns            # the wait does not fit in this run; the saved time is kept
+            _stamp()
+            sleep(held)
+            continue
         legacy_gate_resolution = None
         if commit_gate is not None:
             from .obligations import GateError, ResolverState
@@ -3007,11 +3108,15 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                     sleep(fail_sleep)
                     fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
                     continue
+                _refusal_admit(record)
                 outcome = _as_outcome(
                     drive(_with_interruption_context(dispatch_record)))
                 _note_interruption(outcome)
+                _refusal_settle(record, outcome)
+                # A refused turn is the provider's, like an outage: it is not an agent that failed to reply, so it
+                # never counts toward the gate's "computed but did not emit" bound.
                 action_infra = (
-                    outcome.bus_action_infra or outcome.failure_class == CLASS_INFRA
+                    outcome.bus_action_infra or outcome.failure_class in (CLASS_INFRA, CLASS_PROVIDER_REFUSAL)
                 )
                 resolved = commit_gate.resolve(record)
                 post_budget_composing = resolved.reason == "post_budget_composing"
@@ -3177,8 +3282,10 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
         # _with_reply_draft, so its ledger-less preservation gate (see there) can see
         # THIS attempt's "previously interrupted" fact on the record itself.
         record = _with_reply_draft(store, agent, _with_interruption_context(record))
+        _refusal_admit(record)
         outcome = _as_outcome(drive(record))
         _note_interruption(outcome)
+        _refusal_settle(record, outcome)
         # connector P2 (final head): one-shot is LEDGER-LESS, so the FIX 5
         # decoration above is the only carrier of "previously interrupted" -
         # and it only helps if THIS invocation gets another iteration. If the

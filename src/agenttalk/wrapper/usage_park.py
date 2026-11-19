@@ -22,6 +22,13 @@ limit details, an unknown status or window word, or a rejection never proven by 
 result: a cool-down at once). A cool-down tries again after 15 minutes, then 30, then every 60;
 the wait never counts toward "100 attempts / 4 hours". They write no marker file and are read
 from the same attempt record.
+
+A fourth kind, ``provider_refusal`` (#857), is for any seat: the provider refused a turn on safety
+grounds. It is a bounded cool-down: five tries in all, the waits between them 1, 3, 7 and 15 minutes
+(26 minutes of waiting, about half an hour with the turns), then a HOLD: no wake time at all, the
+message kept at the head and never disposed, tried once more each time the seat is started again
+(never a fresh set of five). The count (``refusal_total``) is its own field, kept across a park that
+closes, so an unrelated failure in between never gives the budget back.
 """
 
 from __future__ import annotations
@@ -46,17 +53,31 @@ REASON_PARKED = "usage_limit_parked"
 # The health reason of a cool-down park (overloaded or throttled), on the same state. The cause
 # goes in ``reason_detail`` when the closed vocabulary has a fitting word, and is otherwise absent.
 REASON_PROVIDER_WAIT = "provider_wait_parked"
+# The health reason of a message held after its five refused tries (#857); its detail word is REFUSAL_DETAIL.
+REASON_REFUSAL_HELD = "provider_refusal_held"
 
 # The three kinds of park, as the record's ``park_kind`` and the fact words a drive attaches.
 # A record with no ``park_kind`` is a ``usage_limit`` park (every older record).
 KIND_USAGE_LIMIT = "usage_limit"
 KIND_OVERLOADED = "overloaded"
 KIND_THROTTLED = "throttled"
-COOLDOWN_KINDS = (KIND_OVERLOADED, KIND_THROTTLED)
+# #857: the provider refused a turn on safety grounds. Bounded waits, then a hold (see the module note).
+KIND_REFUSED = "provider_refusal"
+COOLDOWN_KINDS = (KIND_OVERLOADED, KIND_THROTTLED, KIND_REFUSED)
 PARK_KINDS = (KIND_USAGE_LIMIT,) + COOLDOWN_KINDS
 FACT_OVERLOADED = KIND_OVERLOADED
 FACT_THROTTLED = KIND_THROTTLED
+FACT_REFUSED = KIND_REFUSED
 COOLDOWN_FACTS = COOLDOWN_KINDS
+# The failure word a refused turn carries in its attempt record (never "poison_eligible": a refusal alone
+# is not proof against the message), and the closed detail word health shows for it.
+CLASS_PROVIDER_REFUSAL = "provider_refusal"
+REFUSAL_DETAIL = "provider_safety_refusal"
+# Five tries in all; the wait after try n (1-based) is REFUSAL_WAIT_SECONDS[n - 1]; after the fifth refusal
+# the message is held with no wake time. 60 + 180 + 420 + 900 = 1560 s of waiting, about 30 minutes with
+# five turns. The incident that led here took 4 and 9 turns; the numbers are a stated choice, not a measured optimum.
+REFUSAL_TRIES = 5
+REFUSAL_WAIT_SECONDS = (60, 180, 420, 900)
 
 # The cool-down: step ``n`` waits ``COOLDOWN_SECONDS[min(n, 2)]`` (15 minutes, 30, then 60 for
 # ever). An overload gets two quick ordinary retries before the first cool-down; a throttle none.
@@ -475,6 +496,21 @@ def is_cooldown(rec: dict | None) -> bool:
     return park_kind(rec) in COOLDOWN_KINDS
 
 
+def refusal_total(rec: dict | None) -> int:
+    """Refused turns on this message so far; 0 when absent. Its own counter: never reset by a park that closes."""
+    return max(0, _int((rec or {}).get("refusal_total")))
+
+
+def is_refusal_park(rec: dict | None) -> bool:
+    """True for a record parked (waiting or held) on a provider safety refusal."""
+    return rec is not None and rec.get("park_state") in PARK_STATES and park_kind(rec) == KIND_REFUSED
+
+
+def is_held(rec: dict | None) -> bool:
+    """True when a refusal park has used all its tries: kept at the head with no wake time."""
+    return is_refusal_park(rec) and refusal_total(rec) >= REFUSAL_TRIES
+
+
 def park_rev(rec: dict | None) -> int:
     """The transition revision: the stored value only when it is a whole number (never a boolean) of at
     least 1, else 0 (absent, or damaged: a boolean, a fraction, text, an infinity, zero, a negative).
@@ -633,8 +669,17 @@ def arm_cooldown_wake(rec: dict, *, now_epoch: object, step: object) -> None:
     with the same delay and the same collision rule. A candidate that equals the wake a probe
     already used (``probed_wake_epoch``) is moved one second, so it is never a wake that was
     already consumed. A step that is not a whole number of at least 0 counts as 0."""
+    if park_kind(rec) == KIND_REFUSED:
+        total = refusal_total(rec)
+        if total >= REFUSAL_TRIES:
+            rec.pop("wake_epoch", None)      # held: no wake time, nothing tries it again but a restart
+            return
+        step = max(total, 1) - 1             # the wait after try n is REFUSAL_WAIT_SECONDS[n - 1]
+        schedule = REFUSAL_WAIT_SECONDS
+    else:
+        schedule = COOLDOWN_SECONDS
     index = step if isinstance(step, int) and not isinstance(step, bool) and step >= 0 else 0
-    delay = COOLDOWN_SECONDS[min(index, len(COOLDOWN_SECONDS) - 1)]
+    delay = schedule[min(index, len(schedule) - 1)]
     used = whole_seconds(rec.get("probed_wake_epoch"))
 
     def candidate(reading: object) -> int:
@@ -654,6 +699,8 @@ def wake_needs_arming(rec: dict, now_epoch: object) -> bool:
     """True when a cool-down park's saved wake cannot be trusted: absent, not a whole displayable
     time, already consumed by a probe, or further ahead of the clock than any wake this module
     arms. A valid wake in the future (or due and unused) is NOT in need: it is held or probed."""
+    if is_held(rec):
+        return False                          # a held refusal has no wake time, by design
     wake = displayable_epoch(rec.get("wake_epoch"))
     if wake is None or rec.get("probed_wake_epoch") == wake:
         return True
@@ -707,7 +754,29 @@ def apply_cooldown_result(rec: dict, *, at: str, generation: str, kind: str, now
         rec.pop("park_detail", None)
     else:
         rec["park_detail"] = word
+    if kind == KIND_REFUSED:
+        _count_refusal(rec, at=at)
     arm_cooldown_wake(rec, now_epoch=now_epoch, step=rec["cooldown_step"])
+
+
+def _count_refusal(rec: dict, *, at: str) -> None:
+    """One more refused turn: the count, the first and last time (the timings of a run of refusals stay readable
+    in the record), and the notice bookkeeping. While tries are left nothing is owed to anyone, so no notice is
+    asked for (a seat that gets through by itself sends none); the try that uses the last one is a transition
+    of its own: a new revision and a fresh notice, sent once (a later refused probe changes nothing)."""
+    was_held = is_held(rec)
+    rec["refusal_total"] = refusal_total(rec) + 1
+    rec.setdefault("refusal_first_at", at)
+    rec["refusal_last_at"] = at
+    if is_held(rec) and not was_held:
+        rec["park_rev"] = park_rev(rec) + 1
+        rec["notice_key"] = f"rev:{rec['park_rev']}"
+        rec["notice_routed"] = False
+        rec["notice_tries"] = 0
+        rec["notice_next_at"] = None
+    elif not is_held(rec):
+        for key in ("notice_key", "notice_routed", "notice_tries", "notice_next_at"):
+            rec.pop(key, None)
 
 
 def apply_crash_reconcile(rec: dict, now_epoch: object = None) -> None:
@@ -719,6 +788,10 @@ def apply_crash_reconcile(rec: dict, now_epoch: object = None) -> None:
     rec["in_progress"] = False
     rec["probe_marker"] = False
     rec["park_state"] = PARKED
+    if park_kind(rec) == KIND_REFUSED:
+        # An attempt that was admitted and never reported back may well have been refused: it uses its try
+        # (a crash never gives a free retry), then the wake is armed again at the new count.
+        _count_refusal(rec, at=epoch_iso(cooldown_clock(now_epoch)))
     if is_cooldown(rec):
         arm_cooldown_wake(rec, now_epoch=cooldown_clock(now_epoch), step=cooldown_step(rec))
 
@@ -748,7 +821,8 @@ def format_epoch(epoch: object) -> str | None:
         return None
 
 
-def recovery_text(agent: str, message_id: str, kind: str = KIND_USAGE_LIMIT, *, pattern: bool = False) -> str:
+def recovery_text(agent: str, message_id: str, kind: str = KIND_USAGE_LIMIT, *, pattern: bool = False,
+                  held: bool = False) -> str:
     """THE one text that tells a person how to get a parked seat moving again. Attention,
     doctor and the notice all use it, and the README says the same.
 
@@ -763,6 +837,15 @@ def recovery_text(agent: str, message_id: str, kind: str = KIND_USAGE_LIMIT, *, 
     def cmd(template: str, **values: str) -> str:
         return template.format(**values) if pattern else pc.cmd(template, **values)
 
+    if kind == KIND_REFUSED and held:
+        return (
+            "The message is kept and nothing was changed or resent. A lead should read it first. To give it one more "
+            "try now: "
+            + cmd("agenttalk request-restart --for {a}", a=agent)
+            + " (it needs a running supervisor; without one, stop the wrapper and start it again; each start is one "
+            "try, never a new set of five). To skip the message instead: "
+            + cmd("agenttalk ack --for {a} --id {m}", a=agent, m=message_id)
+            + " (it skips the message and leaves no dead-letter record; it is refused for a managed lead-loop agent).")
     if kind in COOLDOWN_KINDS:
         return (
             "The seat keeps its saved retry time, so starting it again does not try sooner. To skip the "
@@ -849,7 +932,7 @@ def park_view(marker: dict | None, health: dict | None = None, *, verdict_state:
         return None
     kind = marker.get("kind") if marker.get("kind") in COOLDOWN_KINDS else KIND_USAGE_LIMIT
     rev = marker.get("park_rev")
-    return {
+    view = {
         "present": True,
         "state": VIEW_PARKED if fresh else VIEW_STALE,
         "fresh": fresh,
@@ -866,6 +949,12 @@ def park_view(marker: dict | None, health: dict | None = None, *, verdict_state:
         "next_try_epoch": displayable_epoch(marker.get("next_try_epoch")) if kind in COOLDOWN_KINDS else None,
         "park_rev": rev if isinstance(rev, int) and not isinstance(rev, bool) and rev > 0 else None,
     }
+    if kind == KIND_REFUSED:
+        # Refusal kind only (#857): the tries used, and whether they are all used (a hold). Other kinds keep
+        # exactly the keys they had, so no existing reader or payload contract changes.
+        view["tries"] = _int(marker.get("tries"))
+        view["held"] = bool(marker.get("held"))
+    return view
 
 
 def park_text(view: dict | None) -> str | None:
@@ -873,6 +962,23 @@ def park_text(view: dict | None) -> str | None:
     if not isinstance(view, dict) or not view.get("present"):
         return None
     kind = view.get("kind")
+    if kind == KIND_REFUSED:
+        # A safety refusal: tries used of the five, then a hold. Counts and a time only, never provider text.
+        tries = max(1, _int(view.get("tries")))
+        if view.get("held"):
+            text = (f"held: the provider refused this message {tries} times; it is kept and not retried until "
+                    "the seat is started again")
+        elif view.get("state") == VIEW_STALE:
+            text = (f"waiting after the provider refused a turn (try {tries} of {REFUSAL_TRIES}), wrapper not "
+                    "responding")
+        else:
+            when = format_epoch(view.get("next_try_epoch"))
+            text = (f"waiting after the provider refused a turn (try {tries} of {REFUSAL_TRIES}); tries again at "
+                    f"{when}" if when else
+                    f"waiting after the provider refused a turn (try {tries} of {REFUSAL_TRIES}); tries again shortly")
+        if view.get("supervisor_consulted") is False:
+            text += f" ({NOT_CONSULTED_NOTE})"
+        return text
     if kind in COOLDOWN_KINDS:
         # A cool-down is a wait for the provider, never "a usage limit" for an overload; the only time
         # shown is the park's own saved next try.

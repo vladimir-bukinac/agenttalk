@@ -3000,9 +3000,14 @@ def _check_usage_limit_parks(store: Store, *, now_epoch: float | None = None) ->
     if not kinds or usage_park.KIND_USAGE_LIMIT in kinds:
         fix += ("It tries again by itself at the stated reset time and each time it is started. "
                 + usage_park.recovery_text("<agent>", "<message id>", pattern=True) + " ")
-    if kinds & set(usage_park.COOLDOWN_KINDS):
+    if kinds & {usage_park.KIND_OVERLOADED, usage_park.KIND_THROTTLED}:
         fix += ("A seat waiting on the provider tries again by itself at its saved retry time. "
                 + usage_park.recovery_text("<agent>", "<message id>", usage_park.KIND_OVERLOADED, pattern=True)
+                + " ")
+    if usage_park.KIND_REFUSED in kinds:
+        fix += ("A seat that was refused by the provider tries five times, then holds the message for a person. "
+                + usage_park.recovery_text("<agent>", "<message id>", usage_park.KIND_REFUSED, pattern=True,
+                                           held=True)
                 + " ")
     return Check(
         name="usage_limit_park",

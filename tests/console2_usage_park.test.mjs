@@ -52,6 +52,20 @@ test('a parked seat is not down and not capped', () => {
   assert.equal(v.cap, '');
 });
 
+test('a provider refusal is its own kind: tries of five, then a hold, never called a usage limit (#857)', () => {
+  const REFUSED = (o = {}) => PARK({ kind: 'provider_refusal', tries: 2, held: false, window: null, reset_epoch: null,
+    wake_epoch: null, next_try_epoch: RESET, ...o });
+  const waiting = view(parked({}, REFUSED()));
+  assert.equal(waiting.state, 'parked');
+  assert.equal(waiting.line, 'Waiting after a provider refusal (try 2 of 5) · tries again at ' + label(RESET));
+  const held = view(parked({}, REFUSED({ tries: 5, held: true, next_try_epoch: null })));
+  assert.equal(held.state, 'parked');
+  assert.equal(held.line, 'Held · the AI provider refused 5 turns on this message');
+  const stale = view(parked({}, REFUSED({ state: 'stale', fresh: false })));
+  assert.equal(stale.line, 'Waiting after a provider refusal · wrapper not responding');
+  for (const v of [waiting, held, stale]) assert.ok(!/usage limit/i.test(v.line));
+});
+
 test('no time known: until it is started again', () => {
   const v = view(parked({}, PARK({ reset_epoch: null, wake_epoch: null })));
   assert.equal(v.state, 'parked');

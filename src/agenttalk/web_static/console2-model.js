@@ -524,6 +524,13 @@
     if (adverseVerdict) {
       // The supervisor's own verdict is the winner: shown as down, never as idle or parked.
       setState('down', 'Supervisor: ' + VERDICT_WORD(verdictNow));
+    } else if (park && park.kind === 'provider_refusal') {
+      // The provider refused a turn on safety grounds: tries of five while it waits, then a hold.
+      var refusalTries = typeof park.tries === 'number' ? park.tries : 0;
+      var refusalNext = parkTimeLabel(park.next_try_epoch);
+      if (park.held === true) setState('parked', 'Held · the AI provider refused ' + refusalTries + ' turns on this message');
+      else if (park.state === 'stale') setState('parked', 'Waiting after a provider refusal · wrapper not responding');
+      else setState('parked', 'Waiting after a provider refusal (try ' + refusalTries + ' of 5) · ' + (refusalNext ? 'tries again at ' + refusalNext : 'tries again shortly'));
     } else if (park && (park.kind === 'overloaded' || park.kind === 'throttled')) {
       // A wait for the provider: its own words, and only the park's own saved next try.
       var waitWhat = park.kind === 'overloaded' ? 'Waiting for an overloaded AI provider' : 'Waiting on a possible usage limit';

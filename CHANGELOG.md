@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A provider safety refusal now gets five tries, then a visible hold, instead of up to 20 quick
+  retries or a dead letter.** When the Codex service refused a turn ("flagged for possible
+  cybersecurity risk"), the wrapper treated it like an unknown failure: it ran the same message again
+  10 to 14 seconds later, up to about 20 times, with nobody told why, and every refused turn also
+  stopped the background work the seat had started. The older refusal wordings ("content filter",
+  "content policy" and the like) were worse in another way: they counted as "the message is bad" and
+  sent the message to the dead-letter list after 3 tries, although a message refused three or eight
+  times can go through on a later try. Now a refusal waits 1, 3, 7 and 15 minutes between five tries
+  (about half an hour in all), then the message is **held**: kept at the front of the queue, never
+  thrown away, never answered, with one notice to the lead. A refusal alone never disposes of a message
+  and never moves the seat past it, and a restart never gives back tries already used: starting the seat
+  again gives one more try, and the lead can skip the message with `agenttalk ack`. The retry is told,
+  in neutral words, that the previous attempt was refused and that its background work may have
+  stopped; the provider's own text is never repeated or stored. `status`, `attention`, `doctor` and
+  health show the try and the hold. The refusal is recognised from the structured reason first
+  (`cyber_policy`); an unknown or unusable reason proves nothing and never becomes "bad message". **The
+  wording change applies to every seat, including Claude seats.** Scoped one-shot runs use the same count
+  and hold. The numbers are a stated choice, not a measured optimum, and the exact place of the
+  structured reason in Codex's output is not confirmed by a real sample. `AGENTTALK_STOP_RETRIES_AT_LIMIT=0`
+  restores the old behaviour. (#857)
 - **Windows test jobs in CI may now run for 360 minutes instead of 330.** Between 16 and 18 November,
   18 Windows test jobs were stopped at the 330-minute limit without a single failing test, so pull
   requests waited for reruns. 360 minutes is the most GitHub's hosted runners allow; the 9,000-second

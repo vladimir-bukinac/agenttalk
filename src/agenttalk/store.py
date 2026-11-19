@@ -5049,6 +5049,38 @@ class Store:
                                 "tries": _safe_int(rec.get("notice_tries"))})
         return out
 
+    def record_refusal_outcome(self, agent: str, record: dict, *, generation: str, at: str, now_epoch: float,
+                               detail: str | None = None) -> dict:
+        """A refused turn on a SCOPED one-shot run, which writes no attempt before it drives: the same refusal count,
+        waits and hold as the continuous loop's, in the same ledger entry, so a later invocation reads them (#857).
+        An entry that does not exist yet is made the way ``record_attempt_start`` makes one, with no attempt counted
+        (nothing here disposes of anything). Returns the record."""
+        from agenttalk.wrapper import usage_park
+
+        data = self.dead_letter_attempts(agent)
+        mid = record.get("id")
+        rec = data["messages"].get(mid)
+        if not isinstance(rec, dict):
+            rec = {
+                "id": mid, "cursor_before": self.cursor(agent),
+                "request_id": record.get("request_id"), "broadcast_id": record.get("broadcast_id"),
+                "from": record.get("from"), "to": record.get("to"), "kind": record.get("kind"),
+                "subject": record.get("subject"), "first_started_at": at, "attempts_started": 0,
+                "poison_eligible_failures": 0, "infra_failures": 0, "ambiguous_failures": 0,
+                "last_failure_class": None, "last_failure_summary": None, "escalated": False,
+                "in_progress": False,
+            }
+        rec["in_progress"] = False
+        rec["last_failure_class"] = usage_park.CLASS_PROVIDER_REFUSAL
+        rec["last_failure_summary"] = "provider safety refusal"
+        rec["last_failure_at"] = at
+        usage_park.apply_cooldown_result(
+            rec, at=at, generation=generation, kind=usage_park.KIND_REFUSED, now_epoch=now_epoch,
+            detail=detail or usage_park.REFUSAL_DETAIL)
+        data["messages"][mid] = rec
+        self._write_attempts(agent, data)
+        return rec
+
     def close_usage_park(self, agent: str, msg_id: str, *, at: str) -> bool:
         """End a head's usage-limit park without a result (the switch is off and the head
         is driven): add the parked time to the total and drop the park fields. Returns
@@ -6603,6 +6635,9 @@ class Store:
                     "next_try_epoch": usage_park.displayable_epoch(usage_park.unused_wake(rec)) if cooling else None,
                     "park_rev": rev,
                 }
+                if usage_park.is_refusal_park(rec):
+                    effective["tries"] = usage_park.refusal_total(rec)
+                    effective["held"] = usage_park.is_held(rec)
             return usage_park.park_view(
                 effective, health, verdict_state=verdict_state, heartbeat_age=heartbeat_age)
         except Exception:  # noqa: BLE001 - a reader must never break on a view

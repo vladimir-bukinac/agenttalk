@@ -66,6 +66,10 @@ class Event:
                     reasoning - NEVER scanned, but a thinking_delta IS liveness).
                     None for non-model events / CLIs without the distinction.
     ``raw``       - the original adapter payload, kept for diagnostics/render.
+    ``error_code``- the STRUCTURED reason a terminal failure carries, as a lower-case closed word:
+                    None = the failure has no such field; "" = the field is there but unusable
+                    (not text, or empty, or more than one key); otherwise the word itself. Only
+                    the Codex adapter sets it (#857); nothing reads it from message or model text.
     """
 
     type: EventType
@@ -76,6 +80,7 @@ class Event:
     retryable: bool = False
     channel: str | None = None
     raw: dict = field(default_factory=dict)
+    error_code: str | None = None
 
     @property
     def is_progress(self) -> bool:

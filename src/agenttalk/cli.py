@@ -765,6 +765,15 @@ def _usage_limit_park_flag(view: object) -> str | None:
     if not isinstance(view, dict) or not view.get("present"):
         return None
     kind = view.get("kind")
+    if kind == usage_park.KIND_REFUSED:
+        # A provider safety refusal (#857): tries of the five while it waits, a hold after the fifth.
+        tries = view.get("tries") if isinstance(view.get("tries"), int) else 0
+        if view.get("held"):
+            return f"provider_refusal_held(tries={tries})"
+        if view.get("state") == usage_park.VIEW_STALE:
+            return f"provider_refusal_retrying(try={tries}/{usage_park.REFUSAL_TRIES},wrapper_not_responding)"
+        when = usage_park.format_epoch(view.get("next_try_epoch"))
+        return f"provider_refusal_retrying(try={tries}/{usage_park.REFUSAL_TRIES},retry={when or 'soon'})"
     if kind in usage_park.COOLDOWN_KINDS:
         # A provider wait (overloaded or throttled): its own flag; the only time is the park's saved next try.
         if view.get("state") == usage_park.VIEW_STALE:
@@ -13586,6 +13595,8 @@ def _usage_limit_notice_body(info: dict) -> str:
     from agenttalk.wrapper import usage_park
 
     kind = facts.get("kind")
+    if kind == usage_park.KIND_REFUSED:
+        return _provider_refusal_notice_body(info, facts)
     if kind in usage_park.COOLDOWN_KINDS:
         return _provider_wait_notice_body(info, facts, kind)
     reset = usage_park.format_epoch(wake - 30) if isinstance(wake, int) and not isinstance(wake, bool) else None
@@ -13598,6 +13609,26 @@ def _usage_limit_notice_body(info: dict) -> str:
     return (
         f"[usage-limit-parked] {head}Seat {ag} is parked: {state} Message {pc.meta_text(mid)} from "
         f"{info.get('from')} was NOT lost and was NOT dead-lettered. " + usage_park.recovery_text(ag, mid)
+    )
+
+
+def _provider_refusal_notice_body(info: dict, facts: dict) -> str:
+    """Plain words for the notice that a message is HELD after the provider refused its turns on safety grounds
+    (#857). Counts and times only: never the provider's own words, the message or the model's output. It does not
+    say the message is bad (a refusal alone is not proof of that), and it never suggests rewording it to get past a
+    refusal: a lead reads the message and decides."""
+    from agenttalk.wrapper import usage_park
+
+    ag, mid = info.get("agent"), info.get("msg_id")
+    tries = facts.get("tries") if isinstance(facts.get("tries"), int) else usage_park.REFUSAL_TRIES
+    first = usage_park.format_epoch(usage_park.iso_epoch(facts.get("first_at")))
+    span = f" since {first}" if first else ""
+    return (
+        f"[provider-refusal-held] Seat {ag} holds message {pc.meta_text(mid)} from {info.get('from')}: its AI "
+        f"provider refused {tries} turns on it for safety reasons{span}. The message was NOT lost and was NOT "
+        "dead-lettered, and nothing was changed, resent or answered. The seat tries it again only when it is "
+        "started again, or you skip it. "
+        + usage_park.recovery_text(ag, mid, usage_park.KIND_REFUSED, held=True)
     )
 
 
@@ -13644,6 +13675,8 @@ def _send_usage_limit_notice(store, agent: str, target: str, info: dict) -> bool
     # A cool-down is not a usage limit: its notice has its own subject. The proven limit keeps the old one.
     subject = ("provider-wait park notice" if facts.get("kind") in usage_park.COOLDOWN_KINDS
                else "usage-limit park notice")
+    if facts.get("kind") == usage_park.KIND_REFUSED:
+        subject = "provider-refusal hold notice"
     store.send(sender=agent, recipient=target, kind="message",
                subject=subject, body=_usage_limit_notice_body(info),
                meta={"usage_limit_park": "true",
@@ -14059,13 +14092,14 @@ def _inject_claude_permission_mode(argv: list[str], cli: str,
 
 
 def _interruption_rejoin_for(store, agent: str, k_interrupted: int):
-    """Build make_drive's #202 D4 rejoin provider (cli wiring, NOT the loop).
+    """Build make_drive's #202 D4 rejoin provider (cli wiring, NOT the loop). Also carries the #857 refusal line.
 
     Keyed per head id from the PERSISTED attempt ledger, so a rejoin can never leak
     across heads and survives relaunch. The one-shot loop has no ledger; it decorates
     the record in-memory (``interrupted_redelivery``) and is read here first. Returns
     the REJOIN CONTEXT block, or None on a first attempt / clean redelivery."""
     from agenttalk import reply_transport as _rt
+    from agenttalk.wrapper import usage_park
 
     def _elapsed_text(last_at: object) -> str:
         """When the turn was interrupted, as a complete phrase: "~12s ago", or "at an unknown
@@ -14079,7 +14113,27 @@ def _interruption_rejoin_for(store, agent: str, k_interrupted: int):
         seconds = max(0.0, datetime.now(timezone.utc).timestamp() - at.timestamp())
         return f"~{seconds:.0f}s ago"
 
+    def refusal_line(record: dict) -> str | None:
+        """#857: when the previous attempt on this message was refused by the provider, say so, in plain neutral
+        words. Read from the attempt ledger (so it survives a restart, and a scoped run reads it too); it never
+        repeats the provider's text and never tells the seat anything about the provider's safeguards."""
+        head = record.get("id")
+        if not isinstance(head, str) or not head:
+            return None
+        saved = store.attempt_record(agent, head) or {}
+        if saved.get("last_failure_class") != usage_park.CLASS_PROVIDER_REFUSAL:
+            return None
+        return ("The previous attempt was refused by the provider. Background work from that attempt may have "
+                "stopped; check its state before relying on it.")
+
     def rejoin_for(record: dict) -> str | None:
+        refused = refusal_line(record)
+        context = interruption_context(record)
+        if refused and context:
+            return refused + "\n" + context
+        return refused or context
+
+    def interruption_context(record: dict) -> str | None:
         head_id = record.get("id")
         ctx = record.get("interrupted_redelivery")
         # #202 cold-review P2-2: the one-shot path (``ctx`` is the in-memory

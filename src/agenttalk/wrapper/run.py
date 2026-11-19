@@ -1482,13 +1482,21 @@ _POISON_SIZE_MARKERS = (             # DIRECT: THIS message is too large (others
 # blocker) AND QUALIFIED by an HTTP/status/request-entity/payload context (codex 4th-verify).
 _POISON_413_RE = re.compile(r"\b413\b")
 _POISON_413_QUALIFIERS = ("http", "status", "request entity", "payload", "entity too large")
-_POISON_POLICY_MARKERS = (           # DIRECT: THIS message's content is disallowed
+# The provider's own refusal wording (#857). It is NOT poison any more: a refusal alone is not proof that THIS
+# message is the deterministic cause (one request was refused three or eight times and then went through), so the
+# wording means "the provider refused a turn", which gets a bounded number of tries and then a hold, never a
+# dead letter.
+_REFUSAL_POLICY_MARKERS = (
     "content policy", "content filter", "content_filter", "safety policy",
     "blocked by safety", "blocked by content policy",
+    "flagged for possible cybersecurity risk",
 )
-# QUALIFIED: "violates"/"flagged by" are poison ONLY with a content/policy/safety/filter
-# qualifier - bare "violates the rate limit" / "flagged by the gateway" are NOT message-poison.
-_POISON_CONTENT_QUALIFIERS = ("content", "policy", "safety", "filter")
+# QUALIFIED: "violates"/"flagged by" are a refusal ONLY with a content/policy/safety/filter
+# qualifier - bare "violates the rate limit" / "flagged by the gateway" are neither poison nor refusal.
+_REFUSAL_CONTENT_QUALIFIERS = ("content", "policy", "safety", "filter")
+# The one structured reason that PROVES a Codex safety refusal. Any other word, or an unusable field, proves
+# nothing either way and keeps the failure ambiguous (it never becomes poison or a refusal on wording alone).
+_CODEX_REFUSAL_CODES = ("cyber_policy",)
 # QUALIFIED: "exceeds the maximum" is poison ONLY with a content-SIZE object - bare
 # "exceeds the maximum retries" is infra/ambiguous, never poison.
 _POISON_SIZE_QUALIFIERS = ("token", "context", "input", "prompt", "message", "request",
@@ -1497,20 +1505,29 @@ _POISON_SIZE_QUALIFIERS = ("token", "context", "input", "prompt", "message", "re
 
 def _looks_like_content_poison(text: str | None) -> bool:
     """True iff a terminal error message is EXPLICIT, message-content-attributable poison:
-    a DIRECT size/policy signature, or a QUALIFIED 'violates'/'flagged by'/'exceeds the
-    maximum' (their bare forms are too broad and stay AMBIGUOUS). codex ruling."""
+    a DIRECT size signature, or a QUALIFIED 'exceeds the maximum' / 413 (their bare forms are too
+    broad and stay AMBIGUOUS). codex ruling. The provider's refusal wording is NOT here (#857): see
+    :func:`_looks_like_provider_refusal`."""
     t = (text or "").lower()
     if any(m in t for m in _POISON_SIZE_MARKERS):
-        return True
-    if any(m in t for m in _POISON_POLICY_MARKERS):
-        return True
-    if ("violates" in t or "flagged by" in t) and any(q in t for q in _POISON_CONTENT_QUALIFIERS):
         return True
     if "exceeds the maximum" in t and any(q in t for q in _POISON_SIZE_QUALIFIERS):
         return True
     if _POISON_413_RE.search(t) and any(q in t for q in _POISON_413_QUALIFIERS):
         return True
     return False
+
+
+def _looks_like_provider_refusal(text: str | None) -> bool:
+    """True iff a TERMINAL failure's message is wording the provider uses to refuse a turn on safety grounds: a direct
+    policy phrase, or 'violates'/'flagged by' together with a content/policy/safety/filter word. It says the
+    provider refused, never that the message is bad. Applies to every seat (the sorter is shared); only the
+    structured Codex reason below is Codex-specific. Called only for a terminal failure's own message, never for model
+    output, tool output or the inbound message."""
+    t = (text or "").lower()
+    if any(m in t for m in _REFUSAL_POLICY_MARKERS):
+        return True
+    return ("violates" in t or "flagged by" in t) and any(q in t for q in _REFUSAL_CONTENT_QUALIFIERS)
 
 
 def parse_lines(lines: Iterable[str], mapper: Callable[[object], list[Event]]) -> Iterator[Event]:
@@ -2247,6 +2264,7 @@ def _classify_drive_failure(
         CLASS_GATEWAY_HELD,
         CLASS_INFRA,
         CLASS_POISON,
+        CLASS_PROVIDER_REFUSAL,
         NEVER_STARTED_SUMMARY_PREFIX,
     )
 
@@ -2333,8 +2351,21 @@ def _classify_drive_failure(
             return CLASS_CONFIG_BLOCKED, blocked
         if structured:
             return CLASS_INFRA, structured
+        code = sig.get("terminal_code")
+        if code in _CODEX_REFUSAL_CODES:
+            # The structured reason is the proof, read before any wording. The summary holds the closed word only.
+            return CLASS_PROVIDER_REFUSAL, f"provider safety refusal ({code})"
         if _looks_like_content_poison(text):
             return CLASS_POISON, f"terminal content-poison: {text[:160]}"
+        if code is None and _looks_like_provider_refusal(text):
+            # No structured reason at all: the wording decides, and the summary still holds no provider text.
+            return CLASS_PROVIDER_REFUSAL, "provider safety refusal (wording)"
+        if code is not None:
+            # A structured reason that is unknown or unusable is indeterminate: not a refusal, never poison, and
+            # the wording cannot override it. The word itself is shown only when it is a plain token.
+            shown = health_model.safe_token(code) if code else None
+            return CLASS_AMBIGUOUS, ("terminal failure, structured reason "
+                                     + (f"{shown!r} not recognised" if shown else "unusable"))
         # #145 note (deliberately NOT extended here): a mid-session rate-limit
         # message that parsed as valid JSON but carries no recognized structured
         # status stays CLASS_AMBIGUOUS, unchanged - a real adapter DID run for this
@@ -3012,7 +3043,7 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
         as ``error`` (infra), never raised, so the turn fails GRACEFULLY (no wrapper crash)."""
         argv = list(base_argv) + spec.args
         sig = {"ok": False, "started": False, "completed": False, "terminal": False,
-               "retryable": False, "rc": None, "error": None, "terminal_text": "",
+               "retryable": False, "rc": None, "error": None, "terminal_text": "", "terminal_code": None,
                "config_blocked": False, "config_blocked_text": "", "bus_failure": None,
                "setup_failure": None,
                "bus_action_attempted": False, "bus_action_infra": False,
@@ -3126,6 +3157,8 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
                             # carry an INFRA message (529/rate-limit/5xx/auth), which must NOT
                             # be classed poison (lead verify P1).
                             sig["terminal_text"] = ev.text or sig["terminal_text"]
+                            if ev.error_code is not None:
+                                sig["terminal_code"] = ev.error_code
                     elif ev.type == EventType.TOOL_FINISHED:
                         verb = _bus_command_verb(ev.tool)
                         if verb in _REQUIRED_BUS_WRITE_VERBS:
@@ -3263,6 +3296,10 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
 
     def _limit_fields(sig: dict, failure_class: str) -> dict:
         """The usage-limit fact beside the (unchanged) class, or nothing."""
+        if failure_class == _usage_park.CLASS_PROVIDER_REFUSAL:
+            # #857: a refusal is a fact of its own, for any seat and not only Claude's. Whether it parks is the
+            # loop's decision (the switch); the closed detail word is what health shows for it.
+            return {"limit_fact": _usage_park.FACT_REFUSED, "limit_detail": _usage_park.REFUSAL_DETAIL}
         fact = _usage_limit_fact(sig, failure_class) if park_on else None
         if fact is None:
             soft = _soft_limit_fact(sig, failure_class) if park_on else None
@@ -3644,7 +3681,7 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
         the broken-session K gate."""
         argv = list(base_argv) + spec.args
         sig = {"ok": False, "started": False, "completed": False, "terminal": False,
-               "retryable": False, "rc": None, "error": None, "terminal_text": "",
+               "retryable": False, "rc": None, "error": None, "terminal_text": "", "terminal_code": None,
                "config_blocked": False, "config_blocked_text": "", "bus_failure": None,
                "setup_failure": None, "usage_stream": {},
                "child_output_tail": None, "discarded_output_tail": None,
@@ -3702,6 +3739,8 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
                         else:
                             sig["terminal"] = True
                             sig["terminal_text"] = ev.text or sig["terminal_text"]
+                            if ev.error_code is not None:
+                                sig["terminal_code"] = ev.error_code
                     elif ev.type == EventType.TOOL_FINISHED:
                         bus = classify_bus_execution(ev.tool, ev.text, ev.exit_code, ev.raw)
                         if bus["kind"] == BUS_KIND_CONFIG_BLOCKED:

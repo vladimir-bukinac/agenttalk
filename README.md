@@ -1700,6 +1700,70 @@ is decided first and is unchanged.
 `park_rev` goes up on a new park and on every change of kind, and is what the attention card is
 bound to (never the next-try time); it is absent on a history that only ever held a usage limit.
 
+### When the AI provider refuses a turn on safety grounds (the refusal hold)
+
+**In plain words.** Sometimes the provider ends a turn by refusing it on safety grounds (the wording
+seen was "flagged for possible cybersecurity risk"). Before, the wrapper treated that like an unknown
+failure: it ran the same message again 10 to 14 seconds later, up to about 20 times, nobody was told
+why, and each refused turn also stopped the background work the seat had started. Now a refusal gets
+**five tries in all, over about half an hour**, and then the wrapper **holds** the message: it stays at
+the front of the seat's queue, nothing is lost, thrown away, changed or answered, and the lead gets one
+notice. A refusal alone never puts a message in the dead-letter list and never moves the seat past it.
+
+**What the seat does by itself**
+
+- Waits 1 minute after the first refusal, 3 after the second, 7 after the third and 15 after the fourth
+  (26 minutes of waiting; about half an hour with the five turns). The fifth refusal starts the hold.
+  These numbers are a stated choice, not a measured optimum: the two requests that led to this took 4
+  and 9 turns, so the second would have ended in a hold too.
+- Tells the next turn, in these words and no others: "The previous attempt was refused by the provider.
+  Background work from that attempt may have stopped; check its state before relying on it." The
+  provider's own text is never repeated, and nothing is ever said about getting around a refusal.
+- While held, it does nothing but stay alive and say so. **Starting the seat again gives it one more try**
+  (one per start, never a new set of five); the lead can also skip the message with
+  `agenttalk ack --for <agent> --id <message id>`. A lead should read the message first.
+
+**What you will notice**
+
+- `agenttalk status` flags the seat `provider_refusal_retrying(try=<n>/5,retry=<time>)` while it waits
+  and `provider_refusal_held(tries=<n>)` once it holds the message. `agenttalk attention`, `agenttalk
+  doctor` and the web consoles show it as **PARKED**, in plain words, with the way out.
+- Health is the existing `rate_limited_or_outage` state with the reason `provider_wait_parked` while it
+  waits and `provider_refusal_held` when held; the cause word is `provider_safety_refusal`.
+- One notice goes to the liaison (or the sole lead) when the hold starts, with the subject
+  "provider-refusal hold notice". It carries counts and times only. A seat that gets through by itself
+  sends none.
+
+**How a refusal is recognised.** The structured reason comes first: a terminal Codex failure whose
+`codex_error_info` is `cyber_policy` is a refusal. A reason that is present but unknown or unusable proves
+nothing and keeps the failure an ordinary unknown one; the wording cannot override it. With no structured
+reason, the provider's refusal wording is a refusal: the phrase above, and the older policy phrases
+(`content policy`, `content filter`, `safety policy`, `blocked by safety`, `violates` or `flagged by` with a
+content, policy, safety or filter word). **This wording change applies to every seat, Claude seats too:**
+those phrases used to be counted as "the message is bad" and ended in the dead-letter list after 3 tries.
+Size wording ("context length", "prompt is too long") is unchanged. Only a terminal failure's own message is
+read, never the model's output, a tool's output or an inbound message.
+
+**Limits to know**
+
+- The exact place of `codex_error_info` in the output of `codex exec --json` is not confirmed by a real
+  sample (the fixtures are made up from the wording above). The adapter reads it inside `error` and beside
+  it, and the wording route covers a failure with neither.
+- A scoped one-shot run (an ephemeral reviewer) uses the same count, waits and hold, kept in the same
+  attempt record, and a later run reads them. It sends no notice and exits like any failed run while the
+  wait does not fit in its time limit. A crash in the very first try of a scoped run is not counted.
+- The count and the hold are kept in the message's attempt record. A record that is missing, torn or
+  unreadable reads as no attempts, as it always did, so it cannot make a healthy message look refused.
+- With `AGENTTALK_STOP_RETRIES_AT_LIMIT` set to `0` a refusal is driven as before this change (an unknown
+  failure).
+- Holding the message at the front of the queue holds the messages behind it too, as for a usage limit.
+
+**Technical detail.** New fields in the message's attempt record (added only): `park_kind`
+`provider_refusal`, `refusal_total`, `refusal_first_at`, `refusal_last_at`; the failure class word is
+`provider_refusal`. `refusal_total` is its own counter: it is never reset by a park that closes, so an
+unrelated failure between two refusals never gives a try back, and it moves no disposal counter. A crash
+in a try counts the try. The wait is armed by `usage_park.arm_cooldown_wake`; a hold has no `wake_epoch`.
+
 ### Messaging-system internals
 
 - **No daemon.** The bus is files under `.agenttalk/`; nothing has to

@@ -747,7 +747,23 @@ def _usage_limit_park_item(v: dict) -> dict:
     parked_at_epoch = usage_park.iso_epoch(v.get("parked_at"))
     item_age = max(0.0, time.time() - parked_at_epoch) if parked_at_epoch is not None \
         else float(v.get("age_seconds") or 0)
-    if kind != usage_park.KIND_USAGE_LIMIT:
+    if kind == usage_park.KIND_REFUSED:
+        # #857: the provider refused a turn on safety grounds. Counts only; the message is kept either way.
+        tries = max(1, v.get("tries") if isinstance(v.get("tries"), int) else 1)
+        if v.get("held"):
+            why = (f"{ag} holds a message: its AI provider refused {tries} turns on it for safety reasons. The "
+                   "message is kept, not retried, not dead-lettered and not answered, and the messages behind it "
+                   "wait. A person should read it before deciding.")
+        elif stale:
+            why = (f"{ag} is waiting after its AI provider refused a turn (try {tries} of "
+                   f"{usage_park.REFUSAL_TRIES}), and its wrapper has not refreshed that status lately. The "
+                   "message it holds is kept.")
+        else:
+            why = (f"{ag} is waiting after its AI provider refused a turn (try {tries} of "
+                   f"{usage_park.REFUSAL_TRIES}). It tries again by itself at its saved time, and after the "
+                   "last try it holds the message for a person. The message is kept, and the messages behind it "
+                   "wait.")
+    elif kind != usage_park.KIND_USAGE_LIMIT:
         cause = ("its AI provider looks overloaded" if kind == usage_park.KIND_OVERLOADED
                  else "its provider returned an error that looks like a usage limit but could not be confirmed")
         if stale:
@@ -768,7 +784,7 @@ def _usage_limit_park_item(v: dict) -> dict:
         why = (f"{ag} stopped retrying because its {window} AI allowance is used up and no "
                "reset time was stated. It tries once more each time it is started. The "
                "message it holds is kept, and the messages behind it wait.")
-    recommendation = usage_park.recovery_text(ag, v.get("message_id"), kind)
+    recommendation = usage_park.recovery_text(ag, v.get("message_id"), kind, held=bool(v.get("held")))
     ident = {"agent": ag, "window": v.get("window"),
              "reset_epoch": v.get("reset_epoch"), "stale": stale,
              "message_id": v.get("message_id"),

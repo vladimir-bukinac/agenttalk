@@ -239,7 +239,7 @@ class WrapperHealthWriter:
         record = record if isinstance(record, dict) else {}
         request_id = resolve_request_id(record)
         msg_id = record.get("id")
-        if reason_code in (USAGE_LIMIT_PARKED_REASON, PROVIDER_WAIT_PARKED_REASON):
+        if reason_code in (USAGE_LIMIT_PARKED_REASON, PROVIDER_WAIT_PARKED_REASON, usage_park.REASON_REFUSAL_HELD):
             # A head parked on a provider usage limit, or cooling down because the provider is
             # overloaded or throttling, is an outage-like wait that ends by itself - never a
             # config error. The existing rate_limited_or_outage state, with its own reason (a
@@ -478,6 +478,10 @@ def classify_failure(
         return health_model.STATE_STUCK_SUSPECTED, "turn_watchdog_fired", None
     if failure_class == CLASS_CONFIG_BLOCKED:
         return health_model.STATE_ERRORED_AMBIGUOUS, _setup_failure_reason(sig) or "config_blocked", None
+    if failure_class == usage_park.CLASS_PROVIDER_REFUSAL:
+        # The provider refused the turn on safety grounds (#857): an error that is neither poison nor an outage.
+        # A closed word only, never the provider's own text.
+        return health_model.STATE_ERRORED_AMBIGUOUS, usage_park.REFUSAL_DETAIL, None
     if (usage_limit_evidence is not None and failure_class == CLASS_INFRA
             and not usage_park.local_cause_present(sig)
             and usage_park.fact_from_stream(sig.get("usage_stream")) is not None):

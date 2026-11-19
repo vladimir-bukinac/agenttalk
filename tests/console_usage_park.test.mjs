@@ -64,6 +64,23 @@ test('a parked seat is "Parked", needs attention, and is not the danger red of "
   assert.match(info.desc, new RegExp('tries again shortly after ' + WHEN));
 });
 
+test('a provider refusal is its own kind: tries of five, then a hold, never called a usage limit (#857)', () => {
+  const waiting = api.agentStateInfo(agent({ usage_limit_park: park({ kind: 'provider_refusal', tries: 2, held: false,
+    window: null, reset_epoch: null, wake_epoch: null, next_try_epoch: RESET }) }));
+  assert.equal(waiting.label, 'Waiting · provider refusal');
+  assert.match(waiting.desc, /try 2 of 5/);
+  assert.match(waiting.desc, new RegExp('at ' + WHEN));
+  assert.ok(!/usage limit/i.test(waiting.desc));
+  const held = api.agentStateInfo(agent({ usage_limit_park: park({ kind: 'provider_refusal', tries: 5, held: true,
+    window: null, reset_epoch: null, wake_epoch: null, next_try_epoch: null }) }));
+  assert.equal(held.label, 'Held · provider refusal');
+  assert.match(held.desc, /refused 5 turns/);
+  assert.equal(held.grp, 'attn');
+  const stale = api.agentStateInfo(agent({ usage_limit_park: park({ kind: 'provider_refusal', tries: 2, held: false,
+    state: 'stale', fresh: false, window: null, reset_epoch: null, wake_epoch: null }) }));
+  assert.equal(stale.label, 'Waiting · not responding');
+});
+
 test('no reset time known: it tries again each time it is started', () => {
   const info = api.agentStateInfo(agent({ usage_limit_park: park({ reset_epoch: null, wake_epoch: null }) }));
   assert.equal(info.label, 'Parked · usage limit');

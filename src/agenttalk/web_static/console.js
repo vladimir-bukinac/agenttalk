@@ -644,6 +644,21 @@
   }
   function parkedStateInfo(park) {
     var key = 'usage_limit_parked';
+    if (park.kind === 'provider_refusal') {
+      // The provider refused a turn on safety grounds: tries of five while it waits, then a hold. Never a usage limit.
+      var tries = typeof park.tries === 'number' ? park.tries : 0;
+      if (park.held === true) {
+        return { label: 'Held · provider refusal', key: key, color: 'attn', grp: 'attn',
+          desc: 'The AI provider refused ' + tries + ' turns on its message for safety reasons; the message is kept and not retried until the seat is started again — a person should read it' };
+      }
+      if (park.state === 'stale') {
+        return { label: 'Waiting · not responding', key: key, color: 'attn', grp: 'attn',
+          desc: 'Waiting after the AI provider refused a turn, but its wrapper has not refreshed that status lately — it may need a restart' };
+      }
+      var nextTry = parkTime(park.next_try_epoch);
+      return { label: 'Waiting · provider refusal', key: key, color: 'attn', grp: 'attn',
+        desc: 'The AI provider refused a turn (try ' + tries + ' of 5); it tries again ' + (nextTry ? 'at ' + nextTry : 'shortly') };
+    }
     if (park.kind === 'overloaded' || park.kind === 'throttled') {
       // A wait for the provider (overloaded, or an error that looks like a usage limit but could not be
       // confirmed): its own words, the same attention tone and style key, and only the park's own next try.

@@ -2331,17 +2331,19 @@ def test_make_drive_classifies_failures_for_dead_letter(tmp_path) -> None:
     o_config = d_config(rec)
     assert o_config.ok is False and o_config.failure_class == loop.CLASS_CONFIG_BLOCKED
     # (b) EXPLICIT message-content-attributable failure -> POISON (the @K_poison fast-path):
-    #     ONLY the size + content-policy families (this message is the deterministic cause).
-    #     "blocked by content policy"/"by safety" stay POISON - the C4 edge tokens above do NOT
-    #     include bare "blocked", so they never SHADOW a real content-policy block (lead C4).
-    #     "violates"/"flagged by" are poison ONLY when QUALIFIED by content/policy/safety/
-    #     filter (codex marker-conservatism ruling #1).
-    for msg in ("context length exceeded", "prompt is too long",
-                "content policy violation", "request blocked by safety policy",
-                "blocked by content policy",
-                "violates content policy", "flagged by content filter"):
+    #     ONLY the size family (this message is the deterministic cause).
+    for msg in ("context length exceeded", "prompt is too long"):
         o = _drive(lambda a, i, m=msg: _failed_turn_lines(m))(rec)
         assert o.ok is False and o.failure_class == loop.CLASS_POISON, msg
+    # (b2) the provider's own refusal wording (#857) is a REFUSAL, no longer poison: a refusal alone is not proof
+    #      that this message is the deterministic cause. "violates"/"flagged by" count only when QUALIFIED by
+    #      content/policy/safety/filter (codex marker-conservatism ruling #1).
+    for msg in ("content policy violation", "request blocked by safety policy",
+                "blocked by content policy",
+                "violates content policy", "flagged by content filter",
+                "flagged for possible cybersecurity risk"):
+        o = _drive(lambda a, i, m=msg: _failed_turn_lines(m))(rec)
+        assert o.ok is False and o.failure_class == "provider_refusal", msg
     # (c) UNKNOWN / unrecognized terminal cause -> AMBIGUOUS, NOT poison (codex ruling:
     #     an unobserved cause must never false-DL at the low cap). Includes GENERIC
     #     request-level / GLOBAL CONFIG errors (model-not-found, unsupported-parameter,
@@ -3470,11 +3472,13 @@ _CLASSIFICATION_MATRIX = [
     ("context window exceeded", loop.CLASS_POISON),
     ("prompt is too long", loop.CLASS_POISON),
     ("input too large", loop.CLASS_POISON),
-    ("content policy violation", loop.CLASS_POISON),
-    ("flagged by content filter", loop.CLASS_POISON),
-    ("blocked by safety", loop.CLASS_POISON),
-    ("blocked by content policy", loop.CLASS_POISON),
-    ("violates content policy", loop.CLASS_POISON),
+    # --- REFUSAL (#857): the provider's own refusal wording. Bounded tries then a hold, never a dead letter. ---
+    ("content policy violation", "provider_refusal"),
+    ("flagged by content filter", "provider_refusal"),
+    ("blocked by safety", "provider_refusal"),
+    ("blocked by content policy", "provider_refusal"),
+    ("violates content policy", "provider_refusal"),
+    ("This request was flagged for possible cybersecurity risk.", "provider_refusal"),
     # 413 is QUALIFIED poison (HTTP/status/request-entity/payload context), never a bare "413"
     # substring (codex) - request-size-attributable, retry won't help.
     ("413 request entity too large", loop.CLASS_POISON),

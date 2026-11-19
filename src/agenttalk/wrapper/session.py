@@ -440,8 +440,8 @@ def resume_failure_is_session_attributable(failure_class: str | None,
     # is on - a usage-limit refusal says nothing about the session either way.
     if usage_limit_proven:
         return False
-    if failure_class in {"known_global_infra", "config_blocked"}:
-        return False
+    if failure_class in {"known_global_infra", "config_blocked", "provider_refusal"}:
+        return False                      # a refusal says nothing about the session (#857)
     # run.py records JSON parse disposition before bounding the diagnostic tail, so
     # parsed assistant/tool events can never be reinterpreted here after truncation.
     # We still scan raw diagnostics ONLY when the resumed turn never ran; the CLI's

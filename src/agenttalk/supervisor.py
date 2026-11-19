@@ -2037,7 +2037,7 @@ def _usage_limit_park_row(view: object, *, consulted: bool = True) -> dict:
     on a provider usage limit. Absent park -> ``{"present": False}``."""
     if not isinstance(view, dict) or not view.get("present"):
         return {"present": False}
-    return {
+    row = {
         "present": True,
         "state": view.get("state") if view.get("state") in ("parked", "stale") else "stale",
         "window": view.get("window") if view.get("window") in ("five_hour", "seven_day") else None,
@@ -2045,11 +2045,19 @@ def _usage_limit_park_row(view: object, *, consulted: bool = True) -> dict:
         "wake_epoch": view.get("wake_epoch") if isinstance(view.get("wake_epoch"), int) else None,
         # Additive, closed: the kind (an older view has none and reads as a usage limit) and the
         # park's own saved next try (a number or null).
-        "kind": view.get("kind") if view.get("kind") in ("usage_limit", "overloaded", "throttled") else "usage_limit",
+        "kind": view.get("kind") if view.get("kind") in (
+            "usage_limit", "overloaded", "throttled", "provider_refusal") else "usage_limit",
         "next_try_epoch": view.get("next_try_epoch") if isinstance(view.get("next_try_epoch"), int)
         and not isinstance(view.get("next_try_epoch"), bool) else None,
         "supervisor_consulted": consulted,
     }
+    if row["kind"] == "provider_refusal":
+        # Refusal kind only (#857): the tries used and whether they are all used (a hold). Other kinds keep
+        # exactly the keys they had.
+        tries, held = view.get("tries"), view.get("held")
+        row["tries"] = tries if isinstance(tries, int) and not isinstance(tries, bool) else None
+        row["held"] = held if isinstance(held, bool) else None
+    return row
 
 
 def _park_view_not_consulted(view: dict | None) -> dict | None:
