@@ -1755,7 +1755,8 @@ read, never the model's output, a tool's output or an inbound message.
 - The count and the hold are kept in the message's attempt record. A record that is missing, torn or
   unreadable reads as no attempts, as it always did, so it cannot make a healthy message look refused.
 - With `AGENTTALK_STOP_RETRIES_AT_LIMIT` set to `0` a refusal is driven as before this change (an unknown
-  failure).
+  failure), for scoped one-shot runs as well as the continuous loop, and a message already held is driven
+  again: the switch is how an operator releases a hold.
 - Holding the message at the front of the queue holds the messages behind it too, as for a usage limit.
 
 **Technical detail.** New fields in the message's attempt record (added only): `park_kind`

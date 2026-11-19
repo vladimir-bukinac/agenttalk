@@ -920,7 +920,9 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
                 max_turns=max_turns, max_polls=max_polls, max_wall=max_wall,
                 stamp=stamp, on_health_idle=on_health_idle,
                 on_runtime_idle=on_runtime_idle,
-                commit_gate=commit_gate, now_iso=now_iso, wrapper_generation=wait_token)
+                commit_gate=commit_gate, now_iso=now_iso, wrapper_generation=wait_token,
+                usage_limit_park=(usage_park.enabled() if usage_limit_park is None
+                                  else bool(usage_limit_park)))
         return _run_continuous(
             store, agent, drive, idle_interval=idle_interval,
             max_idle_interval=max_idle_interval, heartbeat_interval=heartbeat_interval,
@@ -2764,7 +2766,7 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                   on_health_idle: Callable[..., None] | None = None,
                   on_runtime_idle: Callable[[], None] | None = None,
                   commit_gate=None, now_iso: Callable[[], str] = _iso_now,
-                  wrapper_generation: str | None = None) -> int:
+                  wrapper_generation: str | None = None, usage_limit_park: bool = True) -> int:
     """SCOPED one-shot loop for an ephemeral reviewer (see run_loop). Receives only
     messages on ``rid`` so unrelated traffic neither starves it nor is consumed from
     the global inbox; bounded so it always terminates."""
@@ -2820,6 +2822,11 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
         rec = store.attempt_record(agent, head_id) or {}
         if not usage_park.is_refusal_park(rec):
             return None
+        if not usage_limit_park:
+            # Stopping retries is switched off (AGENTTALK_STOP_RETRIES_AT_LIMIT=0): as in the continuous loop, the park
+            # closes (its time stays out of every disposal count) and the request is driven, a hold included.
+            store.close_usage_park(agent, head_id, at=now_iso())
+            return None
         if usage_park.is_held(rec):
             return "held"
         now_e = usage_park.cooldown_clock(_wall_epoch())
@@ -2829,12 +2836,19 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             return float(wake - now_e)
         return None
 
+    def _as_driven(outcome: DriveOutcome) -> DriveOutcome:
+        """Switched off, a refusal is driven as before this change: an unknown failure (no park, no wait, and not the
+        gate's infrastructure case below)."""
+        if usage_limit_park or outcome.failure_class != CLASS_PROVIDER_REFUSAL:
+            return outcome
+        return replace(outcome, failure_class=CLASS_AMBIGUOUS, limit_fact=None, limit_detail=None)
+
     def _refusal_admit(record: dict) -> None:
         """Write ahead the try a parked refusal gets (the existing probe write): a crash in the turn is then
         counted as a refused try, never a free one."""
         head_id = record.get("id")
         rec = store.attempt_record(agent, head_id) if isinstance(head_id, str) else None
-        if not usage_park.is_refusal_park(rec) or rec.get("park_state") != usage_park.PARKED:
+        if not usage_limit_park or not usage_park.is_refusal_park(rec) or rec.get("park_state") != usage_park.PARKED:
             return
         store.record_attempt_start(
             agent, record, attempt_id=uuid.uuid4().hex[:12], at=now_iso(),
@@ -2846,7 +2860,7 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
         head_id = record.get("id")
         if not isinstance(head_id, str) or not head_id:
             return
-        if outcome.failure_class == CLASS_PROVIDER_REFUSAL and not outcome.ok:
+        if outcome.failure_class == CLASS_PROVIDER_REFUSAL and not outcome.ok and usage_limit_park:
             store.record_refusal_outcome(
                 agent, record, generation=wrapper_generation or "scoped", at=now_iso(),
                 now_epoch=usage_park.cooldown_clock(_wall_epoch()), detail=outcome.limit_detail)
@@ -2856,7 +2870,7 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             return
         if outcome.ok:
             store.clear_attempt(agent, head_id)       # it got through: the refusal record is no longer true
-        elif rec.get("probe_marker"):
+        elif rec.get("probe_marker") and usage_limit_park:
             # another kind of failure ends the probe: the park closes, the refusal count stays
             store.record_attempt_result(
                 agent, head_id, failure_class=outcome.failure_class or CLASS_AMBIGUOUS,
@@ -3109,8 +3123,8 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                     fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
                     continue
                 _refusal_admit(record)
-                outcome = _as_outcome(
-                    drive(_with_interruption_context(dispatch_record)))
+                outcome = _as_driven(_as_outcome(
+                    drive(_with_interruption_context(dispatch_record))))
                 _note_interruption(outcome)
                 _refusal_settle(record, outcome)
                 # A refused turn is the provider's, like an outage: it is not an agent that failed to reply, so it
@@ -3283,7 +3297,7 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
         # THIS attempt's "previously interrupted" fact on the record itself.
         record = _with_reply_draft(store, agent, _with_interruption_context(record))
         _refusal_admit(record)
-        outcome = _as_outcome(drive(record))
+        outcome = _as_driven(_as_outcome(drive(record)))
         _note_interruption(outcome)
         _refusal_settle(record, outcome)
         # connector P2 (final head): one-shot is LEDGER-LESS, so the FIX 5

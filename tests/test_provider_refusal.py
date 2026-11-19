@@ -835,3 +835,112 @@ def test_the_park_view_of_every_other_kind_keeps_exactly_the_keys_it_had():
         heartbeat_age=1.0,
     )
     assert shown["kind"] == "provider_refusal" and shown["tries"] == 3 and shown["held"] is False
+
+
+# ------------------------------------------------ the stop-retries switch (codex-rev, fix round 1)
+
+
+def scoped_hold(store, clock, message_id):
+    """Five scoped invocations, each started after the saved time: the request ends up held."""
+    for n in range(1, 6):
+        run_scoped(store, lambda record: refusal_outcome(), clock, generation=f"h{n}", max_polls=2, max_wall=30.0)
+        rec = store.attempt_record(AGENT, message_id)
+        if rec.get("wake_epoch"):
+            clock.t = float(rec["wake_epoch"])
+    assert park.is_held(store.attempt_record(AGENT, message_id))
+
+
+def switch_off(monkeypatch, how):
+    """The two ways the setting reaches a scoped run: the environment variable, or the argument."""
+    if how == "env":
+        monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
+        return {}
+    return {"usage_limit_park": False}
+
+
+@pytest.mark.parametrize("how", ["env", "argument"])
+def test_a_scoped_refusal_with_the_switch_off_is_an_ordinary_unknown_failure_and_never_parks(
+    tmp_path, monkeypatch, how
+):
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    calls = []
+
+    def drive(record):
+        calls.append(clock.t)
+        return refusal_outcome()
+
+    kw = switch_off(monkeypatch, how)
+    run_scoped(store, drive, clock, max_polls=3, max_wall=30.0, **kw)
+    rec = store.attempt_record(AGENT, store.messages_for(AGENT)[0].id)
+    assert rec is None or (rec.get("park_kind") != "provider_refusal" and "park_state" not in rec), rec
+    assert len(calls) == 3, "driven again at the loop's own short back-off, as before: no saved wait"
+    assert store.dead_lettered_count(AGENT) == 0
+
+
+def test_a_scoped_refusal_with_the_switch_on_still_parks(tmp_path):
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    run_scoped(store, lambda record: refusal_outcome(), clock, max_polls=3, max_wall=30.0, usage_limit_park=True)
+    rec = store.attempt_record(AGENT, store.messages_for(AGENT)[0].id)
+    assert rec["park_kind"] == "provider_refusal" and rec["refusal_total"] == 1
+
+
+@pytest.mark.parametrize("how", ["env", "argument"])
+def test_a_scoped_hold_is_driven_again_when_the_switch_is_turned_off(tmp_path, monkeypatch, how):
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)
+    seen = []
+
+    def drive(record):
+        seen.append(record["id"])
+        return loop.DriveOutcome(ok=True)
+
+    kw = switch_off(monkeypatch, how)
+    turns = run_scoped(store, drive, clock, generation="off", max_polls=2, max_wall=30.0, **kw)
+    assert seen == [message_id] and turns == 1
+    assert store.thread_seen(AGENT, "rq-1") == message_id
+    assert store.attempt_record(AGENT, message_id) is None or not park.is_refusal_park(
+        store.attempt_record(AGENT, message_id)
+    )
+
+
+def test_a_scoped_hold_driven_with_the_switch_off_and_refused_again_is_not_parked_again(tmp_path, monkeypatch):
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)
+    calls = []
+
+    def drive(record):
+        calls.append(record["id"])
+        return refusal_outcome()
+
+    monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
+    run_scoped(store, drive, clock, generation="off", max_polls=3, max_wall=30.0)
+    assert len(calls) == 3
+    assert not park.is_refusal_park(store.attempt_record(AGENT, message_id))
+
+
+@pytest.mark.parametrize("how", ["env", "argument"])
+def test_the_continuous_loop_drives_an_existing_hold_when_the_switch_is_turned_off(tmp_path, monkeypatch, how):
+    store, spawner, clock, seen, times = refuse_until_held(tmp_path)
+    message_id = head(store).id
+    spawner.steps = [ok_turn()]
+    if how == "env":
+        monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
+        result = go(store, spawner, clock, polls=1, generation="off", park_on=None)
+    else:
+        result = go(store, spawner, clock, polls=1, generation="off", park_on=False)
+    assert spawner.calls == 6 and result.turns == 1 and store.cursor(AGENT) == message_id
+    assert store.attempt_record(AGENT, message_id) is None
+
+
+def test_the_continuous_loop_with_the_switch_off_drives_a_refused_hold_as_an_unknown_failure(tmp_path):
+    store, spawner, clock, seen, times = refuse_until_held(tmp_path)
+    go(store, spawner, clock, polls=3, generation="off", park_on=False)
+    rec = ledger(store)
+    assert spawner.calls == 8 and "park_state" not in rec and rec["ambiguous_failures"] == 3
+    assert rec["last_failure_class"] == "ambiguous_or_unknown"
