@@ -1088,3 +1088,186 @@ def test_878_r5_non_url_scan_scales_linearly():
     short = min(elapsed(2000) for _ in range(2))
     long = min(elapsed(8000) for _ in range(2))
     assert long < short * 9 + 0.03, (short, long)
+
+
+# -------------------------------------------------------------------------- #885: the wordings the #878 reviews found
+#
+# Every row is a pair: a wording the check must read one way, next to one of the same shape it must read the other way.
+# Both run in the Bash and the PowerShell form, through the sentence reader and through the whole lint.
+
+_885_TEMPLATE = "When AGENTTALK_PY is set, run `{cmd}`{words}; otherwise use your manual."
+_885_TAIL = "\nRun `python -m agenttalk send`.\n"
+
+
+def _885_reads_as_the_rule(shell: str, words: str) -> bool:
+    """True when the sentence states the rule, checked twice: by the sentence reader and by the lint of a skill."""
+    skill = _885_TEMPLATE.format(cmd=PINNED_FORMS[shell], words=words) + _885_TAIL
+    stated = sc._states_pinned_rule(skill)
+    assert stated is not bool(sc._pinned_runtime_findings("x/SKILL.md", skill, "codex")), skill
+    return stated
+
+
+# Item 1, forbidden / prohibited / disallowed: (a ban of the pinned command, the same words about another command).
+_885_PROHIBITION_WORDS = {
+    "forbidden-next-sentence": (". The pinned command is forbidden", ". The plain command is forbidden"),
+    "prohibited-next-sentence": (". The pinned command is prohibited", ". The unpinned form is prohibited"),
+    "disallowed-it-next-sentence": (". It is disallowed", ". The bare form is disallowed"),
+    "forbidden-same-clause": (" is forbidden", "; the plain command is forbidden"),
+    "prohibited-which": (", which is prohibited", "; the plain one is prohibited"),
+    "disallowed-later-clause": ("; it is disallowed", "; the unpinned one is disallowed"),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_PROHIBITION_WORDS))
+def test_885_forbidden_prohibited_and_disallowed_are_bans_of_the_pinned_command_only(shell, name) -> None:
+    ban, other = _885_PROHIBITION_WORDS[name]
+    assert not _885_reads_as_the_rule(shell, ban), ban
+    assert _885_reads_as_the_rule(shell, other), other
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("word", ["forbidden", "prohibited", "disallowed"])
+def test_885_not_forbidden_supports_the_rule_and_forbidden_does_not(shell, word) -> None:
+    assert _885_reads_as_the_rule(shell, f"; it is not {word}")
+    assert _885_reads_as_the_rule(shell, f". The pinned command is never {word}")
+    assert not _885_reads_as_the_rule(shell, f"; it is {word}")
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+def test_885_limit_a_prohibition_word_after_another_command_in_the_command_s_own_clause_reads_as_a_ban(shell) -> None:
+    """A stated limit, as for "must not be used": inside the command's own clause a ban word that comes AFTER another
+    command is read as a ban, because the reader cannot tell which command it is about. In its own sentence it is fine
+    (the rows above)."""
+    assert not _885_reads_as_the_rule(shell, " and the plain command is forbidden")
+    assert not _885_reads_as_the_rule(shell, " and the plain command must not be used")
+
+
+# Items 2 and 3: a ban pointed back at the pinned command after a warning about another one, and a code-span `this`.
+_885_POINTED_BACK = {
+    "comma-or-this-one": (
+        " and do not use the plain command, or this one",
+        " and do not use the plain command, or the bare one",
+    ),
+    "or-it": (" and do not use the plain command or it", " and do not use the plain command or the unpinned one"),
+    "nor-this-one": (
+        " and do not use the plain command nor this one",
+        " and do not use the plain command nor the bare one",
+    ),
+    "or-the-pinned-one": (
+        " and do not use the plain command or the pinned one",
+        " and do not use the plain command or the bare one",
+    ),
+    "and-this-one-either": (
+        " and do not use the plain command and this one either",
+        " and do not use the plain command and the bare one either",
+    ),
+    "code-span-or-this": (
+        " and do not use `python -m agenttalk` or `this`",
+        " and do not use `python -m agenttalk` or `python3 -m agenttalk`",
+    ),
+    "never-run-this-span": (" and never run `this`", " and never run `python -m agenttalk`"),
+    "span-then-this-span": (
+        " and never run `python -m agenttalk` or `this`",
+        " and never run `python -m agenttalk` or `py -m agenttalk`",
+    ),
+    "or-this-one-kept": (" and do not use the plain command or this one", " and do not use the plain command"),
+    "later-clause-or-this-one": (
+        "; do not use the plain command, or this one",
+        "; do not use the plain command, or the bare one",
+    ),
+    "next-sentence-or-it": (". Never run the bare form or it", ". Never run the bare form or the unpinned one"),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_POINTED_BACK))
+def test_885_a_ban_pointed_back_at_the_pinned_command_after_another_target_is_seen(shell, name) -> None:
+    ban, other = _885_POINTED_BACK[name]
+    assert not _885_reads_as_the_rule(shell, ban), ban
+    assert _885_reads_as_the_rule(shell, other), other
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+def test_885_a_negation_word_written_as_an_option_is_still_read(shell) -> None:
+    """``-never use it`` is a ban written with a dash; a real option such as ``--no-sync`` or ``-n 5`` is still masked,
+    and ``-not $x`` (a PowerShell operator before a variable) is not read as prose."""
+    assert not _885_reads_as_the_rule(shell, " -never use it")
+    assert not _885_reads_as_the_rule(shell, " wait --no-sync -never use it")
+    assert _885_reads_as_the_rule(shell, " wait --no-sync")
+    assert _885_reads_as_the_rule(shell, " wait -n 5")
+    assert _885_reads_as_the_rule(shell, " wait -not $x")
+
+
+# Item 4: a URL followed straight by : ? or ! ends where the address ends, so the next clause is read on its own.
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("mark", [":", "?", "!"], ids=["colon", "question", "exclamation"])
+@pytest.mark.parametrize(
+    "url", ["https://example.org/a", "https://example.org:8443/a?x=1!b"], ids=["plain-url", "url-with-inner-marks"]
+)
+def test_885_a_url_followed_by_a_colon_question_or_exclamation_mark_ends_at_the_address(shell, mark, url) -> None:
+    words = f" send --file {url}{mark} "
+    assert _885_reads_as_the_rule(shell, words + "the plain command must not be used")
+    assert not _885_reads_as_the_rule(shell, words + "it must not be used")
+    assert not _885_reads_as_the_rule(shell, words + "and do not use the plain command or this one")
+
+
+# Item 5, a stated limit kept on purpose: "without" and "no" before "arguments" still read as a ban.
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("words", [" without arguments", " with no arguments"])
+def test_885_limit_without_arguments_still_reads_as_a_ban(shell, words) -> None:
+    """Known limit (#885 item 5), pinned here so a change is seen: these correct sentences are still flagged. They fail
+    safe (the author rewords, nothing unsafe passes), and an exception for them could hide "without it"."""
+    assert not _885_reads_as_the_rule(shell, words)
+    assert not _885_reads_as_the_rule(shell, " without it")
+
+
+# Items 6 and 7: warnings about another command, in shapes #878 did not know. (correct warning, a real ban next to it)
+_885_OTHER_TARGETS = {
+    "bare-code-span": (" and do not use bare `agenttalk`", " and do not use bare `agenttalk` and do not use it"),
+    "plain-double-quoted": (
+        ' and do not use the plain "python -m agenttalk"',
+        ' and do not use the plain "python -m agenttalk" or this one',
+    ),
+    "not-the-plain-span-in-brackets": (
+        " (not the plain `python -m agenttalk`)",
+        " (not the plain `python -m agenttalk`, and not the pinned command)",
+    ),
+    "never-plain-span": (
+        " and never plain `python -m agenttalk`",
+        " and never plain `python -m agenttalk`. Never run this",
+    ),
+    "not-the-one-on-path": (", not the one on PATH", ", not the one on PATH or this one"),
+    "never-the-interpreter-found-on-path": (
+        " and never the interpreter found on PATH",
+        " and never the interpreter found on PATH, and not the pinned command",
+    ),
+    "without-the-shim": (" without the shim", " without the shim or this one"),
+    "never-assume-the-plain-command-works": (
+        " and never assume the plain command works",
+        " and never assume the plain command works. It must not be used",
+    ),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_OTHER_TARGETS))
+def test_885_a_warning_about_another_command_is_not_a_ban_and_a_ban_beside_it_still_is(shell, name) -> None:
+    warning, ban = _885_OTHER_TARGETS[name]
+    assert _885_reads_as_the_rule(shell, warning), warning
+    assert not _885_reads_as_the_rule(shell, ban), ban
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize(
+    "words",
+    [
+        ' and do not use the bare "$AGENTTALK_PY"',
+        ' and do not use the plain `"$AGENTTALK_PY" -m agenttalk`',
+        " without the pinned interpreter",
+        " and never assume the pinned command works",
+    ],
+    ids=["quoted-pinned-variable", "span-with-pinned-variable", "without-pinned-interpreter", "assume-pinned-works"],
+)
+def test_885_a_qualifier_before_the_pinned_command_itself_is_still_a_ban(shell, words) -> None:
+    assert not _885_reads_as_the_rule(shell, words)

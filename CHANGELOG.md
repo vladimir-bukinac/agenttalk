@@ -97,6 +97,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   period right before a closing quote or bracket now ends it. A Windows drive path, including
   the drive-relative kind like `<drive>:file`, no longer counts as the end of a sentence part.
   The bundled skills are unchanged: the check gives the same answer for all of them.
+- **The skills check reads more wordings of the pinned-interpreter rule correctly (#885).** Some
+  sentences that forbid the pinned command were still read as stating the rule, and some correct
+  sentences were flagged. Now "forbidden", "prohibited" and "disallowed" are read as bans ("The
+  pinned command is forbidden."), while "not forbidden" still supports the rule. A ban pointed back
+  at the pinned command after a warning about another one ("do not use the plain command, or this
+  one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`") is a ban
+  in any part of the sentence. "-never use it" is read as words, not as a command option. A web
+  address followed by `:`, `?` or `!` now ends before that mark. A warning about another command is
+  no longer flagged when it names that command as "bare `agenttalk`", in double quotes, as "the one
+  on PATH" or "the interpreter found on PATH", as "the shim", or as "never assume the plain command
+  works". Two correct wordings are still flagged on purpose, "without arguments" and "with no
+  arguments", because an exception for them could let "without it" pass. The bundled skills are
+  unchanged: the check gives the same answer for all of them.
 - **A wrapped Claude seat in a strict permission mode can now send its replies by command (#828).** In a Claude
   Code mode other than `bypassPermissions` (`dontAsk` was measured), a command that starts with a
   variable is refused even when an allow rule matches it, and the wrapper told every Claude seat to run

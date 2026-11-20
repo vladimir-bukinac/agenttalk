@@ -55,7 +55,11 @@ _PLAIN_PYTHON_FORM = "python -m agenttalk"
 # Conditions may wrap at a line end or quote the name in backticks; bare mentions and
 # HTML comments do not state the rule.
 _FALLBACK = r"\botherwise\b|\bis\s+not\s+set\b|\bfall(?:s)?\s*back\b"
-_NEGATION = r"\b(?:not|never|avoid|without|refrain|cannot|no|don['’]t|mustn['’]t|shouldn['’]t|can['’]t)\b"
+# "forbidden", "prohibited" and "disallowed" forbid as plainly as "must not" (#885): "The pinned command is forbidden."
+_NEGATION = (
+    r"\b(?:not|never|avoid|without|refrain|cannot|no|don['’]t|mustn['’]t|shouldn['’]t|can['’]t"
+    r"|forbidden|prohibited|disallowed)\b"
+)
 _UP_TO_FALLBACK_WITHOUT_NEGATION = rf"(?:(?!{_FALLBACK}|{_NEGATION})[\s\S]){{0,600}}?"
 _RULE_RE = re.compile(
     r"\b(?:if|when)\b[^.]{0,60}?(?<![\w])AGENTTALK_PY(?![\w])`?\s+is\s+set"
@@ -65,10 +69,11 @@ _RULE_RE = re.compile(
     + rf"(?:{_FALLBACK})",
     re.IGNORECASE,
 )
-# A negation that supports the rule ("not optional", "never skip it") is not a prohibition of the pinned command.
+# A negation that supports the rule ("not optional", "never skip it", "not forbidden") is not a prohibition of the
+# pinned command.
 _REINFORCEMENT_RE = re.compile(
     rf"{_NEGATION}\s+(?:to\s+)?(?:be\s+)?(?:optional|negotiable|skipp?(?:ed)?|omitt?(?:ed)?|ignor(?:ed?)|"
-    r"replac(?:ed?)|bypass(?:ed)?|dropp?(?:ed)?|left\s+out)\b",
+    r"replac(?:ed?)|bypass(?:ed)?|dropp?(?:ed)?|left\s+out|forbidden|prohibited|disallowed)\b",
     re.IGNORECASE,
 )
 # A negation counts as a prohibition when it points back at the pinned command:
@@ -105,13 +110,33 @@ _CLAUSE_PUNCTUATION_RE = re.compile(r"[;.:!?]")
 _HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _URL_RE = re.compile(r"(?<![\w.+-])[a-z][a-z0-9+.-]*://[^\s`<>]+", re.IGNORECASE)
 _SHELL_QUOTED_ARGUMENT_RE = re.compile(r"(?:^|\s)--?\w[\w-]*(?:=|\s+)([\"'])(.*?)\1")
+# Another command a warning may name, so the warning is not read as a ban (#885 items 6 and 7): the plain, unpinned or
+# bare form named in words ("the plain command works" after "never assume" too), in a code span or in double quotes; any
+# other code span; the interpreter found on PATH; the shim. A span or quote that holds AGENTTALK_PY is the pinned
+# command itself, and a span that is only `this` / `that` / `it` / `them` points back at it, so neither is another
+# command. Single and typographic quotes are not read: an apostrophe cannot be told from a quote (a stated limit).
+_SPAN_NOT_PINNED = r"`(?!\s*(?:this|that|it|them)\s*`)(?![^`]*AGENTTALK_PY)[^`\n]+`"
+_QUOTE_NOT_PINNED = r'"(?![^"\n]*AGENTTALK_PY)[^"\n]+"'
 _OTHER_TARGET_RE = re.compile(
-    rf"{_NEGATION}\s+(?:(?:use|run|call|invoke|using)\s+)?"
-    r"(?:(?:the\s+)?(?:unpinned|plain|bare)\s+(?:\w+\s+){0,2}?"
-    r"(?:form|command|interpreter|one|python)\b|`(?![^`]*AGENTTALK_PY)[^`\n]+`)",
+    rf"{_NEGATION}\s+(?:(?:use|run|call|invoke|using|assume)\s+)?"
+    r"(?:(?:the\s+)?(?:unpinned|plain|bare)\s+"
+    r"(?:(?:\w+\s+){0,2}?(?:form|command|interpreter|one|python)\b(?:\s+works?\b)?"
+    rf"|{_SPAN_NOT_PINNED}|{_QUOTE_NOT_PINNED})"
+    rf"|{_SPAN_NOT_PINNED}"
+    r"|the\s+(?:one|interpreter|python|command|form)\s+(?:found\s+)?on\s+(?:the\s+)?PATH\b"
+    r"|the\s+shim\b)",
     re.IGNORECASE,
 )
-_SHELL_FLAG_RE = re.compile(r"(?<!\w)--?\w[\w-]*")
+# After a warning about another command, a ban pointed back at the pinned one in the same clause (#885 item 2):
+# "..., or this one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`".
+_POINTED_BACK_AFTER_RE = re.compile(
+    r"\s*,?\s+(?:(?:or|nor)\s+(?:it\b|`?(?:this|that)`?(?:\s+one)?|the\s+pinned\s+(?:one|command|form|interpreter))"
+    r"|and\s+(?:`?(?:this|that)`?(?:\s+one)?|the\s+pinned\s+(?:one|command|form|interpreter))\s+either)(?![\w-])",
+    re.IGNORECASE,
+)
+# A shell option is masked so `--no-sync` is not read as "no". A single dash before a whole negation word and a word
+# ("-never use it", #885 item 3) is prose, not an option, so it stays; `-not $x` (an operator, a variable) is masked.
+_SHELL_FLAG_RE = re.compile(r"(?<!\w)(?:--\w[\w-]*|-(?!(?:never|not|no|avoid|refrain)\s+[A-Za-z])\w[\w-]*)")
 _NEGATION_RE = re.compile(_NEGATION, re.IGNORECASE)
 
 
@@ -430,17 +455,26 @@ def _join_fenced_continuations(text: str) -> str:
 
 
 def _forbids_the_pinned_command(after: str) -> bool:
-    """Find prohibitions of the pinned command, not negation about other commands or shell arguments."""
+    """Find prohibitions of the pinned command, not negation about other commands or shell arguments.
+
+    In any clause, a warning about another command (``_OTHER_TARGET_RE``) followed by a ban pointed back at this one
+    (``_POINTED_BACK_AFTER_RE``, "or this one") is a ban. Otherwise, in the command's own clause every negation is a
+    ban except such a warning; in a later clause only a ban that points back at the pinned command counts
+    (``_POINTS_BACK_RE``). Stated limits, all on the safe side (a correct
+    sentence is flagged and reworded; no ban passes): "without arguments" and "with no arguments" read as bans, because
+    an exception for them could hide "without it" (#885 item 5); a ban word after another command in the command's own
+    clause ("and the plain command is forbidden") reads as a ban, as "must not be used" does, because the reader cannot
+    tell which command it is about; "or it" right after a warning reads as a ban even when "it" starts a new thought;
+    "without the <word>" is not read as another command except for the shim, because "without the pinned interpreter"
+    bans the rule; a warning in single or typographic quotes is not recognised."""
     for number, clause in enumerate(_CLAUSE_END_RE.split(after)):
         clause = _SHELL_QUOTED_ARGUMENT_RE.sub(lambda m: " " * len(m.group(0)), clause)
         clause = re.sub(r"(?<!\w)_{1,2}|_{1,2}(?!\w)", " ", clause)
         clause = _REINFORCEMENT_RE.sub("", clause)
+        # In any clause: a warning about another command, then "or this one", bans the pinned command too.
+        if any(_POINTED_BACK_AFTER_RE.match(clause, match.end()) for match in _OTHER_TARGET_RE.finditer(clause)):
+            return True
         if number == 0:
-            if any(
-                re.match(r"\s+or\s+(?:this|that)(?:\s+one)?\b", clause[match.end():], re.IGNORECASE)
-                for match in _OTHER_TARGET_RE.finditer(clause)
-            ):
-                return True
             clause = _OTHER_TARGET_RE.sub("", clause)
             if _NEGATION_RE.search(_SHELL_FLAG_RE.sub("", clause)):
                 return True
@@ -453,11 +487,13 @@ def _mask_inline_code_punctuation(text: str) -> str:
     """``text`` with every clause-ending character inside a one-line inline code span replaced by a space, so the copy
     is as long as the text and every word stays where it was: the dot in `` `agenttalk.assurance` `` or the colon in
     `` `--meta status:done` `` does not end the clause the command is in. A span that is not closed on its line, and a
-    double-backtick span, are left as they are. URL punctuation is also masked."""
+    double-backtick span, are left as they are. URL punctuation is also masked, except at the very end of the address:
+    a ``;`` ``.`` ``,`` ``:`` ``?`` ``!``, a closing bracket or a quote there ends the sentence, not the URL (#885
+    item 4), so a URL that really ends in one of them is read as ending before it (a stated limit)."""
     text = _INLINE_CODE_RE.sub(lambda span: _CLAUSE_PUNCTUATION_RE.sub(" ", span.group(0)), text)
     def mask_url(url: re.Match[str]) -> str:
         token = url.group(0)
-        body = token.rstrip(";.,)'\"")
+        body = token.rstrip(";.,:?!)'\"")
         return _CLAUSE_PUNCTUATION_RE.sub(" ", body) + token[len(body):]
 
     return _URL_RE.sub(mask_url, text)
