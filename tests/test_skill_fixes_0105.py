@@ -242,7 +242,7 @@ def test_the_managed_command_of_the_proposal_and_of_the_counter_carries_the_awai
     commands = managed_commands(path)
     assert len(commands) == 2, commands
     for command in commands:
-        assert re.match(r"(?:python -m )?agenttalk send --from \S+ --to \S+ --kind proposal ", command), command
+        assert re.match(r"(?:python (?:-I )?-m )?agenttalk send --from \S+ --to \S+ --kind proposal ", command), command
         assert re.search(r"--meta request_id=\S+", command), command
         assert re.search(r"--await-reply(?: |$)", command), command
         assert "propose" not in command.split("--subject")[0], command

@@ -740,6 +740,7 @@ def test_attention_cli_surfaces_refusal_and_configured_detached_launch(
     assert item["restart_request"]["pending_progress"] is False
     assert item["configured_launch"]["argv"] == [
         r"C:\Python\python.exe",
+        "-I",
         *[
             str(tmp_path) if token == "{ROOT}" else token
             for token in launch_args

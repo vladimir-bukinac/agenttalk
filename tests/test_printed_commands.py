@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -203,7 +204,8 @@ def _prompt(record: dict, shell: str = "powershell", seat: str | None = "claude-
 
 
 @pytest.mark.parametrize(
-    "shell,prefix", [("powershell", '& "$env:AGENTTALK_PY" -m agenttalk'), ("bash", '"$AGENTTALK_PY" -m agenttalk')]
+    "shell,prefix",
+    [("powershell", '& "$env:AGENTTALK_PY" -I -m agenttalk'), ("bash", '"$AGENTTALK_PY" -I -m agenttalk')],
 )
 def test_site_prompt_ordinary_reply_line_is_unchanged_in_both_shells(shell: str, prefix: str) -> None:
     text = _prompt({"correlation_id": "tk-1", "meta": {"request_id": "tk-1"}}, shell)
@@ -295,7 +297,12 @@ def test_site_prompt_the_direct_python_reply_line_reaches_the_program_with_exact
 ) -> None:
     exe = _windows_shell(shell)
     env, argv_file = _windows_env(tmp_path)
-    env["AGENTTALK_PY"] = sys.executable  # the prompt's own line runs the interpreter directly
+    # Install only the recorder into a disposable venv: -I ignores PYTHONPATH.
+    runtime = tmp_path / "runtime"
+    venv.create(runtime, with_pip=False)
+    site_packages = runtime / "Lib" / "site-packages"
+    shutil.copytree(tmp_path / "recorder" / "agenttalk", site_packages / "agenttalk")
+    env["AGENTTALK_PY"] = str(runtime / "Scripts" / "python.exe")
     text = _prompt({"correlation_id": request_id, "meta": {"request_id": request_id}})
     line = next(
         ln.strip() for ln in text.splitlines() if " -m agenttalk reply " in ln and "-m 'your answer here'" in ln
@@ -307,7 +314,7 @@ def test_site_prompt_the_direct_python_reply_line_reaches_the_program_with_exact
     anchor = ["--to-request", "tk-1"] if request_id == "tk-1" else ["--to-id", "20261111-143102-123456-AbCd"]
     assert _calls(argv_file) == [
         ["reply", "--from", "claude-dev", *anchor, "--kind", "task-response", "-m", "your answer here"]
-    ]
+    ], (done.stdout, done.stderr)
     assert SENTINEL not in done.stdout
 
 
@@ -932,7 +939,7 @@ def _windows_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
     recorder_dir, argv_file = _recorder(tmp_path)
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    shim = sup.agenttalk_shim(sys.executable).replace("__AGENTTALK_GENERATION__", "0" * 64)
+    shim = sup.agenttalk_shim(sys.executable, source_checkout=True).replace("__AGENTTALK_GENERATION__", "0" * 64)
     (bin_dir / "agenttalk.cmd").write_bytes(shim.encode("utf-8"))  # the project's own launcher, as it is written
     env = {
         **os.environ,

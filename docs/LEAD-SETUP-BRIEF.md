@@ -735,11 +735,11 @@ start_hidden() {                            # start_hidden <name> <folder> <args
 start_seat() {                              # start_seat <name> <claude|codex> <folder> <wrapper flags...> -- <the CLI and its flags...>
     name=$1; cli=$2; cwd=$3; shift 3
     if running "$name" "wrap --for $name "; then echo "$name is already running"; return; fi
-    start_hidden "$name" "$cwd" -m agenttalk wrap --for "$name" --cli "$cli" --loop "$@"
+    start_hidden "$name" "$cwd" -I -m agenttalk wrap --for "$name" --cli "$cli" --loop "$@"
 }
 
 if running dashboard "agenttalk dashboard"; then echo "dashboard is already running"
-else start_hidden dashboard "$TEAM" -m agenttalk dashboard --store "$TEAM" --port "$DASHBOARD_PORT"; fi
+else start_hidden dashboard "$TEAM" -I -m agenttalk dashboard --store "$TEAM" --port "$DASHBOARD_PORT"; fi
 
 start_seat builder-1 claude "$TEAM/seats/builder-1" --model sonnet --effort medium -- "$CLAUDE_BIN"
 start_seat builder-2 claude "$TEAM/seats/builder-2" --model sonnet --effort medium -- "$CLAUDE_BIN"

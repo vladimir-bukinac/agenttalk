@@ -869,6 +869,7 @@ def test_supervise_init_generates_and_is_idempotent(tmp_path: Path, capsys) -> N
     # the REAL exe via -FilePath/-ArgumentList (NOT Invoke-Expression), applies
     # + restores env, the dry-run hook, and preserves state on a failed launch.
     ps = (s.dir / "supervisor.ps1").read_text(encoding="utf-8")
+    assert "$AgenttalkModuleFlags = if ($SrcOnPyPath) { @() } else { @('-I') }" in ps
     assert "supervise --plan --state-file" in ps
     assert "--record-events" in ps
     assert "--json" not in ps                       # blocker regression guard
@@ -905,6 +906,24 @@ def test_supervise_init_generates_and_is_idempotent(tmp_path: Path, capsys) -> N
     # idempotent: a second --init overwrites nothing
     assert _run(["supervise", "--init"], tmp_path) == 0
     assert "all files already exist" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("missing", [False, True], ids=["damaged", "deleted"])
+@pytest.mark.parametrize("action", ["--plan", "--refresh-scripts"])
+def test_bad_recorded_mode_requires_explicit_regeneration(tmp_path: Path, capsys, missing, action) -> None:
+    store = _team(tmp_path)
+    assert _run(["supervise", "--init", "--source-checkout"], tmp_path) == 0
+    capsys.readouterr()
+    script = store.dir / "supervisor.ps1"
+    if missing:
+        script.unlink()
+    else:
+        data = script.read_text(encoding="utf-8")
+        script.write_text(data.replace("$SrcOnPyPath = $true", "$SrcOnPyPath = broken"), encoding="utf-8")
+    assert _run(["supervise", action], tmp_path) == 3
+    captured = capsys.readouterr()
+    assert "--init --force" in captured.err
+    assert "Traceback" not in captured.err
 
 
 def test_supervisor_report_surfaces_kill_switch_and_mutations_refuse(
@@ -2417,6 +2436,7 @@ def test_agenttalk_shim_resolves_both_install_modes() -> None:
     assert "-m agenttalk %*" in shim                       # pip-install path
     assert 'AGENTTALK_PYTHON=C:\\py\\python.exe' in shim    # known python baked
     assert " -I -m agenttalk %*" in shim
+    assert "pip --user" in shim
     assert "PYTHONPATH" not in shim
     source = sup.agenttalk_shim(r"C:\py\python.exe", source_checkout=True)
     assert "PYTHONPATH" in source and " -I -m agenttalk" not in source

@@ -15487,7 +15487,10 @@ def agenttalk_shim(
         # %~dp0 = <root>\\.agenttalk\\bin\\ ; ..\\..\\src = <root>\\src
         + ('set "PYTHONPATH=%~dp0..\\..\\src;%PYTHONPATH%"\r\n' if source_checkout else '')
         + ('"%AGENTTALK_PYTHON%" -m agenttalk %*\r\n' if source_checkout else
-           '"%AGENTTALK_PYTHON%" -I -m agenttalk %*\r\n')
+           '"%AGENTTALK_PYTHON%" -I -m agenttalk %*\r\n'
+           'set "AGENTTALK_EXIT=%ERRORLEVEL%"\r\n'
+           'if not "%AGENTTALK_EXIT%"=="0" echo If agenttalk is missing, -I cannot see pip --user installs; install it in this Python environment. 1>&2\r\n'
+           'exit /b %AGENTTALK_EXIT%\r\n')
     )
 
 
@@ -15668,10 +15671,20 @@ def _read_recorded_source_mode(path: Path) -> bool:
     try:
         text = path.read_text(encoding="utf-8-sig")
     except FileNotFoundError:
+        if any((path.parent / name).exists() for name in (
+            "supervisor-task.ps1", "deadman.ps1",
+        )):
+            raise ArtifactValidationError(
+                "supervisor.ps1 is missing; run `agenttalk supervise --init --force` "
+                "and add --source-checkout if source mode is intended"
+            ) from None
         return False
     matches = re.findall(r"(?m)^\$SrcOnPyPath = \$(true|false)\s*$", text, re.IGNORECASE)
     if len(matches) != 1:
-        raise ArtifactValidationError("supervisor.ps1 has a missing or duplicate source mode")
+        raise ArtifactValidationError(
+            "supervisor.ps1 has a missing or duplicate source mode; "
+            "run `agenttalk supervise --init --force` and add --source-checkout if source mode is intended"
+        )
     return matches[0].lower() == "true"
 
 

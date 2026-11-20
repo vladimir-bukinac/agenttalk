@@ -504,7 +504,8 @@ def select_runtime_mode(python: str, cwd: Path, env: dict[str, str]) -> str:
     except (OSError, subprocess.SubprocessError) as exc:
         raise ValueError("the isolated agenttalk identity probe could not run") from exc
     raise ValueError(
-        "cannot verify the pinned installed agenttalk; select a deliberate source PYTHONPATH or fix Python"
+        "cannot verify the pinned installed agenttalk; -I cannot see pip --user installs; "
+        "install it in this Python environment or select a deliberate source PYTHONPATH"
     )
 
 
@@ -938,10 +939,14 @@ def _check_output_text(file) -> str:
 def _self_probe_blocked_summary(argv: list[str], rc: int | None, output: str) -> str | None:
     if rc == 0:
         return None
+    user_site = (
+        "-I cannot see pip --user installs; install agenttalk in this Python environment; "
+        if "-I" in argv and _AGENTTALK_MISSING_MODULE_RE.search(output or "") else ""
+    )
     return _launch_blocked_summary(
         _format_argv(argv),
         output or f"exit={rc if rc is not None else 'unknown'}",
-        "ensure AGENTTALK_PY names the Python executable that can run -m agenttalk; "
+        user_site + "ensure AGENTTALK_PY names the Python executable that can run -m agenttalk; "
         "for Codex workspace-write, explicitly opt in to the Python install directory "
         "with codex --add-dir or an equivalent operator-managed writable_roots entry",
     )
@@ -1195,7 +1200,7 @@ def _runtime_config_blocked_summary(text: str | None) -> str | None:
         f"command=$env:AGENTTALK_PY -c import agenttalk; error={_compact_text(t)}; "
         "remediation=install agenttalk non-editable into the runtime Python used by "
         "AGENTTALK_PY, or run from the agenttalk workspace when intentionally "
-        "developing agenttalk"
+        "developing agenttalk; -I cannot see pip --user installs, so install it in this Python environment"
     )
 
 

@@ -93,7 +93,7 @@ $ToolPy = '<runtime-root>\v0.105.0\Scripts\python.exe'
 In this guide, the full form of an operating command is:
 
 ```powershell
-& $ToolPy -m agenttalk --root $Project status
+& $ToolPy -I -m agenttalk --root $Project status
 ```
 
 Use a fresh operator shell, not a model child's shell. An inherited
@@ -228,7 +228,7 @@ $SupervisorTask = '<your-task-name>'
    ```powershell
    Disable-ScheduledTask -TaskName $SupervisorTask
    Remove-Item "$Project\.agenttalk\supervisor.kill"
-   & $NewPy -m agenttalk --root $Project supervise --refresh-scripts
+   & $NewPy -I -m agenttalk --root $Project supervise --refresh-scripts
    ```
 
    This preserves configuration and runtime state. Inspect the resulting Python
@@ -310,7 +310,7 @@ until their launch settings and permitted workspace have been reviewed.
 1. Generate the configuration and helpers with the chosen runtime:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project supervise --init
+   & $ToolPy -I -m agenttalk --root $Project supervise --init
    ```
 
    This creates `.agenttalk/supervisor.json`, `supervisor.ps1`,
@@ -324,7 +324,7 @@ until their launch settings and permitted workspace have been reviewed.
    shortcut for the whole message store.
 2. Edit `supervisor.json`: replace example agents and launch placeholders; use the
    actual roster names. For a wrapped seat, set `wrapped: true`, use the tool
-   Python as `launch.windows_file`, and put `-m agenttalk --root {ROOT} wrap
+   Python as `launch.windows_file`, and put `-I -m agenttalk --root {ROOT} wrap
    --for <agent> --cli <claude-or-codex> --loop -- <real-cli-path>` in
    `launch.windows_args` as **separate JSON array elements**. Do not add
    `{SESSION_ARGS}`: the wrapper owns session continuity. Choose permissions and
@@ -332,7 +332,7 @@ until their launch settings and permitted workspace have been reviewed.
 3. Select a supported PowerShell 7 host:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project supervise --select-pwsh
+   & $ToolPy -I -m agenttalk --root $Project supervise --select-pwsh
    ```
 
    Read the returned JSON `path` and warnings, then set `$Pwsh` to that absolute
@@ -343,9 +343,9 @@ until their launch settings and permitted workspace have been reviewed.
 4. Inspect the report and proposed actions:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project supervise --report
-   & $ToolPy -m agenttalk --root $Project supervise --plan
-   & $ToolPy -m agenttalk --root $Project supervise --bootstrap-check
+   & $ToolPy -I -m agenttalk --root $Project supervise --report
+   & $ToolPy -I -m agenttalk --root $Project supervise --plan
+   & $ToolPy -I -m agenttalk --root $Project supervise --bootstrap-check
    ```
 
    The bootstrap check reads the whole setup, not only what the plan would launch
@@ -417,7 +417,7 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
 4. For a normal agent restart after the cause is fixed:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project request-restart --for '<agent>' --from '<operator-or-lead>' --reason 'operator repaired launch settings'
+   & $ToolPy -I -m agenttalk --root $Project request-restart --for '<agent>' --from '<operator-or-lead>' --reason 'operator repaired launch settings'
    ```
 
    `--from` must be the configured liaison or, when no liaison is configured, the
@@ -428,7 +428,7 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
    sole lead; the supervisor refuses a restart of a protected agent without it:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project request-restart --for '<protected-agent>' --from '<liaison-or-sole-lead>' --force-protected --reason 'operator repaired launch settings'
+   & $ToolPy -I -m agenttalk --root $Project request-restart --for '<protected-agent>' --from '<liaison-or-sole-lead>' --force-protected --reason 'operator repaired launch settings'
    ```
 
    If that agent still has a fresh heartbeat, restarting it ends a live seat, and
@@ -450,7 +450,7 @@ $TaskHelper = "$Project\.agenttalk\supervisor-task.ps1"
    recorded process/start time is gone and use the attended reset:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project supervise --reset-process-tree-ownership `
+   & $ToolPy -I -m agenttalk --root $Project supervise --reset-process-tree-ownership `
      --from '<liaison>' --for '<agent>' --hold-source-hash '<current-hold-hash>' `
      --verified-launch-nonce '<recorded-nonce>' --acknowledge-no-live-supervisor `
      --acknowledge-owned-processes-stopped --reason 'operator verified the recorded processes are gone'
@@ -491,7 +491,7 @@ uninstall uses the same helper:
 Run this independently of the supervisor's polling loop:
 
 ```powershell
-& $ToolPy -m agenttalk --root $Project deadman --threshold-seconds 900 --json
+& $ToolPy -I -m agenttalk --root $Project deadman --threshold-seconds 900 --json
 ```
 
 It checks overdue mail/control work without reading message content or depending
@@ -591,7 +591,7 @@ loopback port through a public proxy.
    figures and provide your actual observation description:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway init `
+   & $ToolPy -I -m agenttalk --root $Project gateway init `
      --litellm-executable '<litellm-runtime>\Scripts\litellm.exe' `
      --opening-eur 2 --opening-evidence 'provider dashboard observed at <UTC time>' `
      --soft-stop-eur 12 --cutoff-eur 15 --ceiling-eur 20
@@ -605,10 +605,10 @@ loopback port through a public proxy.
 6. Verify/install child caps, register the task and start it, checking each result:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway cap-install
-   & $ToolPy -m agenttalk --root $Project gateway task-install
-   & $ToolPy -m agenttalk --root $Project gateway start
-   & $ToolPy -m agenttalk --root $Project gateway status
+   & $ToolPy -I -m agenttalk --root $Project gateway cap-install
+   & $ToolPy -I -m agenttalk --root $Project gateway task-install
+   & $ToolPy -I -m agenttalk --root $Project gateway start
+   & $ToolPy -I -m agenttalk --root $Project gateway status
    ```
 
    Fresh initialization already creates the current child-cap/binding-capable
@@ -651,8 +651,8 @@ There is no shipped `gateway canary-send` command in this release.
 3. Verify the observed, nonzero change:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway canary-verify '<attempt-id>' --dashboard-delta-eur '<observed-EUR-change>'
-   & $ToolPy -m agenttalk --root $Project gateway status
+   & $ToolPy -I -m agenttalk --root $Project gateway canary-verify '<attempt-id>' --dashboard-delta-eur '<observed-EUR-change>'
+   & $ToolPy -I -m agenttalk --root $Project gateway status
    ```
 
    Expect `accepted: true`, then both readiness fields true. The observation must
@@ -710,7 +710,7 @@ upgrade.
 2. Stop using the **old** runtime:
 
    ```powershell
-   & $OldPy -m agenttalk --root $Project gateway stop --timeout 30
+   & $OldPy -I -m agenttalk --root $Project gateway stop --timeout 30
    ```
 
    Expect `stopped: true`. Preserve `gateway.kill`. Confirm `runtime.json` is
@@ -734,7 +734,7 @@ upgrade.
 4. If LiteLLM's own executable also moved, rebind it while stopped:
 
    ```powershell
-   & $NewPy -m agenttalk --root $Project gateway runtime-rebind --litellm-executable '<trusted-litellm-runtime>\Scripts\litellm.exe'
+   & $NewPy -I -m agenttalk --root $Project gateway runtime-rebind --litellm-executable '<trusted-litellm-runtime>\Scripts\litellm.exe'
    ```
 
    This runs the candidate with your filesystem authority, so use only a trusted
@@ -744,9 +744,9 @@ upgrade.
 5. Register and start using the new interpreter, then check status:
 
    ```powershell
-   & $NewPy -m agenttalk --root $Project gateway task-install
-   & $NewPy -m agenttalk --root $Project gateway start
-   & $NewPy -m agenttalk --root $Project gateway status
+   & $NewPy -I -m agenttalk --root $Project gateway task-install
+   & $NewPy -I -m agenttalk --root $Project gateway start
+   & $NewPy -I -m agenttalk --root $Project gateway status
    ```
 
    Expect the task's action to use the new `pythonw.exe`, both readiness fields
@@ -857,14 +857,14 @@ evidence before any rollback; never restore an older ledger merely to regain roo
 1. For an immediate accounting hold on new calls:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway hold --reason 'operator investigating accounting'
+   & $ToolPy -I -m agenttalk --root $Project gateway hold --reason 'operator investigating accounting'
    ```
 
    A hold blocks new transport; it does not undo an already-admitted call.
 2. To stop the service, use the runtime that owns its task:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway stop --timeout 30
+   & $ToolPy -I -m agenttalk --root $Project gateway stop --timeout 30
    ```
 
    This writes `gateway.kill` (and leaves it there), allows bounded shutdown, and can
@@ -889,7 +889,7 @@ evidence before any rollback; never restore an older ledger merely to regain roo
 5. Resolve each uncertain attempt from provider evidence:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway reconcile '<attempt-id>' --outcome no-send --reason 'provider evidence confirms no send'
+   & $ToolPy -I -m agenttalk --root $Project gateway reconcile '<attempt-id>' --outcome no-send --reason 'provider evidence confirms no send'
    ```
 
    Use that outcome only with evidence of no send. If the charge cannot be
@@ -900,7 +900,7 @@ evidence before any rollback; never restore an older ledger merely to regain roo
 6. Clear a hold only after resolving its cause and every unresolved attempt:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project gateway clear-hold --reason 'operator reconciled all uncertain attempts'
+   & $ToolPy -I -m agenttalk --root $Project gateway clear-hold --reason 'operator reconciled all uncertain attempts'
    ```
 
    Clearing a hold does not replace a missing or mismatched canary. Re-accept a
@@ -921,7 +921,7 @@ persistent problems need operator action.
 1. Run the store backup, especially before upgrades or cleanup:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project backup --json
+   & $ToolPy -I -m agenttalk --root $Project backup --json
    ```
 
 2. Save its `destination`, `manifest_path`, `manifest_hash` and
@@ -1149,7 +1149,7 @@ background “free space” job.
 2. Run the report:
 
    ```powershell
-   & $ToolPy -m agenttalk --root $Project janitor
+   & $ToolPy -I -m agenttalk --root $Project janitor
    ```
 
    It lists allowed scratch-name families, `.worktrees` candidates, age-gated

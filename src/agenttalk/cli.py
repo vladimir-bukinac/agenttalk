@@ -17294,12 +17294,17 @@ def cmd_supervise(args: argparse.Namespace) -> int:
             snapshot = _read_snapshot_file(args.snapshot_file)
         plan = sup.plan_actions(report, _read_state(), config,
                                 now_epoch=now, snapshot=snapshot)
+        try:
+            source_mode = (args.launch_src_on_pythonpath == "true" if args.launch_src_on_pythonpath is not None
+                           else sup.recorded_source_mode(store))
+        except sup.ArtifactValidationError as exc:
+            sys.stderr.write(f"agenttalk supervise --plan: {exc}\n")
+            return 3
         sup.attach_regular_launch_admissions(
             plan,
             config,
             root=store.root,
-            source_checkout=(args.launch_src_on_pythonpath == "true" if args.launch_src_on_pythonpath is not None
-                             else sup.recorded_source_mode(store)),
+            source_checkout=source_mode,
         )
         print(json.dumps(plan, indent=2))
         if getattr(args, "record_events", False):

@@ -170,8 +170,8 @@ LISTEN_DURABLE_FORBIDDEN = [
 CODEX_SANDBOX_INVOCATION_REQUIRED = [
     "Invoking agenttalk under the Codex sandbox",
     'AGENTTALK_PY',
-    '& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...',
-    "python -m agenttalk <subcommand> ...",
+    '& "$env:AGENTTALK_PY" -I -m agenttalk <subcommand> ...',
+    "python -I -m agenttalk <subcommand> ...",
     "fall back to the runnable module form",
     "current project WORKSPACE cwd",
     "installed/runtime package",

@@ -909,7 +909,8 @@ def test_lead_skills_carry_the_lead_routine_in_step() -> None:
     """A new lead learns the check-in and the handover note from the playbook alone; the
     Claude and Codex copies differ only in how a command is written."""
     def same_words(text: str) -> str:
-        return (text.replace("python -m agenttalk", "agenttalk").replace('"$SELF"', "$SELF")
+        return (text.replace("python -I -m agenttalk", "agenttalk")
+                .replace("python -m agenttalk", "agenttalk").replace('"$SELF"', "$SELF")
                 .replace("```bash", "```powershell").replace(" \\\n", " `\n"))
 
     claude, codex = (_lead_routine(p) for p in _LEAD_SKILLS)

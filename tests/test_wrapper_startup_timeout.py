@@ -94,7 +94,8 @@ def test_a_slow_but_healthy_launch_check_is_not_refused(tmp_path) -> None:
 
 def test_a_slow_but_healthy_import_check_is_not_refused(tmp_path) -> None:
     # Raising: a time-out reported as text is let through by this check, so only a raised one tests the limit.
-    runner, limits = _start_taking(SLOW_START, json.dumps({"file": None}) + "\n", raises=True)
+    file = tmp_path / "site-packages" / "agenttalk" / "__init__.py"
+    runner, limits = _start_taking(SLOW_START, json.dumps({"file": str(file)}) + "\n", raises=True)
 
     assert run.preflight_agenttalk_runtime(workspace_root=tmp_path, runner=runner) is None
     assert limits == [run.STARTUP_CHECK_TIMEOUT]
@@ -108,7 +109,8 @@ def test_the_default_limit_covers_a_cold_start_with_margin_and_stays_bounded() -
 
 def test_a_launch_check_that_hangs_is_refused_in_bounded_time_with_the_reason(tmp_path) -> None:
     env = {**os.environ, "AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path),
-           "PYTHONPATH": str(_hanging_agenttalk(tmp_path)), "PYTHONDONTWRITEBYTECODE": "1"}
+           "PYTHONPATH": str(_hanging_agenttalk(tmp_path)), "PYTHONDONTWRITEBYTECODE": "1",
+           "AGENTTALK_RUNTIME_MODE": "source"}
 
     started = time.monotonic()
     result = run.preflight_launch_runtime([sys.executable], "claude", tmp_path, env, timeout=2.0)
@@ -122,9 +124,10 @@ def test_an_import_check_that_hangs_is_refused_in_bounded_time_with_the_reason(t
     monkeypatch.setenv("AGENTTALK_PY", sys.executable)
     monkeypatch.setenv("PYTHONPATH", str(_hanging_agenttalk(tmp_path)))
     monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    monkeypatch.setenv("AGENTTALK_RUNTIME_MODE", "source")
 
     started = time.monotonic()
-    blocked = run.preflight_agenttalk_runtime(workspace_root=tmp_path, timeout=2.0)
+    blocked = run.preflight_agenttalk_runtime(workspace_root=tmp_path, source=True, timeout=2.0)
 
     assert time.monotonic() - started < 30
     assert blocked is not None  # before #714 a timed-out import check let the seat through
@@ -153,7 +156,13 @@ def test_a_missing_agenttalk_is_still_refused(tmp_path) -> None:
     env = {"AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path)}
     result = run.preflight_launch_runtime([sys.executable], "claude", tmp_path, env, runner=runner)
     assert result.blocked is not None and "No module named agenttalk" in result.blocked
+    assert "pip --user" in result.blocked and "-I" in result.blocked
     assert "took longer" not in result.blocked
+
+
+def test_missing_isolated_runtime_explains_user_site_limitation() -> None:
+    reason = run._runtime_config_blocked_summary("No module named agenttalk")
+    assert reason and "pip --user" in reason and "-I" in reason
 
 
 @pytest.mark.parametrize("check", ["launch", "import"])
@@ -164,13 +173,14 @@ def test_a_check_ends_on_time_when_a_process_it_started_keeps_the_output_open(tm
     monkeypatch.setenv("AGENTTALK_PY", sys.executable)
     monkeypatch.setenv("PYTHONPATH", str(package_root))
     monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    monkeypatch.setenv("AGENTTALK_RUNTIME_MODE", "source")
     try:
         started = time.monotonic()
         if check == "launch":
             env = {**os.environ, "AGENTTALK_ROOT": str(tmp_path)}
             blocked = run.preflight_launch_runtime([sys.executable], "claude", tmp_path, env, timeout=2.0).blocked
         else:
-            blocked = run.preflight_agenttalk_runtime(workspace_root=tmp_path, timeout=2.0)
+            blocked = run.preflight_agenttalk_runtime(workspace_root=tmp_path, source=True, timeout=2.0)
         elapsed = time.monotonic() - started
     finally:
         _stop_lingering(pid_file)
@@ -245,7 +255,7 @@ def test_a_failing_launch_check_still_reports_what_it_printed(tmp_path) -> None:
         "import sys\nprint('printed on stdout')\nprint('printed on stderr', file=sys.stderr)\nsys.exit(3)\n",
         encoding="utf-8")
     env = {**os.environ, "AGENTTALK_PY": sys.executable, "AGENTTALK_ROOT": str(tmp_path),
-           "PYTHONPATH": str(package.parent), "PYTHONDONTWRITEBYTECODE": "1"}
+           "PYTHONPATH": str(package.parent), "PYTHONDONTWRITEBYTECODE": "1", "AGENTTALK_RUNTIME_MODE": "source"}
 
     blocked = run.preflight_launch_runtime([sys.executable], "claude", tmp_path, env).blocked
 
@@ -265,8 +275,9 @@ def test_an_import_check_still_reads_where_agenttalk_came_from(tmp_path, monkeyp
     monkeypatch.setenv("AGENTTALK_PY", sys.executable)
     monkeypatch.setenv("PYTHONPATH", str(package.parent))
     monkeypatch.setenv("PYTHONDONTWRITEBYTECODE", "1")
+    monkeypatch.setenv("AGENTTALK_RUNTIME_MODE", "source")
 
-    blocked = run.preflight_agenttalk_runtime(workspace_root=workspace)
+    blocked = run.preflight_agenttalk_runtime(workspace_root=workspace, source=True)
 
     assert blocked is not None and "out-of-workspace source checkout" in blocked, blocked
 
