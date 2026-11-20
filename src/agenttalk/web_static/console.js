@@ -1277,20 +1277,19 @@
     banner.setAttribute('role', note.warn ? 'alert' : 'status');
     banner.textContent = note.text;
   }
-  // "Refresh live data": the same read-only GETs the poll makes, on demand, plus the live feeds of
-  // the view on screen (each fetcher has its own in-flight guard, so a click during a poll is a no-op).
+  // "Refresh live data": the poll feeds, plus the live feeds of the view on screen.
   function refreshNow() {
-    fetchState();
-    fetchAttention();
+    refreshEndpoint(fetchState);
+    refreshEndpoint(fetchAttention);
     // Each view lists the live feeds it draws from; the button asks for all of them. Overview,
     // flow and agent are fed by /api/state alone. Sessions also shows the open transcript
     // (refreshed by every state answer, one request at a time). The Sessions archive is not live
     // data: it loads when it is opened and is left alone here.
     switch (state.view) {
-      case 'lead-chat': fetchLeadChat(); fetchIntents(); break;
-      case 'sessions': fetchIntents(); break;
-      case 'gates': fetchGates(); break;
-      case 'risk-register': fetchRiskRegister(); break;
+      case 'lead-chat': refreshEndpoint(fetchLeadChat); refreshEndpoint(fetchIntents); break;
+      case 'sessions': refreshEndpoint(fetchIntents); break;
+      case 'gates': refreshEndpoint(fetchGates); break;
+      case 'risk-register': refreshEndpoint(fetchRiskRegister); break;
       case 'ownership': fetchOwnership(); break;
       case 'learning': fetchLearning(); break;
       case 'onboarding': fetchOnboarding(); break;
@@ -5042,17 +5041,38 @@
     refreshHealthIfChanged();
   }
 
+  var endpointPolls = new Map();
+  function refreshEndpoint(fetcher) {
+    var poll = endpointPolls.get(fetcher);
+    if (poll) poll();
+    else fetcher();
+  }
   function startEndpointPoll(fetcher) {
     // One independent completion-driven loop per endpoint. A 9-second scan
     // therefore produces one request, then waits POLL_MS before the next; it
     // never queues four interval ticks behind the slow request (#207).
-    function scheduleNext() { setTimeout(run, POLL_MS); }
+    var timer = null;
+    var running = false;
+    var again = false;
+    function scheduleNext() {
+      running = false;
+      if (again) { again = false; run(); }
+      else timer = setTimeout(run, POLL_MS);
+    }
     function run() {
+      timer = null;
+      running = true;
       var request;
       try { request = fetcher(); }
       catch (e) { scheduleNext(); return; }
       Promise.resolve(request).then(scheduleNext, scheduleNext);
     }
+    endpointPolls.set(fetcher, function () {
+      if (running) { again = true; return; }
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+      run();
+    });
     run();
   }
 

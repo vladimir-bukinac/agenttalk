@@ -4099,6 +4099,7 @@ const ctx = {
   localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
   performance: { now() { return 0; } },
   setTimeout(fn, delay) { timers.push({ fn, delay }); },
+  clearTimeout() {},
   setInterval() { throw new Error('data polling must not use setInterval'); },
   clearInterval() {},
   fetch() { throw new Error('fetch should not run'); },
@@ -10355,6 +10356,7 @@ async function run(fetcherName, urlFragment, jsonBody) {
     localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
     performance: { now() { return 0; } },
     setTimeout(fn, delay) { timers.push({ fn, delay }); },
+    clearTimeout() {},
     setInterval() { throw new Error('data polling must not use setInterval'); },
     clearInterval() {},
     fetch(url) {
@@ -10539,6 +10541,7 @@ def test_console_root_error_keeps_last_good_view_under_an_updating_banner(tmp_pa
         "  globalThis.__agenttalkConsoleTestHooks = {\n"
         "    state: state,\n"
         "    fetchState: fetchState,\n"
+        "    startStatePoll: function () { startEndpointPoll(fetchState); },\n"
         "    renderChrome: renderChrome,\n"
         "    renderActiveView: renderActiveView,\n"
         "    actionSession: actionSession,\n"
@@ -10637,7 +10640,7 @@ const ctx = {
   console, document,
   localStorage: { getItem() { return null; }, setItem() {}, removeItem() {} },
   performance: { now() { return mono; } },
-  setInterval() {}, clearInterval() {}, setTimeout() {},
+  setInterval() {}, clearInterval() {}, setTimeout() {}, clearTimeout() {},
   fetch(url) {
     const u = String(url);
     fetched.push(u);
@@ -10992,6 +10995,24 @@ assert(hooks.threadFor('rid-1').messages[0].body === 'second answer', 'newer ans
 assert(threadRequests() === 2 && held.length === 0, 'nothing more is owed or open');
 holdPaths.length = 0;
 hooks.state.sessionRid = null;
+
+// The real state fetch is slow: the queued answer, not the pre-click answer, reaches the view.
+hooks.state.view = 'overview';
+holdPaths.push('/api/state');
+fetched.length = 0;
+hooks.startStatePoll();
+for (let i = 0; i < 3; i += 1) refreshButton().fn();
+const stateRequests = () => fetched.filter((u) => u === '/api/state').length;
+assert(stateRequests() === 1, 'clicks must not overlap a state request');
+answer('/api/state', { generated_at: iso, roots: [goodRoot] });
+await flush();
+assert(stateRequests() === 2, 'clicks must queue one newer state request');
+const newerRoot = { ...goodRoot, agents: [{ ...goodRoot.agents[0], name: 'newest-agent' }] };
+answer('/api/state', { generated_at: iso, roots: [newerRoot] });
+await flush();
+assert(collectText(main).includes('newest-agent'), 'newer state must be shown in the view');
+assert(stateRequests() === 2, 'only one follow-up is owed');
+holdPaths.length = 0;
 })().catch((error) => { console.error(error); process.exitCode = 1; });
 """, encoding="utf-8")
     subprocess.run(["node", str(runner), str(instrumented)], check=True,

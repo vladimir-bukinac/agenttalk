@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Refresh live data now checks again after a request already in progress.** Repeated clicks queue
+  one follow-up, and a click while waiting starts a request immediately; the next wait begins when
+  it finishes. Ownership, Learning and Onboarding still use one-shot requests, so clicks during
+  those requests remain unchanged. (#370)
+
 - **`agenttalk doctor` no longer calls the PowerShell host check "not needed" while a seat that left the
   team list may still run a continuous Codex wrapper.** Retiring, renaming or removing a seat leaves its
   health marker behind, and its wrapper may still be running. Doctor now reads those markers too: a
