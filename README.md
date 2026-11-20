@@ -1777,14 +1777,17 @@ read, never the model's output, a tool's output or an inbound message.
   check's two paid tries either, so no number of such turns can end the delivery. The message it sent stays
   sent, nothing is replayed, and the next try is a whole new turn, so a seat can send a similar message
   again. (If the refused turn left a fixed reply that the reply check can send again without asking the
-  model, that is still sent again, by the check's own bounded retry.)
+  model, that is still sent again, by the check's own bounded retry: in a scoped run too, in the same run,
+  even when the refusal was held at once or by its fifth refusal. The run asks the model for nothing more,
+  and the refusal and its hold are not cleared by it.)
 - A scoped request that has finished keeps no hold: its reply landed, or it was rescinded or closed. The
   scoped run removes the refusal record when it sees that, and `status` does not show a finished request
   as held.
 - **A held request sees a rescission only at the next gate check.** While a request waits or is held the
   reply check is not asked anything, so if the sender rescinds the question meanwhile, the seat learns of it
   only at its next try, its next start or `agenttalk ack`. Until then `status` still shows the request as
-  held.
+  held. The one exception is a held scoped request that has a saved reply waiting: the reply check is asked
+  for that, and only that, until the reply is sent or its retries are used up.
 - **A crash between releasing a refused turn and writing the first refusal record loses that first
   refusal's count.** The request is not lost or disposed of; it is tried again, and its count starts from
   that try.

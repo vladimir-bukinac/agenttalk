@@ -79,6 +79,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A reply that was already written and saved is no longer kept waiting by a refusal hold (#873).** When a
+  seat's model refuses a turn, the seat is put on hold (#857). In two narrow cases of a one-request (scoped)
+  run, the hold also stopped a reply that the refused turn had already written and saved, ready to send:
+  when stopping retries is switched off and the first refusal came with the saved reply, and when retries
+  are on and the saved reply came with the fifth refusal. The reply was not lost, but the person waiting for
+  it did not get it until the next wrapper start. Now such a saved reply is sent in the same run, by the
+  reply check's existing bounded retry, once, and without another model turn. The hold stays for everything
+  else, and a refusal with no saved reply is held exactly as before. Nothing in the reports changes.
+
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup
   and the scratch janitor keep checkouts when Git could be hiding tracked work,
   including unedited files marked assume-unchanged or present skipped files. Files

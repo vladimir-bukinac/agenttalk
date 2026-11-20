@@ -2903,7 +2903,9 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
     # count, waits and hold live in the SAME ledger entry the continuous loop uses (made at the first refusal): a
     # later invocation reads them, so nothing here forgets a hold and a restart never gives the five tries back.
     # A refusal alone never consumes the request, never advances anything and never reaches the commit gate's
-    # exhaustion rules: the hold is looked at BEFORE the gate is asked anything.
+    # exhaustion rules: the hold is looked at BEFORE the gate is asked anything. The one exception (#873): a refusal
+    # of THIS run whose turn left a saved reply, which the gate can send again without a model turn.
+    refusal_left_saved_reply = False
     def _wall_epoch() -> float:
         value = usage_park.iso_epoch(now_iso())
         return value if value is not None else time.time()
@@ -3060,9 +3062,22 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             _runtime_idle()
             return turns
         held = _refusal_check(record)
+        # #873: a refused turn can leave a saved reply (the reply command was run on its draft), which the gate can
+        # send again without asking the model. A hold does not stop that: it is looked at here, read-only, and the run
+        # goes on to the gate's own bounded retry of it, and only to that (see the two stops below). Nothing else is
+        # let past a hold, and the hold itself is not touched.
+        saved_reply_only = False
         if held == "held":
-            _stamp()                    # the hold stays in the ledger: the next invocation reads it, not this one
-            return turns
+            # The gate is only asked when a refusal of this run left a saved reply: a hold that has none is stopped
+            # on without asking the gate anything, as before.
+            saved_reply_only = (
+                refusal_left_saved_reply
+                and commit_gate is not None
+                and commit_gate.captured_operation_for(record) is not None
+            )
+            if not saved_reply_only:
+                _stamp()                # the hold stays in the ledger: the next invocation reads it, not this one
+                return turns
         if isinstance(held, float):
             if max_wall is not None and (clock() - start) + held > max_wall:
                 _stamp()
@@ -3082,6 +3097,10 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
 
             resolution = commit_gate.admit_or_finalize(record)
             if resolution.allows_legacy_commit:
+                if saved_reply_only:
+                    # #873 stop 1: nothing saved is left to send, so only a model turn could go on: the hold stands
+                    _stamp()
+                    return turns
                 legacy_gate_resolution = resolution
             if not resolution.allows_legacy_commit:
                 if resolution.terminal:
@@ -3187,6 +3206,11 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                     sleep(fail_sleep)
                     fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
                     continue
+                if saved_reply_only:
+                    # #873 stop 2: the saved reply is gone (sent, or settled away): the next step would be a model
+                    # turn, which a hold does not allow. The hold stands.
+                    _stamp()
+                    return turns
                 purpose = commit_gate.next_dispatch_purpose(key)
                 if purpose is None:
                     if commit_gate.dispatch_exhausted(key):
@@ -3224,6 +3248,8 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                 _refusal_admit(record)
                 outcome = _as_outcome(drive(_with_interruption_context(dispatch_record)))
                 _note_interruption(outcome)
+                if _is_refusal(outcome) and commit_gate.operation_captured(permit):
+                    refusal_left_saved_reply = True
                 if (_is_refusal(outcome) and not commit_gate.operation_captured(permit)
                         and not commit_gate.resolve(record).terminal):
                     # #857: the provider refused the turn (unless the reply landed all the same, or it left a

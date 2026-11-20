@@ -4910,7 +4910,23 @@ class DetectionCommitGate:
             ledger = self._load(create=False)
         except LedgerUnreadable:
             return None
-        admission = ledger["obligations"].get(key.digest)
+        return self._captured_permit(key.digest, ledger["obligations"].get(key.digest))
+
+    def captured_operation_for(self, record: dict) -> DispatchPermit | None:
+        """The saved reply waiting for this inbound message, if any: the same answer ``captured_operation`` gives,
+        found from the message instead of from an admitted key. Read-only (nothing is admitted, claimed or written),
+        and None for anything that cannot be read, or for a message the gate has not admitted."""
+        try:
+            ledger = self._load(create=False)
+        except LedgerUnreadable:
+            return None
+        key_digest = ledger["inbound_index"].get(record.get("id"))
+        if not key_digest:
+            return None
+        return self._captured_permit(key_digest, ledger["obligations"].get(key_digest))
+
+    @staticmethod
+    def _captured_permit(key_digest: str, admission: object) -> DispatchPermit | None:
         if not isinstance(admission, dict) or admission.get("state") != "open":
             return None
         for nonce, row in admission.get("reservations", {}).items():
@@ -4921,7 +4937,7 @@ class DetectionCommitGate:
             ):
                 continue
             return DispatchPermit(
-                key.digest,
+                key_digest,
                 nonce,
                 str(row.get("composing_nonce", "")),
                 row.get("purpose", "recovery"),
