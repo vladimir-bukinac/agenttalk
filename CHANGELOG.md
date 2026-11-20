@@ -39,12 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `agenttalk` file or package does not replace the installed package. Choose
   `supervise --init --source-checkout --force` for a deliberate source launch. Existing
   generated scripts retain their recorded `SrcOnPyPath` until regenerated.
-  Strict Claude seats need the old allow rule replaced with the exact new rule
-  printed at startup, for example `Bash("<python path>" -I -m agenttalk *)`;
+  Strict Claude seats need every agenttalk allow and deny rule rewritten to use the exact
+  command form printed at startup, for example `Bash("<python path>" -I -m agenttalk *)`;
   no permission is granted automatically. Trust the project where required.
   When init sees this project's source layout without the source option, it prints
   one line explaining the installed choice and how to select source mode. Isolated
-  Python ignores the current folder, PYTHONPATH and the user site, so an agenttalk
+  Python ignores PYTHON* environment variables, the current folder and the user site, so an agenttalk
   installed with pip --user is not visible; install it in the selected environment.
   If the runtime check cannot run, it reports the cause rather than assuming
   the package is missing.

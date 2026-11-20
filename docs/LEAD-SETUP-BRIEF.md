@@ -1307,15 +1307,17 @@ top of such a boundary, not instead of it.
 
 1. **An agenttalk command it is allowed to run.** In `dontAsk` mode, Claude Code refused every
    command that starts with a variable, even with a matching allow rule (reported, and measured).
-   So the usual form, `"$AGENTTALK_PY" -m agenttalk ...`, cannot run there. The Python
+   So the usual form, `"$AGENTTALK_PY" -I -m agenttalk ...`, cannot run there. The Python
    interpreter's path written out does run with a matching rule: in Bash with forward slashes,
    quoted or not (measured). The reporting team had seen two other spellings of the path refused.
-   - **With an agenttalk version that has pull request #828**, the wrapper does this for you.
-     A strict Claude seat's instructions show `"<py>" -m agenttalk ...`, where `<py>` is the
+   - **With a current agenttalk version**, the wrapper does this for you. In installed mode,
+     a strict Claude seat's instructions show `"<py>" -I -m agenttalk ...`, where `<py>` is the
      interpreter's full path with forward slashes, and at start the wrapper prints one line with
-     the rule to add: `Bash("<py>" -m agenttalk *)`. Copy that rule exactly, and write every
-     agenttalk rule in the profile below with the same `"<py>" -m agenttalk` start (measured:
-     another spelling of the same path was refused). The wrapper never adds the rule itself.
+     the rule to add: `Bash("<py>" -I -m agenttalk *)`. Copy that rule exactly, and write every
+     agenttalk rule in the profile below with the same `"<py>" -I -m agenttalk` start (measured:
+     another spelling of the same path was refused). For an explicit source-checkout launch,
+     the printed form omits `-I`; use that exact form in every allow and deny rule instead.
+     The wrapper never adds the rule itself.
    - If a strict seat's start prints no such line, either the agenttalk version is older, or the
      interpreter's path holds a character the wrapper refuses to put in the command or the rule:
      `"`, `$` or a backtick, which change meaning inside the command; `*`, which a rule reads as
@@ -1330,10 +1332,10 @@ top of such a boundary, not instead of it.
      `PATH` (`$env:PATH = "<env>\Scripts;$env:PATH"` on Windows, `export PATH="<env>/bin:$PATH"`
      on Linux and macOS), and add this line to each seat's rules file (the one passed with
      `--append-system-prompt-file` above): "Write
-     `agenttalk ...` wherever the instructions say `"$AGENTTALK_PY" -m agenttalk ...` or
-     `& "$env:AGENTTALK_PY" -m agenttalk ...`." The bare `agenttalk` then runs whatever is first
+     `agenttalk ...` wherever the instructions give a pinned agenttalk command, whether or not it
+     includes `-I`." The bare `agenttalk` then runs whatever is first
      on `PATH` (reported and measured on Windows; Linux and macOS not tested). Write the agenttalk
-     rules with `agenttalk` at the start instead of `"<py>" -m agenttalk`.
+     rules with `agenttalk` at the start instead of `"<py>" -I -m agenttalk`.
    - Rules match the command as written. If you allow two spellings, for example the printed
      rule and the bare `agenttalk`, repeat every agenttalk deny rule below for each of them.
      Otherwise the second spelling runs the commands the first one refuses.
@@ -1399,14 +1401,14 @@ few of the rules (`<py>` as in thing 1):
 ```json
 {
   "permissions": {
-    "allow": ["Bash(\"<py>\" -m agenttalk *)", "Read(./**)", "Edit(./**)"],
-    "deny": ["Bash(\"<py>\" -m agenttalk -*)", "Bash(\"<py>\" -m agenttalk reset*)", "Edit(./.claude/**)"]
+    "allow": ["Bash(\"<py>\" -I -m agenttalk *)", "Read(./**)", "Edit(./**)"],
+    "deny": ["Bash(\"<py>\" -I -m agenttalk -*)", "Bash(\"<py>\" -I -m agenttalk reset*)", "Edit(./.claude/**)"]
   }
 }
 ```
 
 In JSON a `"` inside a rule is written `\"`, as above. In the lists below, `<agenttalk>` stands
-for the start of the command you allow: `"<py>" -m agenttalk`, or `agenttalk` with the older
+for the start of the command you allow: `"<py>" -I -m agenttalk`, or `agenttalk` with the older
 workaround.
 
 A builder is allowed:

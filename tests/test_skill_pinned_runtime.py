@@ -1096,3 +1096,12 @@ def test_878_r5_non_url_scan_scales_linearly():
     short = min(elapsed(2000) for _ in range(2))
     long = min(elapsed(8000) for _ in range(2))
     assert long < short * 9 + 0.03, (short, long)
+
+
+@pytest.mark.parametrize("command", ['"$AGENTTALK_PY"', '& "$env:AGENTTALK_PY"'])
+@pytest.mark.parametrize("isolated", [False, True])
+def test_pinned_rule_and_its_prohibition_match_in_both_runtime_forms(command, isolated):
+    invocation = command + (" -I" if isolated else "") + " -m agenttalk"
+    rule = f"When AGENTTALK_PY is set, run `{invocation}`; otherwise use your manual."
+    assert sc._states_pinned_rule(rule)
+    assert not sc._states_pinned_rule(rule.replace("; otherwise", "; do not use it; otherwise"))
