@@ -3216,7 +3216,7 @@ def test_agenttalk_runtime_preflight_parks_denied_source_probe(tmp_path) -> None
     )
     assert blocked is not None
     assert "Access is denied" in blocked
-    assert "install agenttalk non-editable" in blocked
+    assert "the runtime check could not run" in blocked
 
 
 def test_agenttalk_runtime_preflight_parks_missing_module_probe(tmp_path) -> None:

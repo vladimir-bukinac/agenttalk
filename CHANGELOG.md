@@ -10,15 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Installed wrapper and supervisor commands use isolated Python so a local
+### Changed
+
+- **Installed wrapper and supervisor commands use isolated Python** so a local
   `agenttalk` file or package does not replace the installed package. Choose
-  `supervise --init --source-checkout` for a deliberate source launch. Existing
+  `supervise --init --source-checkout --force` for a deliberate source launch. Existing
   generated scripts retain their recorded `SrcOnPyPath` until regenerated.
   Strict Claude seats need the old allow rule replaced with the exact new rule
   printed at startup, for example `Bash("<python path>" -I -m agenttalk *)`;
   no permission is granted automatically. Trust the project where required.
-
-### Changed
+  If the runtime check cannot run, it reports the cause rather than assuming
+  the package is missing.
 
 - **The release checklist now names the README as the only install pin.** Since the user manuals
   stopped carrying their own install line (#835), step 1 of the release ritual in

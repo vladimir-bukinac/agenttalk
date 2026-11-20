@@ -15915,6 +15915,8 @@ def init(store: Store, *, force: bool = False, python_exe: str | None = None,
         out[str(config_path)] = "written"
 
     paths = [store.dir / Path(relative) for relative in ARTIFACT_RELATIVE_PATHS]
+    if source_checkout and not force and any(path.exists() for path in paths):
+        raise ArtifactValidationError("--source-checkout requires --force to replace existing scripts")
     if force or not any(path.exists() for path in paths):
         out.update(refresh_artifacts(store, python_exe=python_exe, source_checkout=source_checkout))
     else:

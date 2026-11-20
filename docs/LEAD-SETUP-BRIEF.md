@@ -1,14 +1,5 @@
 # Setting up agenttalk for the first time: a brief for the lead
 
-For an installed seat, use the isolated command shown below. A strict Claude
-seat's old allow rule must be replaced with the exact new rule printed by
-`agenttalk wrap`, for example `Bash("<python path>" -I -m agenttalk *)`.
-Make that settings change yourself; the wrapper does not grant permissions.
-Trust the project interactively where Claude Code requires it. The new rule
-still needs a separate permission-engine check in the deployed Claude version.
-For a deliberate source checkout, choose `supervise --init --source-checkout`
-or set `PYTHONPATH` to the checkout's `src` for a manual wrapper and omit `-I`.
-
 **In plain words:** agenttalk lets several AI assistants work as one team on the same
 project, leaving each other messages as files so that nothing is lost when a session
 ends. This brief tells you, the first assistant, how to set that team up well: check
@@ -18,6 +9,15 @@ day to day. You do most of the work. A person, your human, does only what a pers
 should do: say yes before anything is installed on the whole computer, decide how much
 freedom the assistants get, run the start script, and give the go-ahead for anything
 that cannot be undone.
+
+For an installed seat, use the isolated command shown below. A strict Claude
+seat's old allow rule must be replaced with the exact new rule printed by
+`agenttalk wrap`, for example `Bash("<python path>" -I -m agenttalk *)`.
+Make that settings change yourself; the wrapper does not grant permissions.
+Trust the project interactively where Claude Code requires it. The new rule
+still needs a separate permission-engine check in the deployed Claude version.
+For a deliberate source checkout, choose `supervise --init --source-checkout --force`
+or set `PYTHONPATH` to the checkout's `src` for a manual wrapper and omit `-I`.
 
 **Written for:** the AI assistant (Claude Code or Codex) that a person has told to
 "read this brief and set up agenttalk".

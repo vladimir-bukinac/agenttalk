@@ -5037,6 +5037,17 @@ def _checkout_runtime_env(base: dict[str, str] | None = None) -> dict[str, str]:
     return env
 
 
+def _init_checkout_supervisor(root: Path) -> int:
+    return _run(["supervise", "--init", "--source-checkout"], root)
+
+
+def test_checkout_generated_supervisor_uses_source_mode(tmp_path: Path) -> None:
+    store = _team(tmp_path)
+    assert _init_checkout_supervisor(tmp_path) == 0
+    assert sup.recorded_source_mode(store)
+    assert sup.validate_artifact_bundle(store)["ok"]
+
+
 def _live_supervisor_config(*agents: str) -> dict:
     return {
         "agents": {
@@ -5131,7 +5142,7 @@ def _start_live_generated_supervisor(
         json.dumps(_live_supervisor_config("lead")),
         encoding="utf-8",
     )
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     log_path = tmp_path / "live-supervisor.log"
     log_handle = log_path.open("w", encoding="utf-8")
@@ -5262,7 +5273,7 @@ def test_generated_ps1_holds_poll_when_preplan_state_save_is_contended(
         json.dumps(config),
         encoding="utf-8",
     )
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     state_path = store.dir / "supervisor-state.json"
     initial = {"agents": {"worker": _ready(backoff_next_epoch=0)}}
@@ -5662,7 +5673,7 @@ def test_spawned_launch_is_not_acknowledged_when_record_launch_cannot_commit(
         }),
         encoding="utf-8",
     )
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     state_path = store.dir / "supervisor-state.json"
     state_path.write_text(
         json.dumps({
@@ -5810,7 +5821,7 @@ def test_generated_ps1_two_polls_do_not_duplicate_launch_after_postspawn_content
         "poll_seconds": 1,
     }
     (store.dir / "supervisor.json").write_text(json.dumps(config), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     state_path.write_text(
         json.dumps({
@@ -6106,7 +6117,7 @@ def test_generated_ps1_runs_bus_calls_without_console_script_on_path(tmp_path: P
     # A real supervisor.json (the shipped template uses an AGENT_NAME placeholder);
     # write it BEFORE --init so init leaves it intact and only emits the .ps1 + shim.
     (s.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     ps1 = s.dir / "supervisor.ps1"
     assert ps1.exists() and (s.dir / "bin" / "agenttalk.cmd").exists()
@@ -6341,7 +6352,7 @@ def test_generated_ps1_tamper_refuses_before_claim(tmp_path: Path) -> None:
         return
     s = _team(tmp_path)
     (s.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     ps1 = s.dir / "supervisor.ps1"
     _replace_proc_start(ps1, "  return $null")
@@ -6379,7 +6390,7 @@ def test_generated_ps1_quiet_suppresses_warning_path(tmp_path: Path) -> None:
                           "reset_after_seconds": 180},
               "suspect_warn_interval_seconds": 300, "launch_grace_seconds": 120}
     (s.dir / "supervisor.json").write_text(json.dumps(config), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     ps1 = s.dir / "supervisor.ps1"
     # readiness state (past initial launch grace) + NO heartbeat written => stale.
@@ -6422,7 +6433,7 @@ def test_generated_ps1_quiet_suppresses_relaunch_helper_warnings(tmp_path: Path)
                           "reset_after_seconds": 180},
               "suspect_warn_interval_seconds": 300, "launch_grace_seconds": 120}
     (s.dir / "supervisor.json").write_text(json.dumps(config), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     _select_test_powershell(tmp_path, shell)
     ps1 = s.dir / "supervisor.ps1"
     state_file = s.dir / "supervisor-state.json"
@@ -6465,7 +6476,7 @@ def test_generated_ps1_quotes_args_with_spaces_as_single_arg(tmp_path: Path) -> 
         return
     s = _team(tmp_path)
     (s.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    assert _init_checkout_supervisor(tmp_path) == 0
     ps1_text = (s.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
     start = ps1_text.index("# region quote-arg")
     end = ps1_text.index("# endregion quote-arg")

@@ -16224,6 +16224,9 @@ def cmd_supervise(args: argparse.Namespace) -> int:
             "script-use supervisor mutation\n"
         )
         return 3
+    if getattr(args, "source_checkout", False) and not args.init:
+        sys.stderr.write("agenttalk supervise: --source-checkout requires --init (and --force to replace scripts)\n")
+        return 3
     if args.init:
         try:
             res = sup.init(store, force=args.force, source_checkout=getattr(args, "source_checkout", False))

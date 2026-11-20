@@ -16,6 +16,81 @@ from agenttalk.wrapper import prompt, run
 from agenttalk.store import Store
 
 
+@pytest.mark.parametrize("source", [False, True])
+def test_init_and_validation_use_same_recorded_mode(store, source):
+    args = ["--root", str(store.root), "supervise", "--init"]
+    if source:
+        args.append("--source-checkout")
+    assert cli.main(args) == 0
+    assert supervisor.recorded_source_mode(store) is source
+    assert supervisor.validate_artifact_bundle(store)["ok"]
+
+
+@pytest.mark.parametrize("source", [False, True])
+def test_init_validates_in_selected_runtime_process(store, tmp_path, source):
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = (
+        runtime / "Lib/site-packages"
+        if os.name == "nt"
+        else runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+    )
+    package_root = store.root / "src" if source else site
+    package_root.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(Path(agenttalk.__file__).parent, package_root / "agenttalk")
+    supervisor.init(store, python_exe=str(python), source_checkout=source)
+    env = {
+        key: os.environ[key]
+        for key in ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP")
+        if key in os.environ
+    }
+    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
+    if source:
+        env["PYTHONPATH"] = str(package_root)
+    command = [
+        str(python),
+        *([] if source else ["-I"]),
+        "-c",
+        "import agenttalk; from agenttalk.store import Store; "
+        "from agenttalk.supervisor import validate_artifact_bundle; "
+        "import sys; validate_artifact_bundle(Store(sys.argv[1])); print(agenttalk.__file__)",
+        str(store.root),
+    ]
+    result = subprocess.run(command, cwd=store.root, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).is_relative_to(package_root)
+
+
+@pytest.mark.parametrize("source", [False, True])
+def test_doctor_reports_runtime_mode_for_claude_only_supervisor(store, source):
+    supervisor.init(store, source_checkout=source)
+    (store.dir / "supervisor.json").write_text(json.dumps({"agents": {"alice": {"cli": "claude"}}}))
+    report = doctor.run(store.root)
+    mode = "source" if source else "installed"
+    assert any(f"supervisor runtime mode: {mode} (recorded in supervisor.ps1)" in c.details for c in report.checks)
+
+
+def test_source_checkout_does_not_silently_skip_existing_scripts(store, capsys):
+    supervisor.init(store)
+    assert cli.main(["--root", str(store.root), "supervise", "--init", "--source-checkout"]) != 0
+    assert "--force" in capsys.readouterr().err
+    assert not supervisor.recorded_source_mode(store)
+
+
+def test_source_checkout_requires_init(store, capsys):
+    assert cli.main(["--root", str(store.root), "supervise", "--refresh-scripts", "--source-checkout"]) != 0
+    assert "--init" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("result,reason", [((1, "access denied"), "access denied"), ((0, "not json"), "not json")])
+def test_runtime_probe_reports_actual_failure(tmp_path, result, reason):
+    message = run.preflight_agenttalk_runtime(workspace_root=tmp_path, runner=lambda *args: result)
+    assert "runtime check could not run" in message
+    assert reason in message
+    assert "install agenttalk" not in message
+
+
 def test_strict_installed_rule_uses_isolation(tmp_path):
     python = tmp_path / "python.exe"
     python.touch()

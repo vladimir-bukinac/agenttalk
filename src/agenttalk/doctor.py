@@ -141,6 +141,15 @@ def run(project_root: Path | None = None) -> Report:
     artifact_check = _check_powershell_artifacts(store)
     if artifact_check is not None:
         report.checks.append(artifact_check)
+    if (store.dir / "supervisor.ps1").exists():
+        try:
+            mode = "source" if sup.recorded_source_mode(store) else "installed"
+            report.checks.append(Check(name="supervisor_runtime_mode", status="ok", details=(
+                f"supervisor runtime mode: {mode} (recorded in supervisor.ps1)"
+            )))
+        except (sup.ArtifactValidationError, OSError, UnicodeError) as exc:
+            report.checks.append(Check(name="supervisor_runtime_mode", status="error",
+                                       details=f"Cannot read the supervisor runtime mode: {exc}"))
     # Scratch hygiene (#148) runs UNCONDITIONALLY, like multi-store detection:
     # scratch root resolution works without an initialized store, so the
     # warning should too.

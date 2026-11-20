@@ -1088,13 +1088,11 @@ def preflight_agenttalk_runtime(
     except subprocess.TimeoutExpired:  # a hang is refused, never let through (#714)
         return _startup_timeout_summary(_format_argv([argv[0], "-c", "import agenttalk"]), timeout)
     except OSError as exc:
-        blocked = (_runtime_config_blocked_summary(str(exc))
-                   or agenttalk_runtime_config_blocked_summary(None, workspace))
-        return blocked
+        return f"the runtime check could not run: {_compact_text(str(exc))}"
     if rc != 0:
-        blocked = (_runtime_config_blocked_summary(out)
-                   or agenttalk_runtime_config_blocked_summary(None, workspace))
-        return blocked
+        if _AGENTTALK_MISSING_MODULE_RE.search(out or ""):
+            return _runtime_config_blocked_summary(out)
+        return f"the runtime check could not run: {_compact_text(out or f'exit code {rc}')}"
     resolved: str | None = None
     for line in reversed((out or "").splitlines()):
         try:
@@ -1105,7 +1103,7 @@ def preflight_agenttalk_runtime(
         resolved = str(value) if value else None
         break
     if resolved is None:
-        return agenttalk_runtime_config_blocked_summary(None, workspace)
+        return f"the runtime check could not run: {_compact_text(out or 'no module identity returned')}"
     return agenttalk_runtime_config_blocked_summary(resolved, workspace)
 
 

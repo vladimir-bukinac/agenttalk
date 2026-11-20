@@ -406,10 +406,15 @@ def test_rule_requires_its_pinned_invocation_before_fallback(tmp_path, kind, rul
     assert pinned_findings(tmp_path, kind, rule + "\nRun `python -m agenttalk x`.\n")
 
 
-@pytest.mark.parametrize("command", [
-    '"$AGENTTALK_PY" -m agenttalk', '& "$env:AGENTTALK_PY" -m agenttalk',
-    '"$AGENTTALK_PY" -I -m agenttalk', '& "$env:AGENTTALK_PY" -I -m agenttalk',
-])
+@pytest.mark.parametrize(
+    "command",
+    [
+        '"$AGENTTALK_PY" -m agenttalk',
+        '& "$env:AGENTTALK_PY" -m agenttalk',
+        '"$AGENTTALK_PY" -I -m agenttalk',
+        '& "$env:AGENTTALK_PY" -I -m agenttalk',
+    ],
+)
 def test_either_shell_pinned_invocation_states_the_rule(tmp_path, command):
     rule = f"When AGENTTALK_PY is set, use `{command}`; otherwise use your manual.\n"
     assert sc._states_pinned_rule(rule)
