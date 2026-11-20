@@ -391,7 +391,7 @@ def read_runtime(
             expected_agent=agent,
             now_epoch=now_epoch,
         )
-    except (OSError, UnicodeError, json.JSONDecodeError, RuntimeRecordError):
+    except (OSError, UnicodeError, json.JSONDecodeError, RuntimeRecordError, RecursionError):
         return {"status": STATUS_INVALID, "error": "malformed"}
 
     now = time.time() if now_epoch is None else float(now_epoch)

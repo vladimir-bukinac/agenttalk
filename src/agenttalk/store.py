@@ -4166,7 +4166,7 @@ class Store:
         path = self._operation_intent_path(sender, operation_nonce)
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError, json.JSONDecodeError):
+        except (OSError, ValueError, json.JSONDecodeError, RecursionError):
             return None
         if (
             not isinstance(value, dict)

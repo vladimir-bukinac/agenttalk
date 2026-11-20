@@ -1251,7 +1251,7 @@ def read_coordination_availability_observation(store: Store) -> tuple[dict, list
         if path.stat().st_size > _COORDINATION_AVAILABILITY_MAX_BYTES:
             raise ValueError("oversized")
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError, json.JSONDecodeError, RecursionError):
         return {}, [{"code": "availability_observation_invalid"}]
     if (
         not isinstance(raw, dict)
@@ -1794,7 +1794,7 @@ def read_coordination_barrier_observations(store: Store) -> tuple[list[dict], li
                 "last_observed_epoch": last_epoch,
                 "consecutive_blocked_polls": consecutive,
             })
-        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        except (OSError, TypeError, ValueError, json.JSONDecodeError, RecursionError):
             if len(problems) < _COORDINATION_MAX_DIAGNOSTICS:
                 problems.append({
                     "code": "restart_barrier_observation_invalid",

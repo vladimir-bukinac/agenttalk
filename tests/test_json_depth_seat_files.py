@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from agenttalk import checkpoint, cli, coordination_stall, lead_loop_cadence, lead_routine, reply_refusals
-from agenttalk import supervisor, web
+from agenttalk import supervisor, web, wrapper_runtime
 from agenttalk.store import Store, unusable_restart_request_marker
 from agenttalk.wrapper import session as wrapper_session
 
@@ -84,6 +84,11 @@ FILES = {
     "awaiting-superseded": lambda s: s._waiting_superseded_path("alpha", "tok1"),
     "lead-routine": lambda s: lead_routine.record_path(s, "alpha"),
     "reply-refusal": lambda s: reply_refusals._record_path(s, "alpha", "m1"),
+    "capacity": lambda s: s.state_dir / "alpha.capacity.json",
+    "operation-intent": lambda s: s._operation_intent_path("alpha", "0" * 32),
+    "restart-barrier": lambda s: supervisor._coordination_barrier_path(s, "alpha"),
+    "wrapper-runtime-record": lambda s: wrapper_runtime.runtime_path(s.state_dir, "alpha"),
+    "availability": lambda s: supervisor._coordination_availability_path(s),
 }
 
 
@@ -136,6 +141,21 @@ READERS = {
     "lead_routine.read": ("lead-routine", lambda s: lead_routine.read(s, "alpha")),
     "list_reply_refusals": ("reply-refusal", lambda s: reply_refusals.list_reply_refusals(s, "alpha")),
     "read_reply_refusal": ("reply-refusal", lambda s: reply_refusals.read_reply_refusal(s, "alpha", "m1")),
+    "read_capacity": ("capacity", lambda s: s.read_capacity("alpha")),
+    "read_operation_intent": ("operation-intent", lambda s: s.read_operation_intent("alpha", "0" * 32)),
+    "read_all_capacities": ("capacity", lambda s: s.read_all_capacities()),
+    "coordination barrier observations": (
+        "restart-barrier",
+        lambda s: supervisor.read_coordination_barrier_observations(s),
+    ),
+    "coordination availability observation": (
+        "availability",
+        lambda s: supervisor.read_coordination_availability_observation(s),
+    ),
+    "wrapper_runtime.read_runtime": (
+        "wrapper-runtime-record",
+        lambda s: wrapper_runtime.read_runtime(s.state_dir, "alpha", now_epoch=1000.0),
+    ),
     "checkpoint _closed_request_ids": (
         "threadstate",
         lambda s: checkpoint._closed_request_ids(s, "alpha"),
@@ -147,13 +167,42 @@ READERS = {
 }
 
 
+REJECTS_BY_SIZE_FIRST = {"wrapper_runtime.read_runtime"}
+
+
 @pytest.mark.parametrize("name", sorted(READERS))
 def test_reader_treats_a_nested_file_like_a_malformed_one(tmp_path, too_deep, name):
     kind, read = READERS[name]
+    if name in REJECTS_BY_SIZE_FIRST and too_deep == DEEP:
+        pytest.skip("this reader refuses a file this large by size before it parses it; the forced variant covers it")
     store = _store(tmp_path)
     _write(store, kind, MALFORMED)
     damaged = _outcome(read, store)
     _write(store, kind, too_deep)
+    assert _outcome(read, store) == damaged
+
+
+@pytest.mark.parametrize(
+    ("name", "levels"),
+    [
+        ("coordination barrier observations", 2000),  # 4,000 bytes: under its 4,096-byte limit
+        ("coordination availability observation", 100000),  # 200,000 bytes: under its 262,144-byte limit
+        ("wrapper_runtime.read_runtime", 8000),  # 16,000 bytes: under its 16,384-byte limit
+    ],
+)
+def test_size_limited_reader_treats_a_file_nested_within_its_limit_like_a_malformed_one(tmp_path, name, levels):
+    text = "[" * levels + "]" * levels
+    try:
+        json.loads(text)
+    except RecursionError:
+        pass
+    else:
+        pytest.skip(f"JSON decoder accepts {levels} levels on this runtime")
+    kind, read = READERS[name]
+    store = _store(tmp_path)
+    _write(store, kind, MALFORMED)
+    damaged = _outcome(read, store)
+    _write(store, kind, text)
     assert _outcome(read, store) == damaged
 
 
@@ -243,47 +292,98 @@ def _caller_result(call, store, root):
     return result if isinstance(result, int) else "ran"
 
 
-# --- the list itself is part of the review: a seat file the code names must be accounted for -------------------
+# --- the list itself is part of the review: a per-seat path the code builds must be accounted for ---------------
+
+_EXPR = r"(?:validate_agent_name\(\w+\)|agent|name|a|new)"
+_SUFFIX = r"([A-Za-z0-9][A-Za-z0-9.-]*)"
+_IN_FOLDER = re.compile(r'(?:"([\w-]+)"|(_[A-Z_]+)) / f"\{' + _EXPR + r"\}(?:\.\{\w+\})?\." + _SUFFIX + '"')
+_IN_STATE = re.compile(r'f"\{' + _EXPR + r"\}\." + _SUFFIX + '"')
+_PERCENT = re.compile(r'"%s\.' + _SUFFIX + '" %')
+_AGENT_FOLDER = re.compile(
+    r'([\w.]+(?:\([\w.]*\))?|"[\w-]+") / '
+    r"(?:validate_agent_name\(\w+\)|agent|args\.agent|path_agent|ag|name(?= / generation))(?![\w.])"
+)
 
 
-# Suffixes of `<seat>.<suffix>` files named in the code that are NOT JSON read through a parser (or are read
-# elsewhere), each with the reason. Anything else the code names must be in FILES above.
-NOT_COVERED_HERE = {
-    "cursor": "a plain message id, not JSON",
-    "heartbeat": "a timestamp, not JSON",
-    "wrapper-owner": "written to claim ownership, never parsed as JSON",
-    "waiting.lock": "a lock file; its small owner record is read with a size limit",
-    "lead-routine.lock": "a lock file; its small owner record is read with a size limit",
-    "lead-loop-lease.lock": "a lock file; its small owner record is read with a size limit",
-    "capacity.json": "the capacity reading, fixed in #871",
+def _per_seat_paths_named_in_the_code():
+    """Every way the code builds a path from a seat name, as a label: `<seat>.<suffix>` in the state folder,
+    `<folder>/<seat>.json` (a folder inside it), and a folder named for the seat."""
+    found = set()
+    for path in (Path(__file__).resolve().parents[1] / "src" / "agenttalk").rglob("*.py"):
+        for line in path.read_text(encoding="utf-8").split("\n"):
+            if "state_dir" in line or line.strip().startswith('/ f"{validate_agent_name'):
+                folder = _IN_FOLDER.search(line)
+                if folder:
+                    found.add(f"{folder.group(1) or folder.group(2)}/*.{folder.group(3)}")
+                    continue
+                plain = _IN_STATE.search(line) or _PERCENT.search(line)
+                if plain:
+                    found.add("." + plain.group(plain.lastindex))
+                    continue
+            seat_folder = _AGENT_FOLDER.search(line)
+            if seat_folder:
+                found.add("folder " + seat_folder.group(1))
+    return found
+
+
+# label -> the FILES entry that tests it
+COVERED = {
+    ".capacity.json": "capacity",
+    ".composing.json": "composing",
+    ".fresh-request": "fresh-request",
+    ".gateway-held.json": "gateway-held",
+    ".health.json": "health",
+    ".lead-loop-cadence.json": "lead-loop-cadence",
+    ".lead-loop-exit.json": "lead-loop-exit",
+    ".lead-loop-lease.json": "lead-loop-lease",
+    ".lead-routine.json": "lead-routine",
+    ".restart-request": "restart-request",
+    ".stand-down.json": "stand-down",
+    ".threadstate.json": "threadstate",
+    ".waiting": "waiting",
+    ".wrapper-runtime.json": "wrapper-runtime-record",
+    ".wrapper-session.json": "wrapper-session",
+    "_COORDINATION_BARRIER_DIR/*.json": "restart-barrier",
+    "config-blocked-hold/*.json": "config-blocked-hold",
+    "dead-letter-attempts/*.json": "dead-letter-attempts",
+    "usage-limit-park/*.json": "usage-limit-park",
+    "operation-intents/*.json": "operation-intent",
+    "waiting-superseded/*.json": "awaiting-superseded",
+    "work-heartbeat/*.json": "work-heartbeat",
+    "folder self.awaiting_dir": "awaiting",
+    "folder reply_refusal_dir(store)": "reply-refusal",
 }
-FILE_SUFFIXES = {
-    "waiting": ".waiting",
-    "health": ".health.json",
-    "threadstate": ".threadstate.json",
-    "lead-loop-lease": ".lead-loop-lease.json",
-    "stand-down": ".stand-down.json",
-    "wrapper-session": ".wrapper-session.json",
-    "composing": ".composing.json",
-    "restart-request": ".restart-request",
-    "fresh-request": ".fresh-request",
-    "gateway-held": ".gateway-held.json",
-    "lead-loop-exit": ".lead-loop-exit.json",
-    "lead-loop-cadence": ".lead-loop-cadence.json",
-    "lead-routine": ".lead-routine.json",
+# label -> why it is not a per-seat JSON read that needs this test
+NOT_COVERED = {
+    ".cursor": "a plain message id, not JSON",
+    ".heartbeat": "a timestamp, not JSON",
+    ".wrapper-owner": "written to claim ownership, never parsed as JSON",
+    ".waiting.lock": "a lock file; its small owner record is read with a 4,096-byte limit",
+    ".lead-loop-lease.lock": "a lock file; its small owner record is read with a 4,096-byte limit",
+    ".lead-routine.lock": "a lock file; its small owner record is read with a 4,096-byte limit",
+    'folder "codex-home"': "the seat's own Codex home folder, not agenttalk state",
+    'folder "drafts"': "the wrapper's own reply drafts and ledger, with their own rebuild path",
+    'folder "reply-drafts"': "reply drafts are Markdown, not JSON",
+    "folder _te.default_turn_events_root(store.root)": "turn events: every read already catches RecursionError",
+    "folder resolve_scratch_root(project_root)": "scratch folders, not state",
+    "folder self.dead_letter_dir": "dead letters, their notes and requeue records: message records, not seat state",
+    "folder store.dead_letter_dir": "dead letters, their notes and requeue records: message records, not seat state",
+    "folder root": "the dead-letter listing, and the reply-refusal listing (covered as reply-refusal)",
+    "folder loop": "a code comment, not a path",
 }
 
 
-def test_every_per_seat_file_named_in_the_code_is_covered_or_explained():
-    source_dir = Path(__file__).resolve().parents[1] / "src" / "agenttalk"
-    named = set()
-    for path in source_dir.rglob("*.py"):
-        text = path.read_text(encoding="utf-8")
-        named.update(re.findall(r'state_dir / f"\{[^}]+\}\.([A-Za-z0-9][A-Za-z0-9.-]*)"', text))
-        named.update(re.findall(r'state_dir / \("%s\.([A-Za-z0-9][A-Za-z0-9.-]*)" %', text))
-    assert named, "the search found no per-seat file names: the pattern is out of date"
-    covered = {suffix.lstrip(".") for suffix in FILE_SUFFIXES.values()}
-    unaccounted = sorted(named - covered - set(NOT_COVERED_HERE))
-    assert not unaccounted, f"per-seat files named in the code but not in this test: {unaccounted}"
-    for kind in FILE_SUFFIXES:
-        assert kind in FILES, kind
+def test_every_per_seat_path_named_in_the_code_is_covered_or_explained():
+    named = _per_seat_paths_named_in_the_code()
+    assert len(named) > 20, "the search found too few per-seat paths: the patterns are out of date"
+    unaccounted = sorted(named - set(COVERED) - set(NOT_COVERED))
+    assert not unaccounted, f"per-seat paths named in the code but not accounted for in this test: {unaccounted}"
+    stale = sorted((set(COVERED) | set(NOT_COVERED)) - named)
+    assert not stale, f"entries here that the code no longer names: {stale}"
+
+
+def test_every_covered_file_has_a_path_and_a_reader_test():
+    tested_kinds = {kind for kind, _read in READERS.values()}
+    for label, kind in COVERED.items():
+        assert kind in FILES, (label, kind)
+        assert kind in tested_kinds, f"{label}: no reader in READERS reads the {kind} file"
