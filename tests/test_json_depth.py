@@ -118,3 +118,109 @@ def test_full_doctor_reports_nested_file(tmp_path, monkeypatch, capsys, bad_json
         assert check["status"] == "error"
         output = check["details"]
     assert ("config" if file_kind == "config" else "selection is malformed") in output
+
+
+# --- #871: a damaged capacity reading must be skipped and named, never crash ---
+
+CAPACITY_DEPTH = 200000
+DEEP_CAPACITY_JSON = "[" * CAPACITY_DEPTH + "]" * CAPACITY_DEPTH
+
+
+@pytest.fixture(params=["deep", "forced"])
+def bad_capacity_json(request, monkeypatch):
+    if request.param == "deep":
+        try:
+            json.loads(DEEP_CAPACITY_JSON)
+        except RecursionError:
+            return DEEP_CAPACITY_JSON
+        pytest.skip("JSON decoder accepts the 200,000-level input on this runtime")
+    content = '{"force_recursion": true}'
+    original = json.loads
+
+    def loads(value, *args, **kwargs):
+        if value == content:
+            raise RecursionError("forced decoder failure")
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, "loads", loads)
+    return content
+
+
+GOOD_READING = {
+    "source_agent": "beta",
+    "observed_at": "2026-06-09T08:00:00Z",
+    "source": "codex_rollout",
+    "primary_used_percent": 12.0,
+    "confidence": "observed",
+}
+
+
+def _store_with_bad_capacity(tmp_path, content):
+    store = Store(tmp_path)
+    store.init(["alpha", "beta"])
+    store.write_capacity("beta", GOOD_READING)
+    (store.state_dir / "alpha.capacity.json").write_text(content, encoding="utf-8")
+    return store
+
+
+def test_capacity_readers_skip_nested_json(tmp_path, bad_capacity_json):
+    store = _store_with_bad_capacity(tmp_path, bad_capacity_json)
+    assert store.read_capacity("alpha") is None
+    assert store.read_all_capacities() == {"beta": GOOD_READING}
+    readings, unreadable = store.read_capacities_checked()
+    assert readings == {"beta": GOOD_READING} and unreadable == ["alpha"]
+
+
+def test_capacity_readers_skip_invalid_text(tmp_path):
+    store = _store_with_bad_capacity(tmp_path, "")
+    (store.state_dir / "alpha.capacity.json").write_bytes(b"\xff\xfe\x00{")
+    assert store.read_capacity("alpha") is None
+    assert store.read_capacities_checked() == ({"beta": GOOD_READING}, ["alpha"])
+
+
+def test_capacity_checked_reader_does_not_report_absent_or_empty(tmp_path):
+    store = _store_with_bad_capacity(tmp_path, "")
+    assert store.read_capacities_checked() == ({"beta": GOOD_READING}, [])
+
+
+@pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
+def test_status_names_a_nested_capacity_reading(tmp_path, capsys, bad_capacity_json, as_json):
+    _store_with_bad_capacity(tmp_path, bad_capacity_json)
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "status"] + (["--json"] if as_json else [])) == 0
+    output = capsys.readouterr().out
+    if as_json:
+        payload = json.loads(output)
+        rows = {row["name"]: row for row in payload["agents"]}
+        assert "capacity" not in rows["alpha"] and "capacity" in rows["beta"]
+        output = "\n".join(payload["warnings"])
+    assert "capacity reading for alpha could not be read" in output
+    assert "capacity reading for beta" not in output
+
+
+def test_capacity_show_names_a_nested_capacity_reading(tmp_path, capsys, bad_capacity_json):
+    _store_with_bad_capacity(tmp_path, bad_capacity_json)
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "capacity"]) == 0
+    output = capsys.readouterr().out
+    assert "beta" in output
+    assert "WARN:" in output and "capacity reading for alpha could not be read" in output
+
+
+def test_capacity_show_with_only_a_nested_reading_still_works(tmp_path, capsys, bad_capacity_json):
+    store = Store(tmp_path)
+    store.init(["alpha"])
+    (store.state_dir / "alpha.capacity.json").write_text(bad_capacity_json, encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "capacity"]) == 0
+    output = capsys.readouterr().out
+    assert "capacity reading for alpha could not be read" in output
+
+
+def test_attention_and_dashboard_skip_a_nested_capacity_reading(tmp_path, bad_capacity_json):
+    from agenttalk import web
+
+    store = _store_with_bad_capacity(tmp_path, bad_capacity_json)
+    assert cli._tripped_capacity_signals(store) == []
+    entries = {e["name"]: e for e in web._agent_entries(store, store.load_config(), [], None)}
+    assert "capacity" not in entries["alpha"] and "capacity" in entries["beta"]

@@ -837,7 +837,7 @@ def _gather_status(store: Store) -> dict:
         store, now.timestamp(), sup_cfg)
     agents = []
     conv_settings = convsize.load_settings(store.dir)
-    capacities = store.read_all_capacities()
+    capacities, unreadable_capacities = store.read_capacities_checked()
     for a in cfg.get("agents", []):
         hb = store.read_heartbeat(a)
         if hb is None:
@@ -991,6 +991,7 @@ def _gather_status(store: Store) -> dict:
         _status_warnings(agents, no_sign)
         + _thread_warnings(store, cfg, valid_msgs=valid, operator_questions=operator_questions)
         + supervisor_warnings
+        + _unreadable_capacity_warnings(unreadable_capacities)
     )
     for item in coordination_items:
         reason = item.get("reason") if isinstance(item, dict) else None
@@ -1101,6 +1102,17 @@ def _drain_advice(name: str) -> str:
         f"`{pc.cmd('agenttalk drain --for {n}', n=name)}` reads and consumes the messages for whoever runs it, "
         f"so only {name} itself, or someone who will hand the messages on, should run it."
     )
+
+
+def _unreadable_capacity_warnings(names: list[str]) -> list[str]:
+    """One plain line per capacity reading that is there but cannot be read (#871), so a skipped file is
+    a stated fact and not a silent gap. The name comes from a file name, so it is shown escaped."""
+    return [
+        f"the capacity reading for {pc.line(name)} could not be read (damaged or nested too deeply) and was "
+        f"skipped; the seat can publish a new one with "
+        f"`{pc.cmd('agenttalk capacity refresh --for {n}', n=name)}`"
+        for name in names
+    ]
 
 
 def _status_warnings(agents: list[dict], no_sign: frozenset[str] | set[str] = frozenset()) -> list[str]:
@@ -12243,13 +12255,16 @@ def cmd_capacity(args: argparse.Namespace) -> int:
     # show: the published reading, with any newer window the seat's wrapper kept since (#596)
     from .wrapper import session as wsession
 
+    readings, unreadable = store.read_capacities_checked()
     caps = {
         agent: capmod.with_saved_reading(snap, wsession.load_session(store, agent, "claude").claude_rate_limit)
-        for agent, snap in store.read_all_capacities().items()
+        for agent, snap in readings.items()
     }
     if not caps:
         print("agenttalk capacity: no budgets published yet — each agent runs "
               "`agenttalk capacity refresh` (advisory; lead reads this to plan work).")
+        for w in _unreadable_capacity_warnings(unreadable):
+            print(f"WARN: {w}")
         return 0
     print(f"team budget (advisory; flag ≥{args.threshold:.0f}% used, reset within "
           f"{args.reset_soon_min}m, or context ≥{args.context_threshold:.0f}%):")
@@ -12271,6 +12286,8 @@ def cmd_capacity(args: argparse.Namespace) -> int:
         ages = {a: capmod.age_seconds(str(capmod.newest_observed_at(caps[a]) or "")) for a in agents}
         for agent in sorted(agents, key=lambda a: float("inf") if ages[a] is None else ages[a]):
             print(f"{indent}{agent:<14} {_capacity_text(caps[agent], **kw)}")
+    for w in _unreadable_capacity_warnings(unreadable):
+        print(f"WARN: {w}")
     return 0
 
 
