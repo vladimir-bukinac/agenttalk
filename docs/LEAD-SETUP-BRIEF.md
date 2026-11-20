@@ -921,7 +921,11 @@ blocked and why, which decisions your human still owes, what each seat is doing,
 what happens next. Someone who starts reading cold (including you, after your own
 window is reset) must be able to carry on from it.
 
+Every note carries Picture last verified; the first note after a restart fills in Stopped at (or unknown) and Still uncertain.
+
 Stopped at: <time or unknown>. Picture last verified: <time>. Still uncertain: <list>.
+
+Follow the [lead skill restart steps](https://github.com/zoolok17/agenttalk/blob/master/src/agenttalk/skills/claude/agenttalk.lead.md#hard-boundaries).
 
 ## Step 7. Giving work and checking it
 
