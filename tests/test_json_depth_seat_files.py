@@ -315,32 +315,67 @@ def _caller_result(call, store, root):
 
 # --- the list itself is part of the review: a per-seat path the code builds must be accounted for ---------------
 
-_SUFFIX = r"([A-Za-z0-9][A-Za-z0-9.-]*)"
+_SUFFIX = r"[A-Za-z0-9][A-Za-z0-9.-]*"
 # The seat part may be any variable, attribute or call: `seat`, `args.agent`, `validate_agent_name(agent)`.
 _CALL_ARGS = r"\((?:[^()]|\([^()]*\))*\)"
 _SEAT = r"[\w.]+(?:" + _CALL_ARGS + r")?"
+_FORMAT_FIELD = r"\{(?:[0-9]+|[A-Za-z_]\w*)?\}"
 _FILE_NAME = (
-    r'(?:f"\{[^{}"]+\}(?:\.\{[^{}"]+\})?\.' + _SUFFIX + '"'  # f"{seat}.suffix", f"{seat}.{nonce}.suffix"
-    r"|\(\s*" + _SEAT + r'\s*\+\s*"\.' + _SUFFIX + r'"\s*\)'  # (seat + ".suffix")
-    r'|\(?\s*"%s(?:\.%s)?\.' + _SUFFIX + r'"\s*%)'  # ("%s.suffix" % seat)
+    r"""(?:(?i:rf|fr|f)(?P<f_quote>["'])\{[^{}"']+\}(?:\.\{[^{}"']+\})?\."""
+    + r"(?P<f_suffix>"
+    + _SUFFIX
+    + r")(?P=f_quote)"
+    + r"|\(\s*"
+    + _SEAT
+    + r"""\s*\+\s*(?i:r|u)?(?P<concat_quote>["'])\."""
+    + r"(?P<concat_suffix>"
+    + _SUFFIX
+    + r")(?P=concat_quote)\s*\)"
+    + r"""|\(?\s*(?i:r|u)?(?P<percent_quote>["'])%s(?:\.%s)?\."""
+    + r"(?P<percent_suffix>"
+    + _SUFFIX
+    + r")(?P=percent_quote)\s*%"
+    + r"""|(?i:r|u)?(?P<format_quote>["'])"""
+    + _FORMAT_FIELD
+    + r"(?:\."
+    + _FORMAT_FIELD
+    + r")?\."
+    + r"(?P<format_suffix>"
+    + _SUFFIX
+    + r")(?P=format_quote)\.format\s*\("
+    + r")"
 )
 # Right after the state folder, or at the start of a line that goes on from one naming it.
 _AFTER_STATE = r"(?:state_dir\)?\s*/\s*|^\s*/\s*)"
-_IN_FOLDER = re.compile(_AFTER_STATE + r'(?:"([\w-]+)"|(_[A-Z_]+))\s*/\s*' + _FILE_NAME)
+_IN_FOLDER = re.compile(
+    _AFTER_STATE
+    + r"""(?:(?P<folder_quote>["'])(?P<folder_name>[\w-]+)(?P=folder_quote)"""
+    + r"|(?P<folder_constant>_[A-Z_]+))\s*/\s*"
+    + _FILE_NAME
+)
 _IN_STATE = re.compile(_AFTER_STATE + _FILE_NAME)
 _AGENT_FOLDER = re.compile(
-    r'([\w.]+(?:\([\w.]*\))?|"[\w-]+") / '
+    r"""([\w.]+(?:\([\w.]*\))?|(?P<seat_quote>["'])(?P<seat_name>[\w-]+)(?P=seat_quote)) / """
     r"(?:validate_agent_name" + _CALL_ARGS + r"|agent|args\.agent|path_agent|ag|name(?= / generation))(?![\w.])"
 )
 
 
-def _suffix(match, first_group):
-    return next(group for group in match.groups()[first_group:] if group is not None)
+def _suffix(match):
+    return next(
+        match.group(name)
+        for name in ("f_suffix", "concat_suffix", "percent_suffix", "format_suffix")
+        if match.group(name) is not None
+    )
 
 
 def _per_seat_paths_in(lines):
-    """Every way these source lines build a path from a seat name, as a label: `<seat>.<suffix>` in the state
-    folder, `<folder>/<seat>.json` (a folder inside it), and a folder named for the seat."""
+    """Find the claimed single-line f-string, concatenation, percent and str.format path spellings.
+
+    Inspect state_dir, a quoted or constant folder beneath it, its one continuation line,
+    and seat-named folders. Triple quotes, implicitly joined strings, joinpath,
+    os.path.join, with_name, and names stored in variables then joined later are outside
+    this line search.
+    """
     found = set()
     previous = ""
     for line in lines:
@@ -349,15 +384,18 @@ def _per_seat_paths_in(lines):
         if "state_dir" in line or goes_on:
             folder = _IN_FOLDER.search(line)
             if folder:
-                found.add(f"{folder.group(1) or folder.group(2)}/*.{_suffix(folder, 2)}")
+                found.add(f"{folder.group('folder_name') or folder.group('folder_constant')}/*.{_suffix(folder)}")
                 continue
             plain = _IN_STATE.search(line)
             if plain:
-                found.add("." + _suffix(plain, 0))
+                found.add("." + _suffix(plain))
                 continue
         seat_folder = _AGENT_FOLDER.search(line)
         if seat_folder:
-            found.add("folder " + seat_folder.group(1))
+            name = seat_folder.group(1)
+            if seat_folder.group("seat_name") is not None:
+                name = '"' + seat_folder.group("seat_name") + '"'
+            found.add("folder " + name)
     return found
 
 
@@ -475,14 +513,61 @@ PLANTED = {
     "folder named for the seat": ('path = store.root / "planted" / validate_agent_name(seat)', 'folder "planted"'),
 }
 
+# Each spelling is also checked after a quoted folder, a constant folder and
+# the one continuation line the census promises to inspect.
+for prefix in ("f", "F", "rf", "rF", "Rf", "RF", "fr", "fR", "Fr", "FR"):
+    for quote in ("'", '"'):
+        expression = f"{prefix}{quote}{{seat}}.planted.json{quote}"
+        PLANTED[f"{prefix} {quote} direct"] = (f"p = s.state_dir / {expression}", ".planted.json")
+
+for quote in ("'", '"'):
+    forms = {
+        "f-string": f"f{quote}{{seat}}.planted.json{quote}",
+        "concatenation": f"(seat + {quote}.planted.json{quote})",
+        "percent": f"({quote}%s.planted.json{quote} % seat)",
+        "format auto": f"{quote}{{}}.planted.json{quote}.format(seat)",
+        "format index": f"{quote}{{0}}.planted.json{quote}.format(seat)",
+        "format named": f"{quote}{{seat}}.planted.json{quote}.format(seat=seat)",
+    }
+    for name, expression in forms.items():
+        PLANTED[f"{name} {quote} direct"] = (f"p = s.state_dir / {expression}", ".planted.json")
+        PLANTED[f"{name} {quote} quoted folder"] = (
+            f"p = s.state_dir / {quote}planted{quote} / {expression}",
+            "planted/*.planted.json",
+        )
+        PLANTED[f"{name} {quote} constant folder"] = (
+            f"p = s.state_dir / _PLANTED_DIR / {expression}",
+            "_PLANTED_DIR/*.planted.json",
+        )
+        PLANTED[f"{name} {quote} next line"] = (f"p = Path(state_dir)\n / {expression}", ".planted.json")
+
+PLANTED["single-quoted seat folder"] = ("p = root / 'planted' / agent", 'folder "planted"')
+PLANTED["mixed folder and filename quotes"] = ("p = s.state_dir / 'planted' / f\"{seat}.json\"", "planted/*.json")
+PLANTED["format with second field"] = (
+    "p = s.state_dir / '{seat}.{nonce}.json'.format(seat=seat, nonce=nonce)",
+    ".json",
+)
+for prefix in ("r", "R", "u", "U"):
+    for name, expression in {
+        "concatenation": f"(seat + {prefix}'.planted.json')",
+        "percent": f"({prefix}'%s.planted.json' % seat)",
+        "format": f"{prefix}'{{}}.planted.json'.format(seat)",
+    }.items():
+        PLANTED[f"{prefix} string {name}"] = (f"p = s.state_dir / {expression}", ".planted.json")
+
+
+@pytest.fixture(scope="module")
+def census_for_planted_rows():
+    return _per_seat_paths_named_in_the_code()
+
 
 @pytest.mark.parametrize("style", sorted(PLANTED))
-def test_the_guard_fails_on_a_new_per_seat_path_in_every_style(style):
+def test_the_guard_fails_on_a_new_per_seat_path_in_every_style(style, census_for_planted_rows):
     code, label = PLANTED[style]
     found = _per_seat_paths_in(code.split("\n"))
     assert found == {label}
     with pytest.raises(AssertionError, match=re.escape(repr(label))):
-        _assert_every_path_accounted_for(_per_seat_paths_named_in_the_code() | found)
+        _assert_every_path_accounted_for(census_for_planted_rows | found)
 
 
 def test_every_covered_file_has_a_path_and_a_reader_test():
