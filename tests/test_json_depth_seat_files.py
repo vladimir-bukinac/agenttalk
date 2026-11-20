@@ -294,35 +294,56 @@ def _caller_result(call, store, root):
 
 # --- the list itself is part of the review: a per-seat path the code builds must be accounted for ---------------
 
-_EXPR = r"(?:validate_agent_name\(\w+\)|agent|name|a|new)"
 _SUFFIX = r"([A-Za-z0-9][A-Za-z0-9.-]*)"
-_IN_FOLDER = re.compile(r'(?:"([\w-]+)"|(_[A-Z_]+)) / f"\{' + _EXPR + r"\}(?:\.\{\w+\})?\." + _SUFFIX + '"')
-_IN_STATE = re.compile(r'f"\{' + _EXPR + r"\}\." + _SUFFIX + '"')
-_PERCENT = re.compile(r'"%s\.' + _SUFFIX + '" %')
+# The seat part may be any variable, attribute or call: `seat`, `args.agent`, `validate_agent_name(agent)`.
+_CALL_ARGS = r"\((?:[^()]|\([^()]*\))*\)"
+_SEAT = r"[\w.]+(?:" + _CALL_ARGS + r")?"
+_FILE_NAME = (
+    r'(?:f"\{[^{}"]+\}(?:\.\{[^{}"]+\})?\.' + _SUFFIX + '"'  # f"{seat}.suffix", f"{seat}.{nonce}.suffix"
+    r"|\(\s*" + _SEAT + r'\s*\+\s*"\.' + _SUFFIX + r'"\s*\)'  # (seat + ".suffix")
+    r'|\(?\s*"%s(?:\.%s)?\.' + _SUFFIX + r'"\s*%)'  # ("%s.suffix" % seat)
+)
+# Right after the state folder, or at the start of a line that goes on from one naming it.
+_AFTER_STATE = r"(?:state_dir\)?\s*/\s*|^\s*/\s*)"
+_IN_FOLDER = re.compile(_AFTER_STATE + r'(?:"([\w-]+)"|(_[A-Z_]+))\s*/\s*' + _FILE_NAME)
+_IN_STATE = re.compile(_AFTER_STATE + _FILE_NAME)
 _AGENT_FOLDER = re.compile(
     r'([\w.]+(?:\([\w.]*\))?|"[\w-]+") / '
-    r"(?:validate_agent_name\(\w+\)|agent|args\.agent|path_agent|ag|name(?= / generation))(?![\w.])"
+    r"(?:validate_agent_name" + _CALL_ARGS + r"|agent|args\.agent|path_agent|ag|name(?= / generation))(?![\w.])"
 )
 
 
+def _suffix(match, first_group):
+    return next(group for group in match.groups()[first_group:] if group is not None)
+
+
+def _per_seat_paths_in(lines):
+    """Every way these source lines build a path from a seat name, as a label: `<seat>.<suffix>` in the state
+    folder, `<folder>/<seat>.json` (a folder inside it), and a folder named for the seat."""
+    found = set()
+    previous = ""
+    for line in lines:
+        goes_on = line.lstrip().startswith("/") and "state_dir" in previous
+        previous = line
+        if "state_dir" in line or goes_on:
+            folder = _IN_FOLDER.search(line)
+            if folder:
+                found.add(f"{folder.group(1) or folder.group(2)}/*.{_suffix(folder, 2)}")
+                continue
+            plain = _IN_STATE.search(line)
+            if plain:
+                found.add("." + _suffix(plain, 0))
+                continue
+        seat_folder = _AGENT_FOLDER.search(line)
+        if seat_folder:
+            found.add("folder " + seat_folder.group(1))
+    return found
+
+
 def _per_seat_paths_named_in_the_code():
-    """Every way the code builds a path from a seat name, as a label: `<seat>.<suffix>` in the state folder,
-    `<folder>/<seat>.json` (a folder inside it), and a folder named for the seat."""
     found = set()
     for path in (Path(__file__).resolve().parents[1] / "src" / "agenttalk").rglob("*.py"):
-        for line in path.read_text(encoding="utf-8").split("\n"):
-            if "state_dir" in line or line.strip().startswith('/ f"{validate_agent_name'):
-                folder = _IN_FOLDER.search(line)
-                if folder:
-                    found.add(f"{folder.group(1) or folder.group(2)}/*.{folder.group(3)}")
-                    continue
-                plain = _IN_STATE.search(line) or _PERCENT.search(line)
-                if plain:
-                    found.add("." + plain.group(plain.lastindex))
-                    continue
-            seat_folder = _AGENT_FOLDER.search(line)
-            if seat_folder:
-                found.add("folder " + seat_folder.group(1))
+        found |= _per_seat_paths_in(path.read_text(encoding="utf-8").split("\n"))
     return found
 
 
@@ -373,13 +394,57 @@ NOT_COVERED = {
 }
 
 
-def test_every_per_seat_path_named_in_the_code_is_covered_or_explained():
-    named = _per_seat_paths_named_in_the_code()
-    assert len(named) > 20, "the search found too few per-seat paths: the patterns are out of date"
+def _assert_every_path_accounted_for(named):
     unaccounted = sorted(named - set(COVERED) - set(NOT_COVERED))
     assert not unaccounted, f"per-seat paths named in the code but not accounted for in this test: {unaccounted}"
     stale = sorted((set(COVERED) | set(NOT_COVERED)) - named)
     assert not stale, f"entries here that the code no longer names: {stale}"
+
+
+def test_every_per_seat_path_named_in_the_code_is_covered_or_explained():
+    named = _per_seat_paths_named_in_the_code()
+    assert len(named) > 20, "the search found too few per-seat paths: the patterns are out of date"
+    _assert_every_path_accounted_for(named)
+
+
+# One planted line (or two) per way of building the path: each names a file no table knows, so the guard must fail.
+PLANTED = {
+    "f-string, another variable": ('path = store.state_dir / f"{seat}.planted.json"', ".planted.json"),
+    "f-string, an attribute": ('path = self.state_dir / f"{args.agent}.planted.json"', ".planted.json"),
+    "f-string, a call": ('path = store.state_dir / f"{validate_agent_name(seat)}.planted.json"', ".planted.json"),
+    "concatenation, a call": (
+        'path = store.state_dir / (validate_agent_name(agent) + ".planted.json")',
+        ".planted.json",
+    ),
+    "concatenation, a variable": ('path = store.state_dir / (seat + ".planted.json")', ".planted.json"),
+    "percent": ('path = store.state_dir / ("%s.planted.json" % seat)', ".planted.json"),
+    "on the next line, f-string": ('        Path(state_dir)\n        / f"{seat}.planted.json"', ".planted.json"),
+    "on the next line, concatenation": (
+        '        Path(state_dir)\n        / (validate_agent_name(seat) + ".planted.json")',
+        ".planted.json",
+    ),
+    "folder, f-string": ('path = store.state_dir / "planted" / f"{seat}.json"', "planted/*.json"),
+    "folder, f-string with a second part": (
+        'path = store.state_dir / "planted" / f"{seat}.{nonce}.json"',
+        "planted/*.json",
+    ),
+    "folder constant, f-string": ('path = store.state_dir / _PLANTED_DIR / f"{seat}.json"', "_PLANTED_DIR/*.json"),
+    "folder, concatenation": (
+        'path = store.state_dir / "planted" / (validate_agent_name(seat) + ".json")',
+        "planted/*.json",
+    ),
+    "folder, percent": ('path = store.state_dir / "planted" / ("%s.json" % seat)', "planted/*.json"),
+    "folder named for the seat": ('path = store.root / "planted" / validate_agent_name(seat)', 'folder "planted"'),
+}
+
+
+@pytest.mark.parametrize("style", sorted(PLANTED))
+def test_the_guard_fails_on_a_new_per_seat_path_in_every_style(style):
+    code, label = PLANTED[style]
+    found = _per_seat_paths_in(code.split("\n"))
+    assert found == {label}
+    with pytest.raises(AssertionError, match=re.escape(repr(label))):
+        _assert_every_path_accounted_for(_per_seat_paths_named_in_the_code() | found)
 
 
 def test_every_covered_file_has_a_path_and_a_reader_test():
