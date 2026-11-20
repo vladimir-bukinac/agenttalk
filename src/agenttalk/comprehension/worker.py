@@ -243,6 +243,35 @@ _TIER_2_XML_ROOT_ELEMENT_LABELS = {
 _LEGITIMATELY_TYPELESS_BASENAMES = frozenset({"package-info.java", "module-info.java"})
 
 
+#: #496: the closed, PROVISIONAL list of general-purpose programming-language source extensions
+#: that are NOT in ``_DEGRADING_CODE_EXTENSIONS`` (a ``.py`` helper in a Java repository must keep
+#: not degrading it - round 17b above) but ARE code: when a run parsed no supported source file at
+#: all, one of these being present means the run read none of the code it found
+#: (``no_supported_source``). Only this list, ``_DEGRADING_CODE_EXTENSIONS`` and the tier-2 XML
+#: shapes count; an arbitrary unknown file never does.
+_UNSUPPORTED_SOURCE_EXTENSIONS = frozenset({
+    ".py", ".pyw", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
+    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".rs", ".swift", ".dart", ".lua", ".pl",
+})
+
+
+def count_parsed_supported_source_files(java_results: dict[str, Any]) -> int:
+    """#496: how many supported SOURCE files an adapter successfully parsed. ``java_results`` also
+    holds ``pom.xml``/``web.xml`` descriptors (read by the same adapter, but not source), and a
+    file whose parse failed has no entry at all; only adapter-extension keys count."""
+    suffixes = tuple(_ADAPTER_EXTENSIONS)
+    return sum(1 for rel in java_results if rel.lower().endswith(suffixes))
+
+
+def is_unsupported_code_bearing_problem(problem: WorkerProblem) -> bool:
+    """#496: true when ``problem`` records a selected file of a language no adapter reads and that
+    is code: a tier-2 shape (``degrades_run``) or a listed source extension."""
+    if problem.reason_code != "unsupported_language":
+        return False
+    return problem.degrades_run or problem.relative_path.lower().endswith(
+        tuple(_UNSUPPORTED_SOURCE_EXTENSIONS))
+
+
 def is_a_code_bearing_extension_worth_degrading_when_silently_excluded(
     relative_path: str,
 ) -> bool:

@@ -323,6 +323,40 @@ _PROBLEM_SEVERITY_BY_REASON_CODE = {
 _DEFAULT_PROBLEM_SEVERITY = "warning"
 
 
+#: #496: the one reason code, and the one plain sentence shown in scan, status and report, for a
+#: run that parsed no supported source file although it selected code in an unsupported language.
+NO_SUPPORTED_SOURCE_REASON = "no_supported_source"
+NO_SUPPORTED_SOURCE_NOTE = (
+    "No supported source files were parsed, so this run read none of the code it found: "
+    "source analysis is not available for its language yet."
+)
+
+
+def no_supported_source_note(degraded_by: Any) -> str | None:
+    """The plain line for a run whose ``degraded_by`` names ``no_supported_source``, else None."""
+    return NO_SUPPORTED_SOURCE_NOTE if NO_SUPPORTED_SOURCE_REASON in (degraded_by or ()) else None
+
+
+def _no_supported_source_fields(scan_doc: dict[str, Any], scan_id: str) -> dict[str, Any]:
+    """#496: the additive status/report keys read from scan.json: the parsed-source count (omitted
+    for an older run) and the plain `note` (only when the reason fired)."""
+    fields: dict[str, Any] = {}
+    count = _optional_scan_count(scan_doc)
+    if count is not None:
+        fields["supported_source_files_parsed"] = count
+    note = no_supported_source_note(_scan_field(scan_doc, "degraded_by", scan_id))
+    if note is not None:
+        fields["note"] = note
+    return fields
+
+
+def _optional_scan_count(scan_doc: dict[str, Any]) -> int | None:
+    """#496: ``supported_source_files_parsed`` from scan.json; None for a run written before it
+    existed (never a made-up number)."""
+    value = scan_doc.get("supported_source_files_parsed")
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
 def _problem_record(
     reason_code: str, path: str | None, detail: str, *, qualified_name: str | None = None,
     conflict_id: str | None = None,
@@ -629,6 +663,8 @@ class ScanOutcome:
     status: str
     index: dict[str, Any]
     run_dir: Path
+    #: #496: the reason codes that degraded the run, so the CLI can say why right after scanning.
+    degraded_by: tuple[str, ...] = ()
 
 
 def _resolved_run_dir(comprehension_dir: Path, scan_id: str) -> Path:
@@ -1653,6 +1689,16 @@ def run_scan(
         # or when, before clearing it. Named as its own distinct detail
         # rather than silently reusing the pid/acquired_at wording with
         # fabricated-looking ``None`` values.
+        # #496: a run that parsed no supported source file but selected at least one unsupported,
+        # code-bearing file read none of the code it found - it is degraded, not complete. Both
+        # conditions are needed: Java plus Python helper scripts keeps its own, non-degrading rule.
+        supported_source_files_parsed = worker.count_parsed_supported_source_files(
+            worker_result.java_results)
+        no_supported_source_problems = [
+            _problem_record(NO_SUPPORTED_SOURCE_REASON, None, NO_SUPPORTED_SOURCE_NOTE)
+        ] if supported_source_files_parsed == 0 and any(
+            worker.is_unsupported_code_bearing_problem(p) for p in worker_result.problems
+        ) else []
         forced_lock_recovery_problems = [
             _problem_record(
                 "scan_lock_forcibly_recovered", None,
@@ -1752,7 +1798,7 @@ def run_scan(
         ] + duplicate_qualified_name_problems + binary_excluded_code_bearing_problems + (
             binary_excluded_root_sniffed_xml_problems) + reactor_rule_problems + (
             externality_suppressed_problems) + forced_lock_recovery_problems + (
-            descriptor_registrability_problem_records)
+            descriptor_registrability_problem_records) + no_supported_source_problems
         # FIX ROUND 36 (thirtieth cold read, F2 MAJOR, part (c)): refuse
         # to publish if any problem_id's own repeated occurrences are NOT
         # byte-identical (a genuine stable-ID corruption - see
@@ -1827,6 +1873,7 @@ def run_scan(
             # `degrades_run=True` (this source has no such flag to
             # default from, since it is not a WorkerProblem at all).
             or descriptor_registrability_problems
+            or no_supported_source_problems
         ) else "complete"
         # FIX ROUND 35 (twenty-ninth cold read, F5 MINOR, completeness):
         # `degraded` on its own never told a consumer WHICH of the (up to
@@ -1869,6 +1916,7 @@ def run_scan(
         # add whenever this run found at least one.
         if descriptor_registrability_problems:
             degraded_by.add("unsupported_entry_point_shape")
+        degraded_by.update(p["reason_code"] for p in no_supported_source_problems)
         # JUDGE (declared, not chased this round): a per-PROBLEM-ROW
         # `degrades_run` field (problems.json) was also considered -
         # deliberately not added. `WorkerProblem.degrades_run` is decided
@@ -2076,6 +2124,8 @@ def run_scan(
             # of reason codes that actually drove this run's own
             # degradation, empty for a `complete` run.
             "degraded_by": sorted(degraded_by),
+            # #496: additive; older runs have no such key (readers omit it, never invent it).
+            "supported_source_files_parsed": supported_source_files_parsed,
             "generator_version": GENERATOR_VERSION,
             "adapters": [{
                 "name": java_adapter.ADAPTER_NAME, "version": java_adapter.ADAPTER_VERSION,
@@ -2239,7 +2289,9 @@ def run_scan(
         record_counts=record_counts, now=now, privacy_result=privacy_result,
     )
     run_dir = paths.run_dir(comprehension_dir, scan_id)
-    return ScanOutcome(scan_id=scan_id, status=status, index=index, run_dir=run_dir)
+    return ScanOutcome(
+        scan_id=scan_id, status=status, index=index, run_dir=run_dir,
+        degraded_by=tuple(sorted(degraded_by)))
 
 
 class NotScanned(ComprehensionError):
@@ -2489,6 +2541,7 @@ def get_status(root: Path, *, run_id: str | None = None) -> dict[str, Any]:
         # a second `report` call. Read the identical way get_report
         # already does, never a second, independently-drifting copy.
         "degraded_by": _scan_field(scan_doc, "degraded_by", scan_id),
+        **_no_supported_source_fields(scan_doc, scan_id),
         "record_counts": _scan_field(scan_doc, "record_counts", scan_id),
         "root_binding": _scan_field(scan_doc, "root_binding", scan_id),
         "root_binding_verification_caveat": ROOT_BINDING_VERIFICATION_CAVEAT,
@@ -2753,6 +2806,12 @@ def get_report(
     # degrades_run themselves. Layered onto the projection the same way
     # every other scan.json-level field above already is.
     payload["degraded_by"] = _scan_field(records["scan"], "degraded_by", scan_id)
+    # #496: the same additive count and plain line status carries; `note` only when the reason fired.
+    extra = _no_supported_source_fields(records["scan"], scan_id)
+    if "supported_source_files_parsed" in extra:
+        payload["counts"]["supported_source_files_parsed"] = extra["supported_source_files_parsed"]
+    if "note" in extra:
+        payload["note"] = extra["note"]
     return payload
 
 

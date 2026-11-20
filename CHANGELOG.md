@@ -80,6 +80,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A scan of a repository whose code is in a language agenttalk cannot read yet no longer says `complete` (#496).**
+  Before this, a Python-only project scanned as `complete` although nothing in it had been read: no features,
+  no dependencies and no entry points, with only a small warning per file. Now such a scan says `degraded`,
+  and says in one plain line that no supported source files were parsed. It happens only when no supported
+  source file was parsed and at least one unsupported code file was found, so a Java project with a few
+  Python helper scripts stays `complete`. Nothing else changes: no new status value, the same exit codes
+  (a published degraded run still exits 0), and a script that branches on `complete` will now see `degraded`
+  for these runs. `status` and `report` also show how many supported source files were parsed
+  (`supported_source_files_parsed`), and `scan --help` now says what `complete` means. Technical: the reason
+  code is `no_supported_source`, listed in `degraded_by` and backed by a run-level problem record; older runs
+  have no count and stay readable and valid.
+
 - **`agenttalk doctor` no longer calls the PowerShell host check "not needed" while a seat that left the
   team list may still run a continuous Codex wrapper.** Retiring, renaming or removing a seat leaves its
   health marker behind, and its wrapper may still be running. Doctor now reads those markers too: a

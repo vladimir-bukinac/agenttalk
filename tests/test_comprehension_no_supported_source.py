@@ -1,28 +1,16 @@
-"""#496 failing reproduction: a Python-only repository is reported "complete".
+"""#496: a run that parsed no supported source file must not say plain ``complete``.
 
-WAITING FOR THE MAINTAINERS' VERDICT. The maintainers asked to hold the #496 build until
-their blind challenge on the issue is answered, because the change alters what a Python-only
-run reports (`complete` becomes `degraded`). This file is only the failing reproduction, written
-first. It is RED on purpose: the assertions describe the outcome proposed in the architect's
-plan (issue #496), not today's behaviour. Do not treat the red result as a regression, and do
-not build against it until the verdict is posted. If the verdict changes the outcome, change
-these assertions to match.
+The shape (maintainers' blind challenge on #496, RESHAPE, accepted): the run is ``degraded``,
+with the one new reason ``no_supported_source``, ONLY when BOTH hold:
 
-Proposed outcome pinned here (from the plan on #496):
-  * a run that finds source files but parsed none with a bundled adapter is not `complete`:
-    it is `degraded`, using the existing status (no new status value);
-  * the run-level reason code is `no_supported_source`, listed in `degraded_by` and backed by
-    a problem record in `problems.json` (the per-file `unsupported_language` warning stays);
-  * scan (human and `--json`), status (human and `--json`), report (`--json`), the stored
-    `scan.json`, the index summary and `validate` all agree;
-  * exit code stays 0 for a successfully published run (degradation is report data).
+  * zero supported source files were parsed (``.java`` today; ``pom.xml`` / ``web.xml``
+    descriptors are not source), and
+  * at least one unsupported, code-bearing file was selected (for example ``.py``).
 
-Assumed, not fixed by the plan: scan's `--json` carries the reason as a `degraded_by` list,
-the same name status and report already use. Rename here if the verdict says otherwise.
-
-Today's facts, which stay true after the fix and are checked by the green test below: one
-Python file gives two file units, zero features, zero dependencies, zero entry points and one
-`unsupported_language` warning.
+Java plus Python helper scripts stays ``complete``. No new status value; exit codes unchanged
+(a published degraded run still exits 0). One additive count, ``supported_source_files_parsed``,
+in ``status`` and in ``report`` ``counts``. One plain line (``note``) in scan, status and report
+when the reason fires, and one sentence in the scan help that says what ``complete`` means.
 """
 
 from __future__ import annotations
@@ -38,6 +26,7 @@ from agenttalk.comprehension import scan_pipeline
 from agenttalk.comprehension import worker as workermod
 
 REASON = "no_supported_source"
+NOTE_START = "No supported source files were parsed"
 
 
 @pytest.fixture(autouse=True)
@@ -53,34 +42,34 @@ def _no_agent_identity(monkeypatch):
     monkeypatch.delenv("AGENTTALK_SELF", raising=False)
 
 
-def _init_git_repo(root: Path) -> None:
+def _repo(root: Path, files: dict[str, str]) -> Path:
     subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)  # noqa: S603,S607  # nosec B603 B607
     subprocess.run(  # noqa: S603,S607  # nosec B603 B607
         ["git", "-C", str(root), "config", "user.email", "t@t"], check=True)
     subprocess.run(  # noqa: S603,S607  # nosec B603 B607
         ["git", "-C", str(root), "config", "user.name", "t"], check=True)
     (root / ".gitignore").write_text(".agenttalk/\n", encoding="utf-8")
+    for name, text in files.items():
+        target = root / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    return root
 
 
-@pytest.fixture()
-def python_repo(tmp_path: Path) -> Path:
-    """The tiny Python-only repository: one source file, no Java, no descriptors."""
-    _init_git_repo(tmp_path)
-    (tmp_path / "app.py").write_text("def main():\n    print(1)\n", encoding="utf-8")
-    return tmp_path
+PY = "def main():\n    print(1)\n"
+JAVA = "package p;\nclass App {\n  public static void main(String[] args) {}\n}\n"
+POM = (
+    '<project xmlns="http://maven.apache.org/POM/4.0.0"><modelVersion>4.0.0</modelVersion>'
+    "<groupId>g</groupId><artifactId>a</artifactId><version>1</version></project>\n"
+)
 
-
-@pytest.fixture()
-def java_repo(tmp_path: Path) -> Path:
-    """Control: a supported-language repository must stay `complete`."""
-    _init_git_repo(tmp_path)
-    app_dir = tmp_path / "src" / "main" / "java" / "p"
-    app_dir.mkdir(parents=True)
-    (app_dir / "App.java").write_text(
-        "package p;\nclass App {\n  public static void main(String[] args) {}\n}\n",
-        encoding="utf-8",
-    )
-    return tmp_path
+PYTHON_ONLY = {"app.py": PY}
+JAVA_ONLY = {"src/main/java/p/App.java": JAVA}
+JAVA_PLUS_PY_HELPER = {"src/main/java/p/App.java": JAVA, "scripts/release.py": PY}
+PYTHON_PLUS_POM = {"app.py": PY, "pom.xml": POM}
+SQL_ONLY = {"db/schema.sql": "create table t (id int);\n"}
+DOCS_ONLY = {"README.md": "# hello\n"}
+TOOLING_ONLY = {"Dockerfile": "FROM scratch\n", "ci.yml": "a: 1\n"}
 
 
 def _run(argv: list[str], root: Path) -> int:
@@ -99,20 +88,22 @@ def _text(argv: list[str], root: Path, capsys) -> str:
     return capsys.readouterr().out
 
 
-def _stored_run(root: Path, scan_id: str) -> Path:
-    return root / ".agenttalk" / "comprehension" / "runs" / scan_id
+def _scan_then_status(root: Path, capsys) -> dict:
+    _text(["comprehension", "scan"], root, capsys)
+    return _json(["comprehension", "status", "--json"], root, capsys)
 
 
-# ---------------------------------------------------------------- green: today's facts
+# ------------------------------------------------------- green today: the facts of the report
 
-def test_python_only_repo_today_has_nothing_parsed_and_one_unsupported_language_warning(
-    python_repo: Path, capsys,
+def test_python_only_repo_has_nothing_parsed_and_one_unsupported_language_warning(
+    tmp_path: Path, capsys,
 ) -> None:
-    """Green before and after the fix: the numbers that show nothing was understood."""
-    scan = _json(["comprehension", "scan", "--json"], python_repo, capsys)
-    report = _json(["comprehension", "report", "--json"], python_repo, capsys)
+    """Green before and after: the numbers that show nothing was understood."""
+    _repo(tmp_path, PYTHON_ONLY)
+    scan = _json(["comprehension", "scan", "--json"], tmp_path, capsys)
+    report = _json(["comprehension", "report"], tmp_path, capsys)
     counts = report["counts"]
-    assert counts["units"] == 2  # discovery evidence only: a unit is not a parsed file
+    assert counts["units"] == 2  # file units are discovery evidence, not parsed code
     assert counts["features"] == 0
     assert counts["dependencies"] == 0
     assert counts["entry_points"] == 0
@@ -121,68 +112,126 @@ def test_python_only_repo_today_has_nothing_parsed_and_one_unsupported_language_
     assert scan["scan_id"] == report["scan_id"]
 
 
-def test_control_java_repo_stays_complete(java_repo: Path, capsys) -> None:
-    """Green before and after the fix: a supported language is still `complete`."""
-    scan = _json(["comprehension", "scan", "--json"], java_repo, capsys)
-    assert scan["status"] == "complete"
-    status = _json(["comprehension", "status", "--json"], java_repo, capsys)
-    assert status["degraded_by"] == []
+# ------------------------------------------------------- the reproduction (red on master)
 
-
-# ---------------------------------------------------------------- red: proposed outcome
-
-def test_scan_human_output_says_degraded_with_the_reason(python_repo: Path, capsys) -> None:
-    out = _text(["comprehension", "scan"], python_repo, capsys)
-    assert "status:  degraded" in out, f"scan printed:\n{out}"
-    assert REASON in out, f"scan did not name the reason right after scanning:\n{out}"
-
-
-def test_scan_json_says_degraded_with_the_reason(python_repo: Path, capsys) -> None:
-    scan = _json(["comprehension", "scan", "--json"], python_repo, capsys)
+def test_python_only_scan_json_is_degraded_and_names_the_reason(tmp_path: Path, capsys) -> None:
+    _repo(tmp_path, PYTHON_ONLY)
+    scan = _json(["comprehension", "scan", "--json"], tmp_path, capsys)
     assert scan["status"] == "degraded", f"scan --json: {scan}"
-    assert REASON in scan.get("degraded_by", []), f"scan --json has no reason: {scan}"
+    assert scan.get("degraded_by") == [REASON], f"scan --json: {scan}"
+    assert scan["note"].startswith(NOTE_START), f"scan --json: {scan}"
 
 
-def test_status_human_output_says_degraded_with_the_reason(python_repo: Path, capsys) -> None:
-    _text(["comprehension", "scan"], python_repo, capsys)
-    out = _text(["comprehension", "status"], python_repo, capsys)
-    assert "status:   degraded" in out, f"status printed:\n{out}"
-    assert f"degraded_by: {REASON}" in out, f"status printed:\n{out}"
-
-
-def test_status_json_says_degraded_with_the_reason_and_two_problems(
-    python_repo: Path, capsys,
+def test_python_only_scan_human_output_says_degraded_with_one_plain_line(
+    tmp_path: Path, capsys,
 ) -> None:
-    _text(["comprehension", "scan"], python_repo, capsys)
-    status = _json(["comprehension", "status", "--json"], python_repo, capsys)
+    _repo(tmp_path, PYTHON_ONLY)
+    out = _text(["comprehension", "scan"], tmp_path, capsys)
+    assert "status:  degraded" in out, f"scan printed:\n{out}"
+    assert out.count(NOTE_START) == 1, f"scan printed:\n{out}"
+
+
+def test_python_only_status_human_and_json(tmp_path: Path, capsys) -> None:
+    _repo(tmp_path, PYTHON_ONLY)
+    status = _scan_then_status(tmp_path, capsys)
     assert status["status"] == "degraded", f"status --json: {status['status']}"
-    assert status["degraded_by"] == [REASON], f"degraded_by: {status['degraded_by']}"
-    # the per-file warning stays, and the run-level problem is added to it
-    assert status["problem_count"] == 2, f"problem_count: {status['problem_count']}"
+    assert status["degraded_by"] == [REASON]
+    assert status["supported_source_files_parsed"] == 0
+    assert status["note"].startswith(NOTE_START)
+    assert status["problem_count"] == 2  # the per-file warning stays; the run-level problem joins it
     assert [r["status"] for r in status["run_summaries"]] == ["degraded"]
+    out = _text(["comprehension", "status"], tmp_path, capsys)
+    assert "status:   degraded" in out, f"status printed:\n{out}"
+    assert f"degraded_by: {REASON}" in out
+    assert out.count(NOTE_START) == 1, f"status printed:\n{out}"
 
 
-def test_report_json_says_degraded_with_the_reason_backed_by_a_problem(
-    python_repo: Path, capsys,
+def test_python_only_report_json_carries_reason_count_note_and_a_problem_record(
+    tmp_path: Path, capsys,
 ) -> None:
-    _text(["comprehension", "scan"], python_repo, capsys)
-    report = _json(["comprehension", "report", "--json"], python_repo, capsys)
+    _repo(tmp_path, PYTHON_ONLY)
+    _text(["comprehension", "scan"], tmp_path, capsys)
+    report = _json(["comprehension", "report"], tmp_path, capsys)
     assert report["status"] == "degraded", f"report status: {report['status']}"
-    assert report["degraded_by"] == [REASON], f"report degraded_by: {report['degraded_by']}"
+    assert report["degraded_by"] == [REASON]
+    assert report["counts"]["supported_source_files_parsed"] == 0
+    assert report["counts"]["units"] == 2  # existing key unchanged, next to the new one
+    assert report["note"].startswith(NOTE_START)
     codes = sorted(p["reason_code"] for p in report["problems"])
     assert codes == [REASON, "unsupported_language"], f"report problems: {codes}"
-    assert report["counts"]["problems"] == 2
 
 
-def test_stored_run_index_and_validation_agree(python_repo: Path, capsys) -> None:
-    scan = _json(["comprehension", "scan", "--json"], python_repo, capsys)
-    run_dir = _stored_run(python_repo, scan["scan_id"])
+def test_python_only_stored_run_index_and_validation_agree(tmp_path: Path, capsys) -> None:
+    _repo(tmp_path, PYTHON_ONLY)
+    scan = _json(["comprehension", "scan", "--json"], tmp_path, capsys)
+    run_dir = Path(scan["run_dir"])
     stored = json.loads((run_dir / "scan.json").read_text(encoding="utf-8"))
     assert stored["status"] == "degraded", f"stored scan.json status: {stored['status']}"
     assert stored["degraded_by"] == [REASON]
     assert stored["problem_count"] == 2
+    assert stored["supported_source_files_parsed"] == 0
     problems = json.loads((run_dir / "problems.json").read_text(encoding="utf-8"))["problems"]
     assert REASON in {p["reason_code"] for p in problems}, "no problem record backs the reason"
-    # the run is still valid: scan.json, problems.json and the index must agree with each other
-    validation = _json(["comprehension", "validate", "--json"], python_repo, capsys)
+    validation = _json(["comprehension", "validate", "--json"], tmp_path, capsys)
     assert validation["valid"] is True, f"validate: {validation}"
+
+
+def test_python_plus_maven_descriptor_is_degraded(tmp_path: Path, capsys) -> None:
+    """A pom.xml is a descriptor the adapter reads, not source: it does not count as parsed."""
+    _repo(tmp_path, PYTHON_PLUS_POM)
+    status = _scan_then_status(tmp_path, capsys)
+    assert status["status"] == "degraded"
+    assert REASON in status["degraded_by"]
+    assert status["supported_source_files_parsed"] == 0
+
+
+def test_sql_only_stays_degraded_and_now_also_says_no_supported_source(
+    tmp_path: Path, capsys,
+) -> None:
+    _repo(tmp_path, SQL_ONLY)
+    status = _scan_then_status(tmp_path, capsys)
+    assert status["status"] == "degraded"
+    assert status["degraded_by"] == [REASON, "unsupported_language"]
+
+
+def test_scan_help_defines_complete_in_one_sentence(capsys) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["comprehension", "scan", "--help"])
+    text = " ".join(capsys.readouterr().out.split())
+    assert "complete means" in text, text
+    assert REASON in text, text
+
+
+# ------------------------------------------------------- controls: must stay as they are
+
+@pytest.mark.parametrize(
+    ("files", "parsed"),
+    [
+        (JAVA_ONLY, 1),
+        (JAVA_PLUS_PY_HELPER, 1),   # a Python helper in a Java repository stays non-degrading
+        (DOCS_ONLY, 0),             # nothing code-bearing was selected
+        (TOOLING_ONLY, 0),          # tooling and config files are not code-bearing
+        ({}, 0),                    # an empty repository
+    ],
+    ids=["java", "java-plus-python-helper", "docs-only", "tooling-only", "empty"],
+)
+def test_control_runs_stay_complete_and_quiet(tmp_path: Path, capsys, files, parsed) -> None:
+    _repo(tmp_path, files)
+    scan = _json(["comprehension", "scan", "--json"], tmp_path, capsys)
+    assert scan["status"] == "complete", f"scan --json: {scan}"
+    assert "degraded_by" not in scan and "note" not in scan, f"scan --json: {scan}"
+    status = _json(["comprehension", "status", "--json"], tmp_path, capsys)
+    assert status["degraded_by"] == []
+    assert "note" not in status
+    assert status["supported_source_files_parsed"] == parsed
+    report = _json(["comprehension", "report"], tmp_path, capsys)
+    assert "note" not in report
+    assert report["counts"]["supported_source_files_parsed"] == parsed
+    out = _text(["comprehension", "scan"], tmp_path, capsys)
+    assert "status:  complete" in out and NOTE_START not in out
+
+
+def test_a_run_written_before_this_change_has_no_count_and_none_is_invented() -> None:
+    """scan.json of an older run lacks the count: readers omit the key, never guess a number."""
+    assert scan_pipeline._optional_scan_count({"status": "complete"}) is None
+    assert scan_pipeline._optional_scan_count({"supported_source_files_parsed": 3}) == 3

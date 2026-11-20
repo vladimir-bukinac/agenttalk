@@ -2873,12 +2873,20 @@ def cmd_comprehension(args: argparse.Namespace) -> int:
         payload = {
             "scan_id": outcome.scan_id, "status": outcome.status, "run_dir": str(outcome.run_dir),
         }
+        # #496: when the run is degraded because it parsed no supported source, say so right
+        # here (additive keys, only in that case; exit code unchanged).
+        note = scan_pipeline.no_supported_source_note(outcome.degraded_by)
+        if note is not None:
+            payload["degraded_by"] = list(outcome.degraded_by)
+            payload["note"] = note
         if args.json:
             print(json.dumps(payload, indent=2))
         else:
             print(f"scan_id: {outcome.scan_id}")
             print(f"status:  {outcome.status}")
             print(f"run_dir: {outcome.run_dir}")
+            if note is not None:
+                print(f"note:    {note}")
         return 0
 
     if action == "status":
@@ -2918,6 +2926,8 @@ def cmd_comprehension(args: argparse.Namespace) -> int:
             # artifact_integrity_hint right below.
             print(f"boundaries: {payload['boundary_count']}")
             print(f"degraded_by: {', '.join(payload['degraded_by']) or '(none)'}")
+            if "note" in payload:   # #496: only when no_supported_source fired
+                print(f"note:     {payload['note']}")
             _print_scan_json_integrity_if_not_verified(payload)
             # FIX ROUND 29 (twenty-fifth cold read, F8b polish): the
             # round-7c parity precedent (default human output must not
@@ -17972,7 +17982,10 @@ def build_parser() -> argparse.ArgumentParser:
                     "every scan walks the whole repository root with no narrowing or "
                     "configuration overrides. This slice does not require the project root "
                     "to already be initialized (`agenttalk init`) - it creates "
-                    ".agenttalk/comprehension/ under whatever root resolves either way.",
+                    ".agenttalk/comprehension/ under whatever root resolves either way. "
+                    "Status complete means the run found no degrading problem, not that all "
+                    "code was understood: a run that parsed no supported source file but found "
+                    "code in an unsupported language is degraded (no_supported_source).",
     )
     cscan.add_argument(
         "--work-id",
