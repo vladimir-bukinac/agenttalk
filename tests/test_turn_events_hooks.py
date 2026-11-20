@@ -27,6 +27,7 @@ from agenttalk import wrapper_runtime as wr_module
 from agenttalk.store import Store
 from agenttalk.wrapper import loop, run, session
 from agenttalk.wrapper_logs import WrapperLifecycleLog
+from turn_events_test_helpers import _AckCountedFrom
 
 SENT_AT = "2026-10-03T00:00:00.000Z"
 USAGE_LINE = {
@@ -575,26 +576,59 @@ def test_d3d_a_failed_start_runs_the_first_message_on_time_and_says_start_failed
         raise OSError("SENTINEL-EXC-REGISTER")
 
     monkeypatch.setattr(te.JournalFiles, "append_line", fail)
-    handled: list[float] = []
+    events = []
+    acks = []
+    ready = threading.Event()
+    ready.set()
+    original_start = te.TurnEventSink.start
+    original_run = te.TurnEventSink._run
+    release_writer = threading.Event()
+    writer_finished = threading.Event()
+
+    def held_writer(sink):
+        try:
+            original_run(sink)
+        finally:
+            release_writer.wait(30)
+            writer_finished.set()
+
+    monkeypatch.setattr(te.TurnEventSink, "_run", held_writer)
+
+    def recording_start(sink):
+        ack = _AckCountedFrom(ready)
+        sink._ack = ack
+        acks.append(ack)
+        result = original_start(sink)
+        events.append("start returned")
+        return result
+
+    monkeypatch.setattr(te.TurnEventSink, "start", recording_start)
     lifecycle_stream = io.StringIO()
     lifecycle = WrapperLifecycleLog("beta", stream=lifecycle_stream, enabled=True)
 
     def fake_run_loop(store, agent, drive, **kw):
-        begin = time.monotonic()
-        assert drive(_record()).ok is True
-        handled.append(time.monotonic() - begin)
+        events.append("drive began")
+        assert not writer_finished.is_set()
+        try:
+            assert drive(_record()).ok is True
+        finally:
+            release_writer.set()
         return 1
 
-    begin = time.monotonic()
-    store, rc = _wrap(
-        tmp_path,
-        monkeypatch,
-        turn_events=True,
-        fake_spawn=lambda a, s: _claude_turn(),
-        run_loop=fake_run_loop,
-        lifecycle=lifecycle,
-    )
-    assert rc == 0 and handled and time.monotonic() - begin < te.TURN_EVENTS_START_SECONDS + 5
+    try:
+        store, rc = _wrap(
+            tmp_path,
+            monkeypatch,
+            turn_events=True,
+            fake_spawn=lambda a, s: _claude_turn(),
+            run_loop=fake_run_loop,
+            lifecycle=lifecycle,
+        )
+    finally:
+        release_writer.set()
+    assert rc == 0
+    assert [ack.timeouts for ack in acks] == [[te.TURN_EVENTS_START_SECONDS]]
+    assert events == ["start returned", "drive began"]
     assert te.list_segments(_journal_dir(store)) == []
     status = next(Path(_journal_dir(store)).glob("status-*.json"))
     data = json.loads(status.read_text(encoding="ascii"))

@@ -12,7 +12,6 @@ the journal starts, so the test builds AND starts it)."""
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +20,7 @@ import pytest
 from agenttalk import cli
 from agenttalk import turn_events as te
 from agenttalk.store import Message
+from turn_events_test_helpers import _AckCountedFrom
 
 PRIVATE = "C:/private/SYNTHETIC-SECRET.txt"
 
@@ -182,7 +182,7 @@ def _blocked_resolve(monkeypatch):
     def blocked_resolve(path, *args, **kwargs):
         threads.append(threading.get_ident())
         entered.set()
-        release.wait(5)
+        release.wait(60)
         return real_resolve(path, *args, **kwargs)
 
     monkeypatch.setattr(Path, "resolve", blocked_resolve)
@@ -194,6 +194,16 @@ def test_optional_journal_build_cannot_block_before_start_deadline(tmp_path, mon
     entered, release, threads = _blocked_resolve(monkeypatch)
     finished = threading.Event()
     outcome = {}
+    acks = []
+    original_start = te.TurnEventSink.start
+
+    def recording_start(sink):
+        ack = _AckCountedFrom(entered)
+        sink._ack = ack
+        acks.append(ack)
+        return original_start(sink)
+
+    monkeypatch.setattr(te.TurnEventSink, "start", recording_start)
 
     def build_and_start():
         try:
@@ -206,15 +216,15 @@ def test_optional_journal_build_cannot_block_before_start_deadline(tmp_path, mon
             finished.set()
 
     caller = threading.Thread(target=build_and_start, daemon=True)
-    began = time.monotonic()
     caller.start()
     try:
-        assert entered.wait(1)
-        assert finished.wait(te.TURN_EVENTS_START_SECONDS + 0.2)
+        assert entered.wait(30)
+        assert finished.wait(30)
+        assert not release.is_set()
+        assert [ack.timeouts for ack in acks] == [[te.TURN_EVENTS_START_SECONDS]]
     finally:
         release.set()
         caller.join(5)
-    assert time.monotonic() - began < te.TURN_EVENTS_START_SECONDS + 1.0
     assert outcome["built_without_resolving"] is True
     assert outcome["started"] is False
     assert outcome["sink"].off_reason == te.OFF_START_TIMEOUT

@@ -21,6 +21,7 @@ import pytest
 
 from agenttalk import turn_events as te
 from agenttalk.turn_events import JournalFiles, TurnEventSink
+from turn_events_test_helpers import _AckCountedFrom
 
 USAGE = {"input_tokens": 100, "output_tokens": 10, "cache_read_tokens": 50, "cache_write_tokens": 20}
 MESSAGE_AT = "2026-10-03T00:00:00.000Z"
@@ -159,23 +160,6 @@ def run_clean(tmp_path: Path, **kw: Any) -> TurnEventSink:
 
 
 # --- putting the writer and the bounds in a fixed order, however slow the machine is ----------
-
-
-class _AckCountedFrom(threading.Event):
-    """The writer's acknowledgement, whose wait in start() begins only once `ready` is set: the
-    start bound then passes with the writer provably inside the blocked step. Getting there has
-    its own generous limit; `bound_began` is when the real wait began, so a test that times
-    the caller measures only the bound, never the writer's way to its start position."""
-
-    def __init__(self, ready: threading.Event) -> None:
-        super().__init__()
-        self._ready = ready
-        self.bound_began: float | None = None
-
-    def wait(self, timeout: float | None = None) -> bool:
-        assert self._ready.wait(10)
-        self.bound_began = time.monotonic()
-        return super().wait(timeout)
 
 
 def start_bound_counted_from(sink: TurnEventSink, ready: threading.Event) -> _AckCountedFrom:
