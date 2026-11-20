@@ -16,10 +16,10 @@ it honours the project's chosen planning authority rather than overriding it.
 ## Lead documents
 
 This installed agenttalk carries the guides written for leads, at the version you run. To
-find them, run `agenttalk doctor` in the project's top folder (a wrapped seat runs
+find them, run `python -I -m agenttalk doctor` in the project's top folder (a wrapped seat runs
 `"$AGENTTALK_PY" -I -m agenttalk doctor` in Bash or
 `& "$env:AGENTTALK_PY" -I -m agenttalk doctor` in PowerShell) and read its `module path` line, whatever its exit
-code; `agenttalk doctor --json` gives the same path as `agenttalk_module_path`. The guides
+code; `python -I -m agenttalk doctor --json` gives the same path as `agenttalk_module_path`. The guides
 are under that path:
 
 - `docs/LEAD-SETUP-BRIEF.md`: setting up a first team.

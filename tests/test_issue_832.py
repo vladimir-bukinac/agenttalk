@@ -135,6 +135,10 @@ def test_source_supervisor_records_and_uses_source(store):
     assert supervisor.recorded_source_mode(store)
     shim = (store.dir / "bin" / "agenttalk.cmd").read_text()
     assert "PYTHONPATH=" in shim and '"%AGENTTALK_PYTHON%" -m agenttalk' in shim
+    inspection = supervisor.inspect_artifact_bundle(store)
+    assert inspection["ok"], inspection["errors"]
+    assert len({entry["generator_generation"] for entry in inspection["markers"].values()}) == 1
+    assert {"supervisor.ps1", "deadman.ps1", "bin/agenttalk.cmd"} <= inspection["markers"].keys()
 
 
 def test_runtime_identity_requires_deliberate_source(tmp_path, monkeypatch):

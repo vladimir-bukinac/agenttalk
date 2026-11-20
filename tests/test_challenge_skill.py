@@ -32,7 +32,7 @@ VERDICT_META = ("challenge", "verdict", "confidence", "basis", "exposed", "minut
 def _commands(twin: str) -> list[str]:
     """Every agenttalk command in the twin's fenced blocks, continuations joined."""
     text = TWINS[twin].read_text(encoding="utf-8").replace("\r\n", "\n")
-    prefix = "agenttalk " if twin == "claude" else "python -m agenttalk "
+    prefix = "agenttalk " if twin == "claude" else "python -I -m agenttalk "
     cont = "`" if twin == "claude" else "\\"
     commands, block, fenced = [], [], False
     for line in text.splitlines():
@@ -56,7 +56,7 @@ def _commands(twin: str) -> list[str]:
 
 
 def _argv(command: str, twin: str, values: dict) -> list[str]:
-    prefix = "agenttalk " if twin == "claude" else "python -m agenttalk "
+    prefix = "agenttalk " if twin == "claude" else "python -I -m agenttalk "
     command = command[len(prefix):]
     # choice placeholders (<a|b|c>) take their first option; named ones are mapped
     command = re.sub(r"<([^<>|]+)\|[^<>]*>", lambda m: m.group(1), command)

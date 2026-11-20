@@ -42,7 +42,9 @@ def _turn(tmp_path, monkeypatch, cli_name: str, kind: str = "task") -> dict:
     monkeypatch.setattr(run, "_ProcStream", _Capture)
     state = (session.SessionState(cli="claude", claude_session_id="session-1") if cli_name == "claude"
              else session.SessionState(cli="codex"))
-    drive = run.make_drive(store, SEAT, cli_name, state, [cli_name], render=False)
+    # Runtime admission is covered separately; this test records the child identity.
+    drive = run.make_drive(store, SEAT, cli_name, state, [cli_name], render=False,
+                           agenttalk_preflight=lambda: None)
     drive({"id": "m-1", "from": "alpha", "to": SEAT, "kind": kind, "body": "do work",
            "meta": {"request_id": "tk-1"}})
     assert _Capture.started, "the wrapper started no child"

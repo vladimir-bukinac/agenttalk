@@ -25,7 +25,9 @@ pytestmark = pytest.mark.skipif(
 def _store(tmp_path: Path, pwsh: str) -> Store:
     store = Store(tmp_path)
     store.init(["lead", "worker"])
-    sup.init(store, python_exe=sys.executable)
+    # The functional test invokes this checkout through its explicit PYTHONPATH.
+    # Render the complete artifact bundle in that same mode.
+    sup.init(store, python_exe=sys.executable, source_checkout=True)
     lifecycle.select_powershell_host(store, explicit_path=pwsh)
     return store
 

@@ -183,7 +183,7 @@ def test_lead_skill_twins_work_contract():
               ("claude/agenttalk.lead.md", "codex/agenttalk-lead/SKILL.md")]
     sections = [body.split("## Work-item protocol", 1)[1].split("\n## ", 1)[0] for body in bodies]
     # The policy is shared; one shell uses the pinned interpreter invocation.
-    sections = [section.replace('"$AGENTTALK_PY" -m agenttalk', 'agenttalk')
+    sections = [section.replace('"$AGENTTALK_PY" -I -m agenttalk', 'agenttalk')
                 for section in sections]
     assert sections[0] == sections[1]
     for text in ("supersedes", "verdict missing", "READY/NOT READY", "different-seat", "no_gates_reason",

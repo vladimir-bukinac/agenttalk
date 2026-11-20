@@ -30,8 +30,8 @@ def _paragraph(path: Path) -> str:
 
 
 @pytest.mark.parametrize("reply_shell,command", [
-    ("powershell", '& "$env:AGENTTALK_PY" -m agenttalk check --for <you> --to-request <id> --epoch --gates'),
-    ("bash", '"$AGENTTALK_PY" -m agenttalk check --for <you> --to-request <id> --epoch --gates'),
+    ("powershell", '& "$env:AGENTTALK_PY" -I -m agenttalk check --for <you> --to-request <id> --epoch --gates'),
+    ("bash", '"$AGENTTALK_PY" -I -m agenttalk check --for <you> --to-request <id> --epoch --gates'),
 ])
 def test_the_turn_prompt_names_the_full_check_command(reply_shell: str, command: str) -> None:
     text = _norm(assemble_turn_prompt(RECORD, reply_shell=reply_shell))
@@ -51,10 +51,10 @@ def test_each_skill_names_epoch_in_the_irreversible_check(claude_file: str, code
     claude = _paragraph(SKILLS_ROOT / "claude" / claude_file)
     codex = _paragraph(SKILLS_ROOT / "codex" / codex_dir / "SKILL.md")
     assert f"`agenttalk {check}`" in claude
-    assert f"`python -m agenttalk {check}`" in codex
+    assert f"`python -I -m agenttalk {check}`" in codex
     assert "sent before the latest epoch barrier" in claude
     # The two copies say the same thing; only the command spelling differs.
-    assert codex.replace("`python -m agenttalk ", "`agenttalk ") == claude
+    assert codex.replace("`python -I -m agenttalk ", "`agenttalk ") == claude
 
 
 CURRENT_PAGES = ["README.md", "docs/AGENT-MANUAL.md", "docs/USER-MANUAL.md", "docs/AGENTTALK-NEW-USER-MANUAL.md"]

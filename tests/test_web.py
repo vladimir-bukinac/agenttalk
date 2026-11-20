@@ -7793,6 +7793,7 @@ def test_api_attention_surfaces_process_tree_hold_without_liaison(
         "mode": "detached",
         "argv": [
             r"C:\Python\python.exe",
+            "-I",
             *[
                 str(tmp_path) if token == "{ROOT}" else token
                 for token in launch_args

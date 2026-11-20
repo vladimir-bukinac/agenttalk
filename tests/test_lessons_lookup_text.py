@@ -41,7 +41,7 @@ SKILL_FILES = [
     ("claude", SKILLS_ROOT / "claude" / "agenttalk.listen.md",
      "agenttalk knowledge search --type lesson --limit 5 -- <term>"),
     ("codex", SKILLS_ROOT / "codex" / "agenttalk-listen" / "SKILL.md",
-     "python -m agenttalk knowledge search --type lesson --limit 5 -- <term>"),
+     "python -I -m agenttalk knowledge search --type lesson --limit 5 -- <term>"),
 ]
 
 
@@ -49,8 +49,8 @@ SKILL_FILES = [
 
 
 @pytest.mark.parametrize("reply_shell,command", [
-    ("powershell", '& "$env:AGENTTALK_PY" -m agenttalk knowledge search --type lesson --limit 5 -- <term>'),
-    ("bash", '"$AGENTTALK_PY" -m agenttalk knowledge search --type lesson --limit 5 -- <term>'),
+    ("powershell", '& "$env:AGENTTALK_PY" -I -m agenttalk knowledge search --type lesson --limit 5 -- <term>'),
+    ("bash", '"$AGENTTALK_PY" -I -m agenttalk knowledge search --type lesson --limit 5 -- <term>'),
 ])
 def test_the_turn_prompt_carries_the_one_bounded_lookup(reply_shell: str, command: str) -> None:
     prompt = assemble_turn_prompt(RECORD, reply_shell=reply_shell)
@@ -124,7 +124,7 @@ def test_the_lookup_section_teaches_no_inbox_command_and_stays_project_agnostic(
 @pytest.mark.parametrize("path,command", [
     (SKILLS_ROOT / "claude" / "agenttalk.lead.md", "agenttalk knowledge search --type lesson --limit 5 -- <term>"),
     (SKILLS_ROOT / "codex" / "agenttalk-lead" / "SKILL.md",
-     "python -m agenttalk knowledge search --type lesson --limit 5 -- <term>"),
+     "python -I -m agenttalk knowledge search --type lesson --limit 5 -- <term>"),
 ], ids=["claude", "codex"])
 def test_the_lead_skill_asks_the_brief_for_one_search_term(path: Path, command: str) -> None:
     text = _norm(path.read_text(encoding="utf-8"))
