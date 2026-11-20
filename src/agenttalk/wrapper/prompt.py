@@ -59,7 +59,7 @@ def _exact_path_note(path: object) -> list[str]:
     ]
 
 
-def strict_reply_invocation(cli: str, argv: list[str], agenttalk_py: object) -> str | None:
+def strict_reply_invocation(cli: str, argv: list[str], agenttalk_py: object, *, source: bool = False) -> str | None:
     """The bash invocation with the interpreter's literal path, for a Claude seat launched in a permission mode
     other than ``bypassPermissions`` (#822); None keeps the usual forms.
 
@@ -88,10 +88,11 @@ def strict_reply_invocation(cli: str, argv: list[str], agenttalk_py: object) -> 
     # of a rule, never right after this path, and every Windows drive path holds one.
     if any(c in '"$`\\*()' or unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") for c in path):
         return None
-    return f'"{path}" -m agenttalk'
+    flag = "" if source else " -I"
+    return f'"{path}"{flag} -m agenttalk'
 
 
-def _render_for_shell(text: str, reply_shell: str, invocation: str | None = None) -> str:
+def _render_for_shell(text: str, reply_shell: str, invocation: str | None = None, *, source: bool = False) -> str:
     """Rewrite every PowerShell CLI invocation in ``text`` to bash form when
     ``reply_shell == "bash"``. Any other value (including the default
     ``"powershell"``) leaves ``text`` byte-identical to today.
@@ -114,9 +115,10 @@ def _render_for_shell(text: str, reply_shell: str, invocation: str | None = None
             f"above: `{invocation} <subcommand> ...`. If such a command is refused, the seat's allow rules do not "
             "include it yet: use the draft channel if one is offered, and say so in your reply."
         )
-    if reply_shell == "bash":
-        return text.replace(_POWERSHELL_INVOCATION, _BASH_INVOCATION)
-    return text
+    target = _BASH_INVOCATION if reply_shell == "bash" else _POWERSHELL_INVOCATION
+    if not source:
+        target = target.replace(" -m agenttalk", " -I -m agenttalk")
+    return text.replace(_POWERSHELL_INVOCATION, target)
 
 _BUS_COMMAND_CONTRACT = (
     "BUS-COMMAND CONTRACT: for any agenttalk bus command you are allowed to send, "
@@ -278,6 +280,7 @@ def assemble_turn_prompt(record: dict, *, rules: str | None = None,
                          sender_is_lead: bool | None = None,
                          reply_shell: str = "powershell",
                          reply_invocation: str | None = None,
+                         source: bool = False,
                          seat: str | None = None,
                          relay_notice: str | None = None) -> str:
     """Render one inbound recv_api record into the per-turn prompt string.
@@ -469,7 +472,7 @@ def assemble_turn_prompt(record: dict, *, rules: str | None = None,
             "inventing a flag errors and wastes the turn. Send the reply ONCE; do not retry variants.",
         ]
     out += ["== HOW TO HANDLE ==", rules]
-    return _render_for_shell("\n".join(out), reply_shell, reply_invocation)
+    return _render_for_shell("\n".join(out), reply_shell, reply_invocation, source=source)
 
 
 # WP3: the SYNTHETIC cadence (proactive-sweep) turn. The wrapper drives this when the
@@ -528,7 +531,8 @@ _CADENCE_RULES = (
 def assemble_cadence_prompt(snapshot: dict, items: list, *,
                             rules: str | None = None,
                             reply_shell: str = "powershell",
-                            reply_invocation: str | None = None) -> str:
+                            reply_invocation: str | None = None,
+                            source: bool = False) -> str:
     """Render the bounded cadence SNAPSHOT + actionable items into the synthetic-turn
     prompt string (WP3). Pure + testable; carries ids + summaries only (the wrapper
     already capped/truncated the snapshot and stripped the lease token).
@@ -547,4 +551,4 @@ def assemble_cadence_prompt(snapshot: dict, items: list, *,
     out.append(_json_block(snapshot))
     out.append("```")
     out += ["== HOW TO HANDLE ==", rules]
-    return _render_for_shell("\n".join(out), reply_shell, reply_invocation)
+    return _render_for_shell("\n".join(out), reply_shell, reply_invocation, source=source)

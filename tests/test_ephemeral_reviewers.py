@@ -924,7 +924,7 @@ def test_prepare_launch_request_resolves_ephemeral_window_style(tmp_path: Path) 
     assert admission["agent"] == spec["agent"]
     assert admission["wrapped"] is True
     assert admission["wrapper_dispatch"] is True
-    assert admission["argv"] == spec["launch"]["windows_args"]
+    assert admission["argv"] == ["-I", *spec["launch"]["windows_args"]]
     assert admission["child_argv"] == [sys.executable]
 
 

@@ -76,7 +76,7 @@ use the module form with that environment's Python (on Linux or macOS write `"$A
 `& $env:AGENTTALK_PY`):
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk --help
+& $env:AGENTTALK_PY -I -m agenttalk --help
 ```
 
 Initialize once per project from the repository root:

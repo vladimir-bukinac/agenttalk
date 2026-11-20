@@ -10,11 +10,11 @@ These rules hold no matter which role you play.
 
 ### Resolving identity
 Every command acts *as* an agent. Resolve who you are, in order of precedence:
-- `AGENTTALK_SELF` / `$SELF` environment variable (a supervised launch sets `AGENTTALK_ROOT`, `AGENTTALK_SELF`, and `PYTHONPATH` for you).
+- `AGENTTALK_SELF` / `$SELF` environment variable (a supervised launch sets `AGENTTALK_ROOT` and `AGENTTALK_SELF`; source mode also sets `PYTHONPATH`).
 - The global `--root` flag goes **before** the subcommand to point at a non-default store, e.g. `agenttalk --root /path status`.
 - Most subcommands take `--for <agent>` (reads) or `--from <agent>` (sends) to name you explicitly.
 - Run `whoami --for $SELF` any time to confirm the effective `--root`, your resolved self/peer, roster membership, role, groups, and unread/owed counts.
-- **Codex agents:** inside the Codex sandbox bare `agenttalk` is DENIED - always invoke as `python -m agenttalk <subcommand>`.
+- **Codex agents:** inside the Codex sandbox bare `agenttalk` is DENIED - always invoke as `python -I -m agenttalk <subcommand>`.
 
 ### The live roster is authoritative
 Membership, roles, the operator-facing liaison, and group makeup change over time. **Resolve them from the live store, not from a roster you memorized, copied into a doc, or inherited in a handoff.** Use `sync` on a manual bootstrap/rejoin; at act-time - including inside a wrapped turn, where `sync`/`threads`/`drain`/`recv`/`wait`/`ack` are off-limits - use read-only `roster` / `whoami --for $SELF`, and take correlated routing from the validated request-id/envelope. Sending to a retired or off-roster name is rejected outright (not silent), but a cached roster still fails you in the ways the bus can't catch: you pick the wrong *still-active* recipient, miss a *newly-added* reviewer, or relay to a stale liaison. This is the same stale-snapshot failure as trusting prose over repo state - re-derive, don't remember.

@@ -22,15 +22,15 @@ PEER="${AGENTTALK_PEER:-claude}"
 ```
 
 `PEER` is the default consultant for the canonical two-agent pair. In
-a larger roster, use `python -m agenttalk roster` and choose a specific named
+a larger roster, use `python -I -m agenttalk roster` and choose a specific named
 agent, usually a reviewer or lead. Always resolve inside your current
 shell - env from prior tool calls does not persist across separate
 tool-call processes.
 
 If `.agenttalk/` is not under the current directory, pass `--root
 <path>` before the subcommand on every invocation, for example
-`python -m agenttalk --root <path> send --from "$SELF" --to "$PEER" ...`. Do
-not write `python -m agenttalk send --root ...`; global options must precede the
+`python -I -m agenttalk --root <path> send --from "$SELF" --to "$PEER" ...`. Do
+not write `python -I -m agenttalk send --root ...`; global options must precede the
 subcommand.
 
 ## Invoking agenttalk under the Codex sandbox
@@ -38,19 +38,19 @@ subcommand.
 Run bus commands from the current project WORKSPACE cwd, using AGENTTALK_ROOT for that workspace when it is set. If `AGENTTALK_PY` is set, invoke the bus with the pinned interpreter. In Bash:
 
 ```bash
-"$AGENTTALK_PY" -m agenttalk <subcommand> ...
+"$AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 In PowerShell:
 
 ```powershell
-& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...
+& "$env:AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 If `AGENTTALK_PY` is not set, fall back to the runnable module form:
 
 ```bash
-python -m agenttalk <subcommand> ...
+python -I -m agenttalk <subcommand> ...
 ```
 
 Treat `agenttalk` as the installed/runtime package for this environment. Do NOT cd to, import from, or reference an agenttalk SOURCE checkout outside the workspace for bus I/O: no `..\agenttalk`, no sibling source paths, and no `D:\Projects\claude\agenttalk`. The only source-tree exception is when the current workspace itself is the agenttalk repo being worked on; then `<workspace>\src\agenttalk` is acceptable.
@@ -90,7 +90,7 @@ peer consult would have been useful for a bigger decision.
 TARGET="${AGENTTALK_PEER:-claude}"
 ```
 
-In a team roster, inspect `python -m agenttalk roster` and set `TARGET` to the
+In a team roster, inspect `python -I -m agenttalk roster` and set `TARGET` to the
 specific agent the user named or the best role fit, for example
 `claude-rev` or `claude-lead`. If the user asked for "the other agent"
 and more than one plausible target exists, ask a concise
@@ -98,12 +98,12 @@ clarification.
 
 ### 2. Freshness check
 
-Run `python -m agenttalk status --json` and parse the result. For each entry
+Run `python -I -m agenttalk status --json` and parse the result. For each entry
 in `agents`, check the one matching `$TARGET`:
 
 ```bash
 TARGET_STATE=$(
-  python -m agenttalk status --json |
+  python -I -m agenttalk status --json |
     TARGET="$TARGET" python -c 'import json, os, sys
 target = os.environ["TARGET"]
 data = json.load(sys.stdin)
@@ -160,7 +160,7 @@ turn.
 
 ```bash
 if [ -n "${AGENTTALK_WRAPPER_GENERATION:-}" ]; then
-  python -m agenttalk send --from "$SELF" --to "$TARGET" --kind question \
+  python -I -m agenttalk send --from "$SELF" --to "$TARGET" --kind question \
     --subject "consult: <one-line summary>" \
     --meta request_id="$REQ_ID" --meta consult=true --meta round=1 \
     --await-reply -m "$BODY"
@@ -171,11 +171,11 @@ fi
 In a manual/unwrapped session, keep the existing scoped blocking wait:
 
 ```bash
-python -m agenttalk send --from "$SELF" --to "$TARGET" --kind question \
+python -I -m agenttalk send --from "$SELF" --to "$TARGET" --kind question \
   --subject "consult: <one-line summary>" \
   --meta request_id="$REQ_ID" --meta consult=true --meta round=1 \
   -m "$BODY"
-python -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind message --timeout 180
+python -I -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind message --timeout 180
 ```
 
 Use a **short** consult timeout (180s, not 600/1800). Consults are
@@ -228,7 +228,7 @@ If the peer's reply contradicts your draft on something important:
 - **`request_id` is required.** It correlates the consult round.
 
 - **Mark long drafts (0.14.0).** While drafting a long reply on a known
-  thread, ping `python -m agenttalk composing --from $SELF --to-request <RID>`
+  thread, ping `python -I -m agenttalk composing --from $SELF --to-request <RID>`
   (repeat roughly every 2 minutes). It extends the peer's scoped wait AND
   shows "(reply in flight)" in their threads/sync, preventing crossing
   messages. Prefer it over a hand-built `--meta request_id=...`.
@@ -239,3 +239,5 @@ If the peer's reply is just "agree, good plan", that adds no signal.
 Note that in your final answer ("peer concurred, no new
 considerations raised") and consider whether the consult was needed
 at all. Don't ask if you don't expect pushback.
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.

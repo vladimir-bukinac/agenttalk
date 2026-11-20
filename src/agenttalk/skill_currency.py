@@ -56,7 +56,7 @@ _RULE_RE = re.compile(
     r"\b(?:if|when)\b[^.]{0,60}?(?<![\w])AGENTTALK_PY(?![\w])`?\s+is\s+set"
     r"(?:(?!\botherwise\b|\bis\s+not\s+set\b|\bfall(?:s)?\s*back\b|"
     r"\b(?:not|never|avoid|without|refrain|cannot|no|don['’]t|mustn['’]t|shouldn['’]t|can['’]t)\b)[\s\S]){0,600}?"
-    r'(?:"\$AGENTTALK_PY"|&\s+(?:"\$env:AGENTTALK_PY"|\$env:AGENTTALK_PY))\s+-m\s+agenttalk(?![\w-])'
+    r'(?:"\$AGENTTALK_PY"|&\s+(?:"\$env:AGENTTALK_PY"|\$env:AGENTTALK_PY))\s+(?:(?-i:-I)\s+)?-m\s+agenttalk(?![\w-])'
     r"[\s\S]{0,600}?(?:\botherwise\b|\bis\s+not\s+set\b|\bfall(?:s)?\s*back\b)",
     re.IGNORECASE,
 )

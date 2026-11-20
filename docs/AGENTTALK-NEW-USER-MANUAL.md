@@ -239,7 +239,7 @@ agenttalk's own commands refuse:
   ask git about, remove or commit (its scratch, temp and `.worktrees` folders,
   every registered worktree and the checkout `--release` names, in every mode,
   `--release-report` and the plain report included), or that `comprehension`
-  and `python -m agenttalk.assurance` would read or write, every output file
+  and `python -I -m agenttalk.assurance` would read or write, every output file
   included;
 - a git remote that `janitor --release` and `--release-report` would read,
   after git's own address rewriting, unless it is a folder inside the fence.

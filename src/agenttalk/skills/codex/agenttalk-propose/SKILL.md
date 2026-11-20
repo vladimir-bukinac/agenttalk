@@ -16,7 +16,7 @@ for already-implemented work, and `$agenttalk-consult` for
 pressure-testing a draft answer to the user.
 
 Proposals are point-to-point. If a whole group needs awareness, send a
-follow-up `python -m agenttalk broadcast --kind note`; do not treat a broadcast
+follow-up `python -I -m agenttalk broadcast --kind note`; do not treat a broadcast
 as a multi-party acceptance protocol.
 
 ## Identity
@@ -27,15 +27,15 @@ PEER="${AGENTTALK_PEER:-claude}"
 ```
 
 `PEER` is the default decision target for the canonical two-agent
-pair. In a larger roster, use `python -m agenttalk roster` and choose a specific
+pair. In a larger roster, use `python -I -m agenttalk roster` and choose a specific
 agent such as `claude-lead`, `claude-rev`, or the named owner. Always
 resolve inside your current shell - env from prior tool calls does
 not persist across separate tool-call processes.
 
 If `.agenttalk/` is not under the current directory, pass `--root
 <path>` before the subcommand on every invocation, for example
-`python -m agenttalk --root <path> propose --from "$SELF" --to "$PEER" ...`. Do
-not write `python -m agenttalk propose --root ...`; global options must precede
+`python -I -m agenttalk --root <path> propose --from "$SELF" --to "$PEER" ...`. Do
+not write `python -I -m agenttalk propose --root ...`; global options must precede
 the subcommand.
 
 ## Invoking agenttalk under the Codex sandbox
@@ -43,19 +43,19 @@ the subcommand.
 Run bus commands from the current project WORKSPACE cwd, using AGENTTALK_ROOT for that workspace when it is set. If `AGENTTALK_PY` is set, invoke the bus with the pinned interpreter. In Bash:
 
 ```bash
-"$AGENTTALK_PY" -m agenttalk <subcommand> ...
+"$AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 In PowerShell:
 
 ```powershell
-& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...
+& "$env:AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 If `AGENTTALK_PY` is not set, fall back to the runnable module form:
 
 ```bash
-python -m agenttalk <subcommand> ...
+python -I -m agenttalk <subcommand> ...
 ```
 
 Treat `agenttalk` as the installed/runtime package for this environment. Do NOT cd to, import from, or reference an agenttalk SOURCE checkout outside the workspace for bus I/O: no `..\agenttalk`, no sibling source paths, and no `D:\Projects\claude\agenttalk`. The only source-tree exception is when the current workspace itself is the agenttalk repo being worked on; then `<workspace>\src\agenttalk` is acceptable.
@@ -79,7 +79,7 @@ implementation work.
 
 1. Resolve `SELF` and `PEER`.
 2. Choose `TARGET`. Use `$PEER` for the default pair; otherwise pick
-   the named decision-maker from `python -m agenttalk roster`. If the user did
+   the named decision-maker from `python -I -m agenttalk roster`. If the user did
    not name a target and several agents could decide, ask.
 3. Build the proposal body:
    ```text
@@ -108,11 +108,11 @@ implementation work.
    REQ_ID="pp-$(uuidgen 2>/dev/null || python -c 'import uuid; print(uuid.uuid4())')"
    if [ -n "${AGENTTALK_WRAPPER_GENERATION:-}" ]; then
      # managed wrapper turn: record the across-turn wait, then stop and return to the wrapper
-     python -m agenttalk send --from "$SELF" --to "$TARGET" --kind proposal \
+     python -I -m agenttalk send --from "$SELF" --to "$TARGET" --kind proposal \
        --subject "<one-line decision>" --meta request_id="$REQ_ID" \
        --await-reply -m "$BODY"
    else
-     python -m agenttalk propose --from "$SELF" --to "$TARGET" \
+     python -I -m agenttalk propose --from "$SELF" --to "$TARGET" \
        --subject "<one-line decision>" \
        --meta request_id="$REQ_ID" \
        -m "$BODY"
@@ -128,7 +128,7 @@ implementation work.
    `--await-reply` needs the tracked `request_id`. There is no `propose --await-reply`.
 5. In a manual (unwrapped) session, wait for the response:
    ```bash
-   python -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind proposal-response --timeout 600
+   python -I -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind proposal-response --timeout 600
    ```
    The scoped wait ignores unrelated traffic and does not advance your
    global cursor.
@@ -142,9 +142,9 @@ implementation work.
 
 In a manual session, scoped wait intentionally ignores unrelated traffic. If the proposal
 stalls or you suspect another urgent thread is waiting on you, run
-`python -m agenttalk sync --for "$SELF"` and `python -m agenttalk threads --for "$SELF"`.
+`python -I -m agenttalk sync --for "$SELF"` and `python -I -m agenttalk threads --for "$SELF"`.
 Handle the older or more urgent thread first, then resume the scoped
-wait for your proposal. Use `python -m agenttalk reply --from "$SELF" --to-id <message_id>` or
+wait for your proposal. Use `python -I -m agenttalk reply --from "$SELF" --to-id <message_id>` or
 `--to-request <request_id>` when replying inside a specific thread.
 
 ## Countering a proposal
@@ -154,7 +154,7 @@ To counter a proposal you received:
 1. Close the old proposal. `--to-request` names the proposal you are countering; without it the
    reply goes to the newest message you received, which can be a different proposal:
    ```bash
-   python -m agenttalk reply --from "$SELF" --to-request <old-request-id> --kind proposal-response \
+   python -I -m agenttalk reply --from "$SELF" --to-request <old-request-id> --kind proposal-response \
      --meta status=countered \
      -m "<why a counter is needed>"
    ```
@@ -165,11 +165,11 @@ To counter a proposal you received:
    COUNTER_ID="pp-$(uuidgen 2>/dev/null || python -c 'import uuid; print(uuid.uuid4())')"
    if [ -n "${AGENTTALK_WRAPPER_GENERATION:-}" ]; then
      # managed wrapper turn: record the across-turn wait, then stop and return to the wrapper
-     python -m agenttalk send --from "$SELF" --to "$TARGET" --kind proposal \
+     python -I -m agenttalk send --from "$SELF" --to "$TARGET" --kind proposal \
        --meta request_id="$COUNTER_ID" --meta in_reply_to=<old-request-id> \
        --subject "<counter proposal>" --await-reply -m "$BODY"
    else
-     python -m agenttalk propose --from "$SELF" --to "$TARGET" \
+     python -I -m agenttalk propose --from "$SELF" --to "$TARGET" \
        --in-reply-to <old-request-id> --meta request_id="$COUNTER_ID" \
        --subject "<counter proposal>" \
        -m "$BODY"
@@ -180,7 +180,7 @@ To counter a proposal you received:
 
 - **Rescind, don't retract in prose (0.14.0).** To cancel a tracked
   request you opened (question / review-request / proposal), use
-  `python -m agenttalk rescind --from $SELF --to-request <RID> -m "<why>"`. A prose
+  `python -I -m agenttalk rescind --from $SELF --to-request <RID> -m "<why>"`. A prose
   "ignore my last message" moves no thread state — the peer's `wait`
   cannot see it and `check` still reports current. A rescind wakes a
   blocked scoped waiter with exit 3 and flips the thread to
@@ -193,9 +193,11 @@ Before declaring the decision handled or going idle (in a managed wrapper turn s
 owns the inbox), run:
 
 ```bash
-python -m agenttalk sync --for "$SELF"
-python -m agenttalk threads --for "$SELF"
+python -I -m agenttalk sync --for "$SELF"
+python -I -m agenttalk threads --for "$SELF"
 ```
 
 Resolve any `reply-waiting` or `owed-inbound` rows. Do not leave an
 accepted/rejected/countered response unread in the inbox.
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.

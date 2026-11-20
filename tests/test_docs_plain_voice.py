@@ -250,16 +250,16 @@ def test_quick_start_uses_the_environment_python(shell, create, capture, invoke,
     pins = PIN.findall(commands[2])
     version = re.search(r'^version = "([^"]+)"', (REPO / "pyproject.toml").read_text(encoding="utf-8"), re.M).group(1)
     assert pins and set(pins) == {f"v{version}"}
-    assert commands[3] == invoke + " -m agenttalk install-skills"
-    assert "& $env:AGENTTALK_PY -m agenttalk init --here --agents claude-dev,codex-rev" in started
-    assert "& $env:AGENTTALK_PY -m agenttalk codex-config --enable" in started
+    assert commands[3] == invoke + " -I -m agenttalk install-skills"
+    assert "& $env:AGENTTALK_PY -I -m agenttalk init --here --agents claude-dev,codex-rev" in started
+    assert "& $env:AGENTTALK_PY -I -m agenttalk codex-config --enable" in started
     assert any(path_setup == line.strip() for block in blocks[1:] for line in block.splitlines())
     assert f"`{show_path}`" in started
-    assert "`& $env:AGENTTALK_PY -m agenttalk doctor`" in started
+    assert "`& $env:AGENTTALK_PY -I -m agenttalk doctor`" in started
     # the doctor line before the recipe serves both platforms
-    assert '`"$AGENTTALK_PY" -m agenttalk doctor`' in started
+    assert '`"$AGENTTALK_PY" -I -m agenttalk doctor`' in started
     # that line comes before the recipe, so it says where AGENTTALK_PY is set
-    early = started.split("`& $env:AGENTTALK_PY -m agenttalk doctor`", 1)[0]
+    early = started.split("`& $env:AGENTTALK_PY -I -m agenttalk doctor`", 1)[0]
     assert "After the steps below, which set `AGENTTALK_PY`" in " ".join(early.split())
 
 

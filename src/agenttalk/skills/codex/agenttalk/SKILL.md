@@ -11,19 +11,19 @@ reviewed-against: "0.101"
 Run bus commands from the current project WORKSPACE cwd, using AGENTTALK_ROOT for that workspace when it is set. If `AGENTTALK_PY` is set, invoke the bus with the pinned interpreter. In Bash:
 
 ```bash
-"$AGENTTALK_PY" -m agenttalk <subcommand> ...
+"$AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 In PowerShell:
 
 ```powershell
-& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...
+& "$env:AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 If `AGENTTALK_PY` is not set, fall back to the runnable module form:
 
 ```bash
-python -m agenttalk <subcommand> ...
+python -I -m agenttalk <subcommand> ...
 ```
 
 Treat `agenttalk` as the installed/runtime package for this environment. Do NOT cd to, import from, or reference an agenttalk SOURCE checkout outside the workspace for bus I/O: no `..\agenttalk`, and no sibling source paths. The only source-tree exception is when the current workspace itself is the agenttalk repo being worked on; then `<workspace>\src\agenttalk` is acceptable.
@@ -35,13 +35,15 @@ Do NOT run `pip install -e <agenttalk-source>` as an in-turn bus fix. If the run
 Run the `overview` subcommand in the form above and show its output to the user exactly as printed:
 
 ```powershell
-& "$env:AGENTTALK_PY" -m agenttalk overview
+& "$env:AGENTTALK_PY" -I -m agenttalk overview
 ```
 
 ```bash
-python -m agenttalk overview
+python -I -m agenttalk overview
 ```
 
 If the user asks for the paid-model spend as well, add `--enable-budget`. Never add it otherwise: the spend ledger covers the whole machine.
 
 This skill does nothing else. It does not read or answer messages, does not change anything and does not start any work. If the command fails, show its error and stop.
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.

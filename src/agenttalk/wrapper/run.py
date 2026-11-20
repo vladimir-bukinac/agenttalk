@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .turn_watchdog import TurnWatchdogConfig
 from datetime import datetime, timezone
+from functools import partial
 
 from agenttalk import health as health_model
 from agenttalk import lane_occupancy, launch_admission
@@ -457,6 +458,54 @@ def _agenttalk_py() -> str:
     # As the process was started, not resolved through links (#493): a linked virtual environment
     # on Linux/macOS only finds agenttalk when its own python path is used. Windows is unchanged.
     return launch_path()
+
+
+def runtime_module_args(*, source: bool) -> list[str]:
+    return ([] if source else ["-I"]) + ["-m", "agenttalk"]
+
+
+def select_runtime_mode(python: str, cwd: Path, env: dict[str, str]) -> str:
+    """Compare the already loaded package with the isolated interpreter's package."""
+    import agenttalk
+
+    bound = Path(agenttalk.__file__).resolve(strict=True)
+    source = False
+    for entry in env.get("PYTHONPATH", "").split(os.pathsep):
+        if not entry:
+            continue
+        path = Path(entry).resolve()
+        if path == cwd.resolve():
+            continue
+        if path.name == "src" and (path.parent / "pyproject.toml").is_file() and (
+            path / "agenttalk" / "__init__.py"
+        ).is_file():
+            try:
+                if os.path.samefile(path / "agenttalk" / "__init__.py", bound):
+                    source = True
+            except OSError:
+                continue
+    try:
+        rc, output = _run_startup_check([python, "-I", "-c", _AGENTTALK_IMPORT_PROBE], str(cwd), env,
+                                        STARTUP_CHECK_TIMEOUT)
+        if rc == 0:
+            for line in reversed(output.splitlines()):
+                try:
+                    file = json.loads(line).get("file")
+                except (ValueError, AttributeError):
+                    continue
+                if file:
+                    if os.path.samefile(bound, file):
+                        return "installed"
+                    if source:
+                        return "source"
+                break
+        elif source and _AGENTTALK_MISSING_MODULE_RE.search(output):
+            return "source"
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError("the isolated agenttalk identity probe could not run") from exc
+    raise ValueError(
+        "cannot verify the pinned installed agenttalk; select a deliberate source PYTHONPATH or fix Python"
+    )
 
 
 def _ovh_qwen_claude_config_dir(workspace: Path) -> str:
@@ -958,7 +1007,7 @@ def preflight_launch_runtime(
                 str(candidate), lane_occupancy.codex_error(why), lane_occupancy.CODEX_REMEDIATION))
     resolved_argv = [str(candidate), *base_argv[1:]]
     py = env.get("AGENTTALK_PY") or _agenttalk_py()
-    probe_argv = [py, "-m", "agenttalk", "--version"]
+    probe_argv = [py, *runtime_module_args(source=env.get("AGENTTALK_RUNTIME_MODE") == "source"), "--version"]
 
     def _default_runner(a: list[str], cwd: str, e: dict[str, str], t: float):
         try:
@@ -1010,13 +1059,18 @@ def agenttalk_runtime_config_blocked_summary(
 def preflight_agenttalk_runtime(
     *,
     workspace_root: str | os.PathLike[str] | None = None,
+    source: bool = False,
+    source_path: Path | None = None,
     runner: Callable[[list[str], str, dict[str, str], float], tuple[int | None, str]] | None = None,
     timeout: float = STARTUP_CHECK_TIMEOUT,
 ) -> str | None:
     """Probe the pinned Python the child will use for bus commands."""
     workspace = Path(workspace_root).resolve() if workspace_root else _workspace_root()
     env = _child_env(workspace)
-    argv = [env["AGENTTALK_PY"], "-c", _AGENTTALK_IMPORT_PROBE]
+    if source and source_path is not None:
+        env["PYTHONPATH"] = str(source_path) + os.pathsep + env.get("PYTHONPATH", "")
+    flags = [] if source else ["-I"]
+    argv = [env["AGENTTALK_PY"], *flags, "-c", _AGENTTALK_IMPORT_PROBE]
 
     def _default_runner(a: list[str], cwd: str, e: dict[str, str], t: float):
         try:
@@ -1034,10 +1088,12 @@ def preflight_agenttalk_runtime(
     except subprocess.TimeoutExpired:  # a hang is refused, never let through (#714)
         return _startup_timeout_summary(_format_argv([argv[0], "-c", "import agenttalk"]), timeout)
     except OSError as exc:
-        blocked = _runtime_config_blocked_summary(str(exc))
+        blocked = (_runtime_config_blocked_summary(str(exc))
+                   or agenttalk_runtime_config_blocked_summary(None, workspace))
         return blocked
     if rc != 0:
-        blocked = _runtime_config_blocked_summary(out)
+        blocked = (_runtime_config_blocked_summary(out)
+                   or agenttalk_runtime_config_blocked_summary(None, workspace))
         return blocked
     resolved: str | None = None
     for line in reversed((out or "").splitlines()):
@@ -1049,7 +1105,7 @@ def preflight_agenttalk_runtime(
         resolved = str(value) if value else None
         break
     if resolved is None:
-        return None
+        return agenttalk_runtime_config_blocked_summary(None, workspace)
     return agenttalk_runtime_config_blocked_summary(resolved, workspace)
 
 
@@ -2761,6 +2817,7 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
                render: bool = True, rules: str | None = None,
                reply_shell: str = "powershell",
                reply_invocation: str | None = None,
+               source: bool = False,
                clock: Callable[[], float] = time.monotonic,
                spawn: Callable[[list[str], str | None], Iterable[str]] | None = None,
                agenttalk_preflight: Callable[[], str | None] | None = None,
@@ -2995,7 +3052,7 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
                                lease_lost_exceptions=lease_lost_exceptions)
     preflight = agenttalk_preflight
     if preflight is None and cli == "codex" and spawn is None:
-        preflight = preflight_agenttalk_runtime
+        preflight = partial(preflight_agenttalk_runtime, workspace_root=store.root, source=source)
     preflight_ok = False
 
     def _run_one_body(
@@ -3346,7 +3403,7 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
         prompt = _prompt.assemble_turn_prompt(
             record, rules=rules, rejoin=rejoin, lessons=lesson_prompt,
             sender_is_lead=sender_is_lead, reply_shell=reply_shell, reply_invocation=reply_invocation, seat=agent,
-            relay_notice=relay_notice)
+            relay_notice=relay_notice, source=source)
         _apply_fresh_request(store, agent, session_state, persist,
                              _fresh_owner_check(store, agent, wrapper_generation), lifecycle_log)  # #475
         spec = _session.build_turn(session_state, prompt)
@@ -3538,6 +3595,7 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
                        render: bool = True, rules: str | None = None,
                        reply_shell: str = "powershell",
                        reply_invocation: str | None = None,
+                       source: bool = False,
                        clock: Callable[[], float] = time.monotonic,
                        spawn: Callable[[list[str], str | None], Iterable[str]] | None = None,
                        agenttalk_preflight: Callable[[], str | None] | None = None,
@@ -3634,7 +3692,7 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
                                lease_lost_exceptions=lease_lost_exceptions)
     preflight = agenttalk_preflight
     if preflight is None and cli == "codex" and spawn is None:
-        preflight = preflight_agenttalk_runtime
+        preflight = partial(preflight_agenttalk_runtime, workspace_root=store.root, source=source)
     preflight_ok = False
 
     def _run_one(spec) -> dict:
@@ -3751,7 +3809,7 @@ def make_cadence_drive(store, agent: str, cli: str, session_state, base_argv: li
 
     def cadence_drive(snapshot: dict, items: list) -> bool:
         prompt = _prompt.assemble_cadence_prompt(
-            snapshot, items, rules=rules, reply_shell=reply_shell, reply_invocation=reply_invocation)
+            snapshot, items, rules=rules, reply_shell=reply_shell, reply_invocation=reply_invocation, source=source)
         _apply_fresh_request(store, agent, session_state, persist,
                              _fresh_owner_check(store, agent, wrapper_generation), lifecycle_log)  # #475
         spec = _session.build_turn(session_state, prompt)

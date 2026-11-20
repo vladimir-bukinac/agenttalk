@@ -165,7 +165,7 @@ assistant that talks to you.
 New here? Give your assistant [`docs/LEAD-SETUP-BRIEF.md`](https://github.com/zoolok17/agenttalk/blob/v0.105.0/docs/LEAD-SETUP-BRIEF.md) and ask it to set up
 agenttalk: it sets up a first team without the supervisor and tells you what only a person can decide.
 Once agenttalk is installed, the brief and the other guides for leads are on your machine too. After the steps below, which set `AGENTTALK_PY`,
-`& $env:AGENTTALK_PY -m agenttalk doctor` in PowerShell, or `"$AGENTTALK_PY" -m agenttalk doctor` on Linux and macOS, prints the installed `module path`, and the brief is `docs/LEAD-SETUP-BRIEF.md` under it.
+`& $env:AGENTTALK_PY -I -m agenttalk doctor` in PowerShell, or `"$AGENTTALK_PY" -I -m agenttalk doctor` on Linux and macOS, prints the installed `module path`, and the brief is `docs/LEAD-SETUP-BRIEF.md` under it.
 To do it yourself, follow the steps below.
 
 Give agenttalk its own Python environment, a folder that keeps its packages separate from your other software.
@@ -179,7 +179,7 @@ Windows (PowerShell):
 python -m venv agenttalk-env
 $env:AGENTTALK_PY = (Resolve-Path .\agenttalk-env\Scripts\python.exe).Path
 & $env:AGENTTALK_PY -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.105.0"
-& $env:AGENTTALK_PY -m agenttalk install-skills
+& $env:AGENTTALK_PY -I -m agenttalk install-skills
 ```
 
 Linux and macOS (sh):
@@ -190,7 +190,7 @@ On Debian or Ubuntu, install the venv package first: `sudo apt install python3-v
 python3 -m venv agenttalk-env
 export AGENTTALK_PY="$(pwd)/agenttalk-env/bin/python"
 "$AGENTTALK_PY" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.105.0"
-"$AGENTTALK_PY" -m agenttalk install-skills
+"$AGENTTALK_PY" -I -m agenttalk install-skills
 ```
 
 `AGENTTALK_PY` names the Python you just installed agenttalk into. Keep using that Python after you change folders.
@@ -216,11 +216,11 @@ The steps below show PowerShell; on Linux or macOS, replace `& $env:AGENTTALK_PY
 
 Then, in your project's top folder:
 
-1. Name the seats: `& $env:AGENTTALK_PY -m agenttalk init --here --agents claude-dev,codex-rev`.
+1. Name the seats: `& $env:AGENTTALK_PY -I -m agenttalk init --here --agents claude-dev,codex-rev`.
 2. In each terminal, set that seat's name before you start the assistant, for example
    `$env:AGENTTALK_SELF = 'claude-dev'` in PowerShell, or
    `export AGENTTALK_SELF=claude-dev` in bash or zsh.
-3. For Codex, read what `& $env:AGENTTALK_PY -m agenttalk codex-config --enable` allows, then run it.
+3. For Codex, read what `& $env:AGENTTALK_PY -I -m agenttalk codex-config --enable` allows, then run it.
 4. Start one assistant and tell it to add itself as the lead. Start the other and tell
    it to join as a reviewer and wait for the lead.
 5. Ask the lead to hand a piece of work to the other assistant for review.
@@ -358,7 +358,7 @@ integrations, and when they connect:
   Semgrep rule sets `p/python` and `p/security-audit`
   from the Semgrep registry, and checks dependencies against the PyPI
   advisory database through `pip-audit`.
-- **OPT-IN, the assurance tool** (`python -m agenttalk.assurance`): the
+- **OPT-IN, the assurance tool** (`python -I -m agenttalk.assurance`): the
   OSV vulnerability database (through `osv-scanner`), the PyPI advisory
   database (through `pip-audit`) and remote Semgrep configurations are all
   off by default; each runs only when the scan profile's `network_allowed`
@@ -470,7 +470,7 @@ in the technical reference.
 
 Follow [Get started](#get-started) to create a private Python environment and install agenttalk and its skills.
 Use that same Python in every terminal. The examples below shorten the command to `agenttalk`; write
-`& $env:AGENTTALK_PY -m agenttalk` in PowerShell or `"$AGENTTALK_PY" -m agenttalk` on Linux and macOS.
+`& $env:AGENTTALK_PY -I -m agenttalk` in PowerShell or `"$AGENTTALK_PY" -I -m agenttalk` on Linux and macOS.
 
 The install command pins a released tag (`@v0.105.0` in Get started), rather than a branch: commands and the message
 format can change between releases, and a tag keeps every agent in a project on the same version.
@@ -1254,7 +1254,7 @@ a team or runs unattended:
 ### Command reference by category
 
 Every command below is a real, currently-shipping subcommand
-(`python -m agenttalk <cmd> --help`); flags shown are the ones most
+(`python -I -m agenttalk <cmd> --help`); flags shown are the ones most
 relevant day to day, not exhaustive lists — run `--help` on any
 command for the full set.
 

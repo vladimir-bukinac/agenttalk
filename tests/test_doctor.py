@@ -2331,7 +2331,7 @@ def test_doctor_supervised_codex_ok_requires_full_env_mirror(tmp_path: Path) -> 
         assert args != ["sandbox", "--help"]
         if args == ["--version"]:
             return (0, "codex-cli 0.142.3\n")
-        if args == ["-m", "agenttalk", "--version"]:
+        if args == ["-I", "-m", "agenttalk", "--version"]:
             return (0, "agenttalk 0.55.1\n")
         raise AssertionError(args)
 
@@ -2346,14 +2346,14 @@ def test_doctor_supervised_codex_ok_requires_full_env_mirror(tmp_path: Path) -> 
     assert entry["env_mirror"] == "full"
     assert entry["sandbox_probe_status"] == "skipped"
     assert {tuple(c["args"]) for c in calls} == {
-        ("--version",), ("-m", "agenttalk", "--version"),
+        ("--version",), ("-I", "-m", "agenttalk", "--version"),
     }
     for c in calls:
         assert c["cwd"] == cwd
         assert c["env"]["AGENTTALK_ROOT"] == str(tmp_path.resolve())
         assert c["env"]["AGENTTALK_PY"] == py
         assert c["env"]["CODEX_HOME"] == str(home)
-        assert c["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(tmp_path / "src")
+        assert str(tmp_path / "src") not in c["env"].get("PYTHONPATH", "").split(os.pathsep)
 
 
 @pytest.mark.parametrize("env_key", ["AGENTTALK_PY", "agenttalk_py", "Agenttalk_Py"])
@@ -2378,7 +2378,7 @@ def test_doctor_supervised_codex_agent_env_agenttalk_py_override_warns(
         assert env["AGENTTALK_PY"] == missing_py
         if args == ["--version"]:
             return (0, "codex-cli 0.142.3\n")
-        if args == ["-m", "agenttalk", "--version"]:
+        if args == ["-I", "-m", "agenttalk", "--version"]:
             agenttalk_probe_exes.append(exe)
             return (None, "FileNotFoundError")
         raise AssertionError(args)
@@ -2443,7 +2443,7 @@ def test_doctor_supervised_codex_wrapped_probes_base_tail_and_wrapper_python(tmp
         calls.append((exe, tuple(args)))
         if args == ["--version"]:
             return (0, "codex-cli 0.142.3\n")
-        if args == ["-m", "agenttalk", "--version"]:
+        if args == ["-I", "-m", "agenttalk", "--version"]:
             return (0, "agenttalk 0.55.1\n")
         raise AssertionError(args)
 
@@ -2455,13 +2455,13 @@ def test_doctor_supervised_codex_wrapped_probes_base_tail_and_wrapper_python(tmp
     assert entry["agenttalk_py"] == wrapper_py
     assert entry["agenttalk_py_provenance"] == "launch.windows_file"
     assert (codex, ("--version",)) in calls
-    assert (wrapper_py, ("-m", "agenttalk", "--version")) in calls
+    assert (wrapper_py, ("-I", "-m", "agenttalk", "--version")) in calls
 
 
 def _wrapped_codex_runner(exe, args, timeout, cwd, env):
     if args == ["--version"]:
         return (0, "codex-cli 0.142.3\n")
-    if args == ["-m", "agenttalk", "--version"]:
+    if args == ["-I", "-m", "agenttalk", "--version"]:
         return (0, "agenttalk 0.58.1\n")
     raise AssertionError(args)
 
@@ -2613,7 +2613,7 @@ def test_doctor_supervised_codex_fallback_python_warns_doctor_fallback(tmp_path:
         "launch": {"windows_file": codex}}})
 
     def runner(exe, args, timeout, cwd, env):
-        if args == ["-m", "agenttalk", "--version"]:
+        if args == ["-I", "-m", "agenttalk", "--version"]:
             assert env["AGENTTALK_PY"] == exe
         return (0, "codex-cli 0.142.3\n") if args == ["--version"] else (0, "agenttalk 0.55.1\n")
 

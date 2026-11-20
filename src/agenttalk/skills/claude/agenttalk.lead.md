@@ -17,8 +17,8 @@ it honours the project's chosen planning authority rather than overriding it.
 
 This installed agenttalk carries the guides written for leads, at the version you run. To
 find them, run `agenttalk doctor` in the project's top folder (a wrapped seat runs
-`"$AGENTTALK_PY" -m agenttalk doctor` in Bash or
-`& "$env:AGENTTALK_PY" -m agenttalk doctor` in PowerShell) and read its `module path` line, whatever its exit
+`"$AGENTTALK_PY" -I -m agenttalk doctor` in Bash or
+`& "$env:AGENTTALK_PY" -I -m agenttalk doctor` in PowerShell) and read its `module path` line, whatever its exit
 code; `agenttalk doctor --json` gives the same path as `agenttalk_module_path`. The guides
 are under that path:
 
@@ -953,3 +953,5 @@ member keeps listening.
   `roster set-operator-facing`. `release` exports no transcript (that's
   `end`); a received unmarked `end` no longer stands peers down either.
 - **For "done for now"**, send a normal `note` — it never stops anyone.
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.

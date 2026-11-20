@@ -4719,6 +4719,14 @@ def _resolve_module_flag_index(
     return -1
 
 
+def _observed_module_flag_index(tokens: list[str], configured: object) -> int:
+    index = _resolve_module_flag_index(tokens, configured)
+    if index < 0 and tokens and tokens[0] == "-I":
+        index = _resolve_module_flag_index(tokens[1:], configured)
+        return index + 1 if index >= 0 else -1
+    return index
+
+
 def process_tree_operator_gap(
     *,
     status: object,
@@ -4969,6 +4977,7 @@ def _effective_launch_candidate(
     session_args: Sequence[object] | None = None,
     request_id: str | None = None,
     lane_id: str | None = None,
+    source_checkout: bool | None = None,
 ) -> tuple[EffectiveLaunchCandidate | None, str | None]:
     """Build and admit one post-substitution launch candidate.
 
@@ -5161,6 +5170,11 @@ def _effective_launch_candidate(
         nonce_insert_at = None
         child_argv = ()
 
+    if wrapped and python_module_dispatch and source_checkout is False:
+        argv.insert(0, "-I")
+        module_args_from = (module_args_from or 0) + 1
+        nonce_insert_at += 1
+
     effective_module_args_from = (
         _resolve_module_flag_index(argv, module_args_from)
         if wrapped and python_module_dispatch
@@ -5330,9 +5344,8 @@ def _ephemeral_recovery_environment(
         agenttalk_python = launch_agenttalk_python
     src_path = root_path / "src"
     src_on_pythonpath = (
-        (src_path / "agenttalk" / "__init__.py").is_file()
-        if launch_src_on_pythonpath is None
-        else launch_src_on_pythonpath
+        _read_recorded_source_mode(root_path / ".agenttalk" / "supervisor.ps1")
+        if launch_src_on_pythonpath is None else launch_src_on_pythonpath
     )
     codex_home = None
     if spec.get("cli") == "codex" and bool(spec.get("codex_home_isolation")):
@@ -5800,6 +5813,7 @@ def configured_detached_launch(
             root=root_text,
             request_id=request_id,
             lane_id=marker_lane,
+            source_checkout=bool(recovery_environment.get("PYTHONPATH_prepend")),
         )
         if launch_candidate is None:
             return None, launch_problem or (
@@ -5854,6 +5868,8 @@ def configured_detached_launch(
             population="regular",
             agent=agent,
             root=root_text,
+            source_checkout=(_read_recorded_source_mode(Path(root_text) / ".agenttalk" / "supervisor.ps1")
+                             if root_text is not None else None),
         )
         if launch_candidate is None:
             return None, launch_problem or "the configured launch is unavailable"
@@ -5900,7 +5916,7 @@ def configured_detached_launch(
             "AGENTTALK_PY": agenttalk_python,
             "supervisor_json_env_keys": env_keys,
         }
-        if root_text is not None and (Path(root_text) / "src" / "agenttalk").is_dir():
+        if root_text is not None and _read_recorded_source_mode(Path(root_text) / ".agenttalk" / "supervisor.ps1"):
             environment["PYTHONPATH_prepend"] = str(Path(root_text) / "src")
     rendered = subprocess.list2cmdline([executable, *args])
     rendered_utf16_units = len(rendered.encode("utf-16-le")) // 2 + 1
@@ -6110,7 +6126,7 @@ def _agenttalk_argv(command_line: object, module_args_from: object = None) -> li
     if first in _SHELL_HOSTS:
         return None
     if first in {"python", "python3", "py"}:
-        rel_index = _resolve_module_flag_index(tokens[1:], module_args_from)
+        rel_index = _observed_module_flag_index(tokens[1:], module_args_from)
         if rel_index < 0:
             return None
         return tokens[1 + rel_index + 2:]
@@ -6292,7 +6308,7 @@ def recognize_agenttalk_wrap_invocation(
             "shell_host",
         )
     if first in {"python", "python3", "py"}:
-        rel_index = _resolve_module_flag_index(tokens[1:], module_args_from)
+        rel_index = _observed_module_flag_index(tokens[1:], module_args_from)
         if rel_index < 0:
             incomplete_selector = tokens[-1] == "-m" or (
                 len(tokens) >= 2
@@ -11394,6 +11410,7 @@ def attach_regular_launch_admissions(
     config: dict,
     *,
     root: str | Path,
+    source_checkout: bool | None = None,
     session_id_factory: Callable[[], str] | None = None,
 ) -> dict:
     """Attach exact typed launch artifacts to executable regular actions.
@@ -11456,6 +11473,7 @@ def attach_regular_launch_admissions(
             agent=str(agent),
             root=root,
             session_args=effective_session_args,
+            source_checkout=source_checkout,
         )
         decision["launch_admission"] = (
             candidate.artifact()
@@ -11769,6 +11787,7 @@ def prepare_launch_request(store: Store, state: dict, config: dict, request_id: 
             root=store.root,
             request_id=request_id,
             lane_id=lane_id,
+            source_checkout=bool(spec["recovery_environment"].get("PYTHONPATH_prepend")),
         )
         if launch_candidate is None:
             raise eph.EphemeralError(
@@ -12801,6 +12820,7 @@ $cfgSha256 = $script:SupervisorConfigSha256
 # source checkout (prepend <root>/src to PYTHONPATH) vs a pip install.
 $AgenttalkPython = '__AGENTTALK_PYTHON__'
 $SrcOnPyPath = __SRC_ON_PYPATH__
+$AgenttalkModuleFlags = if ($SrcOnPyPath) { @() } else { @('-I') }
 $WrapperLogRoot = '__AGENTTALK_WRAPPER_LOG_ROOT__'
 $WrapperLogFallbackRoot = Join-Path (
   Join-Path ([IO.Path]::GetTempPath()) 'agenttalk-wrapper-logs'
@@ -13131,7 +13151,7 @@ function Resolve-AgenttalkScratchRoot($agentName) {
   $savedPP = $env:PYTHONPATH
   if ($SrcOnPyPath) { $env:PYTHONPATH = (Join-Path $Root 'src') + ';' + $env:PYTHONPATH }
   try {
-    $out = & $AgenttalkPython -m agenttalk --root $Root scratch root --for $agentName 2>$null
+    $out = & $AgenttalkPython @AgenttalkModuleFlags -m agenttalk --root $Root scratch root --for $agentName 2>$null
     if ($LASTEXITCODE -ne 0 -or -not $out) { return $null }
     # Reviewer-3 H5: $out can be an array of lines (multi-line stdout, e.g.
     # stray output ahead of the real path) - take the LAST non-empty line,
@@ -13428,7 +13448,7 @@ function Preflight($name, $plan, $file, $codexHome, [object[]]$prefixTokens = @(
         }
         $rc = $LASTEXITCODE
         if ($rc -eq 0) {
-          & $AgenttalkPython -m agenttalk --version | Out-Null
+          & $AgenttalkPython @AgenttalkModuleFlags -m agenttalk --version | Out-Null
           $rc = $LASTEXITCODE
         }
       } finally {
@@ -13457,7 +13477,7 @@ function Preflight($name, $plan, $file, $codexHome, [object[]]$prefixTokens = @(
       $saved = $env:CODEX_HOME; $savedPP = $env:PYTHONPATH
       if ($codexHome) { $env:CODEX_HOME = $codexHome }
       if ($SrcOnPyPath) { $env:PYTHONPATH = (Join-Path $Root 'src') + ';' + $env:PYTHONPATH }
-      try { & $AgenttalkPython -m agenttalk --version | Out-Null; $rc = $LASTEXITCODE }
+      try { & $AgenttalkPython @AgenttalkModuleFlags -m agenttalk --version | Out-Null; $rc = $LASTEXITCODE }
       finally {
         if ($null -eq $saved) { Remove-Item Env:CODEX_HOME -ErrorAction SilentlyContinue } else { $env:CODEX_HOME = $saved }
         if ($null -eq $savedPP) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $savedPP }
@@ -13469,7 +13489,7 @@ function Preflight($name, $plan, $file, $codexHome, [object[]]$prefixTokens = @(
       # PYTHONPATH (the in-sandbox-robust invocation the skills use).
       $savedPP = $env:PYTHONPATH
       if ($SrcOnPyPath) { $env:PYTHONPATH = (Join-Path $Root 'src') + ';' + $env:PYTHONPATH }
-      try { & $AgenttalkPython -m agenttalk --version | Out-Null; $rc = $LASTEXITCODE }
+      try { & $AgenttalkPython @AgenttalkModuleFlags -m agenttalk --version | Out-Null; $rc = $LASTEXITCODE }
       finally { if ($null -eq $savedPP) { Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue } else { $env:PYTHONPATH = $savedPP } }
       if ($rc -ne 0) { Write-Warning ("supervisor: {0}: CONFIG ERROR - preflight `AGENTTALK_PY -m agenttalk --version` exited {1}; NOT launching (fail closed)" -f $name, $rc); return $false }
       return $true
@@ -15038,7 +15058,8 @@ $pollNum = 0
   $now = [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
   $eventArgs = @(); if (-not $DryRun) { $eventArgs += @('--record-events') }
   $planText = & $AgenttalkCmd --root $Root supervise --plan --state-file $StatePath `
-    --supervisor-config-sha256 $cfgSha256 @snapshotArgs @eventArgs --now $now
+    --supervisor-config-sha256 $cfgSha256 --launch-src-on-pythonpath ([string]$SrcOnPyPath).ToLowerInvariant() `
+    @snapshotArgs @eventArgs --now $now
   if ($LASTEXITCODE -ne 0) {
     Write-Warning "supervisor: plan config binding failed; holding this poll"
     Wait-ForNextPoll $cfg
@@ -15447,6 +15468,7 @@ $pollNum = 0
 def agenttalk_shim(
     python_exe: str,
     checkout_id: str = "__AGENTTALK_CHECKOUT_ID__",
+    source_checkout: bool = False,
 ) -> str:
     """A project-local Windows shim so a bare ``agenttalk`` resolves regardless
     of console-script PATH discovery. It runs ``python -m agenttalk`` with a
@@ -15463,9 +15485,9 @@ def agenttalk_shim(
         "setlocal\r\n"
         f'if not defined AGENTTALK_PYTHON set "AGENTTALK_PYTHON={py}"\r\n'
         # %~dp0 = <root>\\.agenttalk\\bin\\ ; ..\\..\\src = <root>\\src
-        'if exist "%~dp0..\\..\\src\\agenttalk\\__init__.py" '
-        'set "PYTHONPATH=%~dp0..\\..\\src;%PYTHONPATH%"\r\n'
-        '"%AGENTTALK_PYTHON%" -m agenttalk %*\r\n'
+        + ('set "PYTHONPATH=%~dp0..\\..\\src;%PYTHONPATH%"\r\n' if source_checkout else '')
+        + ('"%AGENTTALK_PYTHON%" -m agenttalk %*\r\n' if source_checkout else
+           '"%AGENTTALK_PYTHON%" -I -m agenttalk %*\r\n')
     )
 
 
@@ -15642,6 +15664,22 @@ class ArtifactValidationError(RuntimeError):
     pass
 
 
+def _read_recorded_source_mode(path: Path) -> bool:
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except FileNotFoundError:
+        return False
+    matches = re.findall(r"(?m)^\$SrcOnPyPath = \$(true|false)\s*$", text, re.IGNORECASE)
+    if len(matches) != 1:
+        raise ArtifactValidationError("supervisor.ps1 has a missing or duplicate source mode")
+    return matches[0].lower() == "true"
+
+
+def recorded_source_mode(store: Store) -> bool:
+    """Read the mode baked into the existing supervisor, if one exists."""
+    return _read_recorded_source_mode(store.dir / "supervisor.ps1")
+
+
 def _baked_python_pin(raw: bytes) -> str:
     if raw.startswith(b"\xef\xbb\xbf"):
         raise ArtifactValidationError("bin/agenttalk.cmd must be BOM-free")
@@ -15662,10 +15700,11 @@ def _marker_placeholder_bundle(
     store: Store,
     *,
     python_exe: str | None = None,
+    source_checkout: bool = False,
 ) -> dict[str, bytes]:
     py = python_exe or sys.executable
     checkout_id = hashlib.sha256(str(store.root).encode("utf-8")).hexdigest()
-    src_is_checkout = (store.root / "src" / "agenttalk" / "__init__.py").exists()
+    src_is_checkout = source_checkout
     wrapper_log_root = wrapper_log.default_wrapper_log_root(store.root)
     substitutions = {
         "__AGENTTALK_ARTIFACT_MARKER__": _PS_MARKER,
@@ -15692,7 +15731,7 @@ def _marker_placeholder_bundle(
         "supervisor.ps1": render_ps(PS_TEMPLATE),
         "supervisor-task.ps1": render_ps(TASK_PS_TEMPLATE),
         "deadman.ps1": render_ps(DEADMAN_PS_TEMPLATE),
-        "bin/agenttalk.cmd": agenttalk_shim(py, checkout_id).encode("utf-8"),
+        "bin/agenttalk.cmd": agenttalk_shim(py, checkout_id, source_checkout).encode("utf-8"),
     }
 
 
@@ -15710,8 +15749,9 @@ def render_artifact_bundle(
     store: Store,
     *,
     python_exe: str | None = None,
+    source_checkout: bool = False,
 ) -> dict[str, bytes]:
-    placeholder = _marker_placeholder_bundle(store, python_exe=python_exe)
+    placeholder = _marker_placeholder_bundle(store, python_exe=python_exe, source_checkout=source_checkout)
     generation = artifact_generation(placeholder)
     token = _GENERATION_PLACEHOLDER.encode("ascii")
     return {relative: data.replace(token, generation.encode("ascii"))
@@ -15755,7 +15795,7 @@ def inspect_artifact_bundle(
             errors.append(str(exc))
     if python_exe is None:
         return {"ok": False, "errors": errors, "markers": {}}
-    expected = render_artifact_bundle(store, python_exe=python_exe)
+    expected = render_artifact_bundle(store, python_exe=python_exe, source_checkout=recorded_source_mode(store))
     for relative in required:
         path = store.dir / Path(relative)
         try:
@@ -15808,6 +15848,7 @@ def refresh_artifacts(
     store: Store,
     *,
     python_exe: str | None = None,
+    source_checkout: bool | None = None,
     replace: Callable[[str | os.PathLike[str], str | os.PathLike[str]], None] = os.replace,
     replace_hook: Callable[[str, str], None] | None = None,
 ) -> dict[str, str]:
@@ -15816,7 +15857,9 @@ def refresh_artifacts(
     The replacements are deliberately per-file, not group-atomic.  A partial
     failure is detected by boundary validation and a rerun converges.
     """
-    bundle = render_artifact_bundle(store, python_exe=python_exe)
+    if source_checkout is None:
+        source_checkout = recorded_source_mode(store)
+    bundle = render_artifact_bundle(store, python_exe=python_exe, source_checkout=source_checkout)
     staged: dict[str, Path] = {}
     for relative, data in bundle.items():
         destination = store.dir / Path(relative)
@@ -15855,7 +15898,8 @@ def refresh_artifacts(
     return {str(store.dir / Path(relative)): "written" for relative in ARTIFACT_RELATIVE_PATHS}
 
 
-def init(store: Store, *, force: bool = False, python_exe: str | None = None) -> dict:
+def init(store: Store, *, force: bool = False, python_exe: str | None = None,
+         source_checkout: bool = False) -> dict:
     """Create config once and render the four detectable generated artifacts.
 
     ``force`` refreshes only generated scripts/shim.  An existing
@@ -15872,7 +15916,7 @@ def init(store: Store, *, force: bool = False, python_exe: str | None = None) ->
 
     paths = [store.dir / Path(relative) for relative in ARTIFACT_RELATIVE_PATHS]
     if force or not any(path.exists() for path in paths):
-        out.update(refresh_artifacts(store, python_exe=python_exe))
+        out.update(refresh_artifacts(store, python_exe=python_exe, source_checkout=source_checkout))
     else:
         for path in paths:
             out[str(path)] = "exists" if path.exists() else "missing"

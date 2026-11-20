@@ -1,5 +1,14 @@
 # Setting up agenttalk for the first time: a brief for the lead
 
+For an installed seat, use the isolated command shown below. A strict Claude
+seat's old allow rule must be replaced with the exact new rule printed by
+`agenttalk wrap`, for example `Bash("<python path>" -I -m agenttalk *)`.
+Make that settings change yourself; the wrapper does not grant permissions.
+Trust the project interactively where Claude Code requires it. The new rule
+still needs a separate permission-engine check in the deployed Claude version.
+For a deliberate source checkout, choose `supervise --init --source-checkout`
+or set `PYTHONPATH` to the checkout's `src` for a manual wrapper and omit `-I`.
+
 **In plain words:** agenttalk lets several AI assistants work as one team on the same
 project, leaving each other messages as files so that nothing is lost when a session
 ends. This brief tells you, the first assistant, how to set that team up well: check
@@ -57,13 +66,13 @@ item is explained in the step named after it.
 - Examples come in two forms. **PowerShell** is for Windows. **sh** is for Linux and
   macOS. Steps that differ by system say so. Where this brief says *not yet checked*,
   the command is a standard one for that system, but it has not been run there yet.
-- **Reading a PowerShell example on Linux or macOS:** write `"$AGENTTALK_PY" -m agenttalk ...`
-  where it says `& $env:AGENTTALK_PY -m agenttalk ...`, and end a continued line with a
+- **Reading a PowerShell example on Linux or macOS:** write `"$AGENTTALK_PY" -I -m agenttalk ...`
+  where it says `& $env:AGENTTALK_PY -I -m agenttalk ...`, and end a continued line with a
   backslash (`\`) where it ends with a backtick. Single commands (the roster, `status`,
   `install-skills`, `knowledge`) have no other difference, so they are shown once. Where
   quoting or the long lines differ (the "ok" test, work orders, review requests), the sh
   form is shown too.
-- Some commands start with `"$AGENTTALK_PY" -m agenttalk` instead of `agenttalk`.
+- Some commands start with `"$AGENTTALK_PY" -I -m agenttalk` instead of `agenttalk`.
   `AGENTTALK_PY` is the full, **absolute** path of the Python that has agenttalk installed
   (step 2); a relative path breaks as soon as a command runs from another folder.
   Use that form: it works even when `agenttalk` is not on the PATH, and a new shell
@@ -179,7 +188,7 @@ agenttalk is installed from its GitHub release tag, not from the Python package 
 python -m venv "<env>"
 & "<env>\Scripts\python.exe" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.101.1"
 $env:AGENTTALK_PY = "<env>\Scripts\python.exe"
-& $env:AGENTTALK_PY -m agenttalk --version
+& $env:AGENTTALK_PY -I -m agenttalk --version
 ```
 
 ```sh
@@ -187,7 +196,7 @@ $env:AGENTTALK_PY = "<env>\Scripts\python.exe"
 python3 -m venv --copies "<env>"
 "<env>/bin/python" -m pip install "git+https://github.com/zoolok17/agenttalk.git@v0.101.1"
 export AGENTTALK_PY="<env>/bin/python"
-"$AGENTTALK_PY" -m agenttalk --version
+"$AGENTTALK_PY" -I -m agenttalk --version
 ```
 
 Expected last line: `agenttalk 0.101.1`. Write `<env>` as an absolute path (for example
@@ -209,7 +218,7 @@ commands. They go into **your human's own user folders**, so they apply to every
 project, not just this one. Look first:
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk install-skills --dry-run
+& $env:AGENTTALK_PY -I -m agenttalk install-skills --dry-run
 ```
 
 It lists each file it would write. Files marked `= unchanged` are already current. A
@@ -234,14 +243,14 @@ script, its logs. Make it a folder of its own. It does not need to be a git
 repository.
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk init --path "<team>" --agents lead,builder-1,builder-2,reviewer
+& $env:AGENTTALK_PY -I -m agenttalk init --path "<team>" --agents lead,builder-1,builder-2,reviewer
 ```
 
 That creates `<team>/.agenttalk/` and the four seat names. Change the names to fit
 (step 3). Check it:
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" status
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" status
 ```
 
 You should see your four names, `messages: 0`, and `(no heartbeat)` for each: nobody
@@ -331,16 +340,16 @@ Letters, digits and hyphens work. A name can never be reused once retired, so pi
 names you are happy to keep.
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-role lead lead
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-role builder-1 developer
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-role builder-2 developer
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-role reviewer reviewer
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-operator-facing lead
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-model-vendor lead anthropic
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-model-vendor builder-1 anthropic
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-model-vendor builder-2 anthropic
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster set-model-vendor reviewer openai
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" roster
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-role lead lead
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-role builder-1 developer
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-role builder-2 developer
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-role reviewer reviewer
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-operator-facing lead
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-model-vendor lead anthropic
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-model-vendor builder-1 anthropic
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-model-vendor builder-2 anthropic
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster set-model-vendor reviewer openai
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" roster
 ```
 
 - `set-operator-facing` marks you as the one seat your human talks to. Questions that
@@ -432,8 +441,8 @@ lessons before work). State these yourself as well:
    folder by hand; use agenttalk commands.
 2. Never use the live team store for tests. To try a command, make a throwaway
    store first, and put the line it prints in front of your commands. In sh:
-   `"$AGENTTALK_PY" -m agenttalk scratch store --shell bash`. In PowerShell:
-   `& $env:AGENTTALK_PY -m agenttalk scratch store --shell powershell`.
+   `"$AGENTTALK_PY" -I -m agenttalk scratch store --shell bash`. In PowerShell:
+   `& $env:AGENTTALK_PY -I -m agenttalk scratch store --shell powershell`.
    Use the scratch-store line only for trying commands; run the project's tests
    in a separate shell without it, as CONTRIBUTING.md describes.
 3. Your own agenttalk commands (reply, knowledge publish, progress) are fine.
@@ -778,13 +787,13 @@ equivalent tree stop was run with a seat that had a long-running command under i
    of your human's account):
 
    ```powershell
-   & $env:AGENTTALK_PY -m agenttalk --root "<team>" send --from lead --to builder-1 --kind question -m "Reply with the single word ok. Do not run any other command."
-   & $env:AGENTTALK_PY -m agenttalk --root "<team>" wait --for lead --timeout 120
+   & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" send --from lead --to builder-1 --kind question -m "Reply with the single word ok. Do not run any other command."
+   & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" wait --for lead --timeout 120
    ```
 
    ```sh
-   "$AGENTTALK_PY" -m agenttalk --root "<team>" send --from lead --to builder-1 --kind question -m "Reply with the single word ok. Do not run any other command."
-   "$AGENTTALK_PY" -m agenttalk --root "<team>" wait --for lead --timeout 120
+   "$AGENTTALK_PY" -I -m agenttalk --root "<team>" send --from lead --to builder-1 --kind question -m "Reply with the single word ok. Do not run any other command."
+   "$AGENTTALK_PY" -I -m agenttalk --root "<team>" wait --for lead --timeout 120
    ```
 
    Do not write "do not run any command" in such a message: a reply is itself an
@@ -838,13 +847,13 @@ it too, in case you run them first.)
 # PowerShell
 New-Item -ItemType Directory -Force "<team>\inbox" | Out-Null
 $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
-Start-Process -FilePath $env:AGENTTALK_PY -WindowStyle Hidden -ArgumentList @('-m','agenttalk','--root','"<team>"','wait','--for','lead','--timeout','1800') -RedirectStandardOutput "<team>\inbox\wait-$stamp.txt"
+Start-Process -FilePath $env:AGENTTALK_PY -WindowStyle Hidden -ArgumentList @('-I','-m','agenttalk','--root','"<team>"','wait','--for','lead','--timeout','1800') -RedirectStandardOutput "<team>\inbox\wait-$stamp.txt"
 ```
 
 ```sh
 # sh
 mkdir -p "<team>/inbox"
-"$AGENTTALK_PY" -m agenttalk --root "<team>" wait --for lead --timeout 1800 > "$(mktemp "<team>/inbox/wait-$(date +%Y%m%d-%H%M%S)-XXXXXX")" &
+"$AGENTTALK_PY" -I -m agenttalk --root "<team>" wait --for lead --timeout 1800 > "$(mktemp "<team>/inbox/wait-$(date +%Y%m%d-%H%M%S)-XXXXXX")" &
 ```
 
 When the job ends, read that file and act on it. An empty file after 30 minutes means
@@ -859,13 +868,13 @@ nothing arrived.
    ```powershell
    New-Item -ItemType Directory -Force "<team>\inbox" | Out-Null
    $stamp = (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + [guid]::NewGuid().ToString('N').Substring(0, 6)
-   & $env:AGENTTALK_PY -m agenttalk --root "<team>" drain --for lead -n 50 | Out-File "<team>\inbox\$stamp.txt" -Encoding utf8
+   & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" drain --for lead -n 50 | Out-File "<team>\inbox\$stamp.txt" -Encoding utf8
    ```
 
    ```sh
    mkdir -p "<team>/inbox"
    f=$(mktemp "<team>/inbox/$(date +%Y%m%d-%H%M%S)-XXXXXX")     # a new, unique file every time
-   "$AGENTTALK_PY" -m agenttalk --root "<team>" drain --for lead -n 50 > "$f"
+   "$AGENTTALK_PY" -I -m agenttalk --root "<team>" drain --for lead -n 50 > "$f"
    ```
 
    `drain` consumes your messages: afterwards they no longer show as unread. A reply
@@ -930,13 +939,13 @@ inside a plain `question` as data and reports it instead of running it (checked)
 hand out work with `agenttalk task`:
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" task --from lead --to builder-1 `
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" task --from lead --to builder-1 `
   --work-item first-day --stage build --work-round 1 --work-head <full commit id> `
   --subject "First-day change" --file "<team>\orders\first-day-build.md"
 ```
 
 ```sh
-"$AGENTTALK_PY" -m agenttalk --root "<team>" task --from lead --to builder-1 \
+"$AGENTTALK_PY" -I -m agenttalk --root "<team>" task --from lead --to builder-1 \
   --work-item first-day --stage build --work-round 1 --work-head <full commit id> \
   --subject "First-day change" --file "<team>/orders/first-day-build.md"
 ```
@@ -980,13 +989,13 @@ with a reason).
 Ask for a review with a `review-request`:
 
 ```powershell
-& $env:AGENTTALK_PY -m agenttalk --root "<team>" send --from lead --to reviewer --kind review-request `
+& $env:AGENTTALK_PY -I -m agenttalk --root "<team>" send --from lead --to reviewer --kind review-request `
   --meta work_item=first-day --meta stage=read --meta work_round=1 --meta work_head=<full commit id> `
   --subject "Review the first-day change" --file "<team>\orders\first-day-review.md"
 ```
 
 ```sh
-"$AGENTTALK_PY" -m agenttalk --root "<team>" send --from lead --to reviewer --kind review-request \
+"$AGENTTALK_PY" -I -m agenttalk --root "<team>" send --from lead --to reviewer --kind review-request \
   --meta work_item=first-day --meta stage=read --meta work_round=1 --meta work_head=<full commit id> \
   --subject "Review the first-day change" --file "<team>/orders/first-day-review.md"
 ```
@@ -1054,7 +1063,7 @@ each session.
   trap), the seat writes one lesson:
 
   ```powershell
-  & $env:AGENTTALK_PY -m agenttalk --root "<team>" knowledge publish --from builder-1 --type lesson `
+  & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" knowledge publish --from builder-1 --type lesson `
     --key <short-stable-name> --scope test --trigger "when this applies" `
     -m "The insight, in terms of behaviour." --evidence-ref <request id or commit> `
     --applies-to <tag1,tag2> `
@@ -1083,9 +1092,9 @@ each session.
   domain, which is `process` in 0.101.1 (see above):
 
   ```powershell
-  & $env:AGENTTALK_PY -m agenttalk --root "<team>" knowledge search --type lesson --include-uncurated -- <word>
-  & $env:AGENTTALK_PY -m agenttalk --root "<team>" knowledge curate verify --from lead --domain process --key <key> --reason "checked"
-  & $env:AGENTTALK_PY -m agenttalk --root "<team>" knowledge curate retract --from lead --domain process --key <key> --reason "wrong because ..."
+  & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" knowledge search --type lesson --include-uncurated -- <word>
+  & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" knowledge curate verify --from lead --domain process --key <key> --reason "checked"
+  & $env:AGENTTALK_PY -I -m agenttalk --root "<team>" knowledge curate retract --from lead --domain process --key <key> --reason "wrong because ..."
   ```
 
   Do this at each check-in. `knowledge onboard --for <seat>` prints what a new seat

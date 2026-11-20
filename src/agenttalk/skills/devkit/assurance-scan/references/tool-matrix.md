@@ -1,6 +1,6 @@
 # assurance-scan tool matrix
 
-Audience: agents and reviewers invoking `python -m agenttalk.assurance`.
+Audience: agents and reviewers invoking `python -I -m agenttalk.assurance`.
 
 The scanner does not mutate project source or take custody of coverage report
 paths. It does write explicit AgentTalk lock/generation and gate state plus
@@ -249,3 +249,4 @@ Other languages:
 - v1 does not claim complete assurance for these stacks. Missing or stubbed rows
   create residual risk instead of false pass evidence.
 - Rust SECURE is never satisfied by basic quality checks alone.
+

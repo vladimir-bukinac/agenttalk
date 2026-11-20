@@ -2416,8 +2416,10 @@ def test_agenttalk_shim_resolves_both_install_modes() -> None:
     shim = sup.agenttalk_shim(r"C:\py\python.exe")
     assert "-m agenttalk %*" in shim                       # pip-install path
     assert 'AGENTTALK_PYTHON=C:\\py\\python.exe' in shim    # known python baked
-    assert "src\\agenttalk\\__init__.py" in shim           # source-checkout guard
-    assert "PYTHONPATH" in shim
+    assert " -I -m agenttalk %*" in shim
+    assert "PYTHONPATH" not in shim
+    source = sup.agenttalk_shim(r"C:\py\python.exe", source_checkout=True)
+    assert "PYTHONPATH" in source and " -I -m agenttalk" not in source
     assert "AGENTTALK_SHIM_PARENT" not in shim
 
 
@@ -3554,7 +3556,7 @@ def test_ps_template_seeds_preflights_and_drops_baked_python_for_agent() -> None
     # the sandbox flags drift across Codex CLI releases and a hard-coded probe
     # false-fail-closed on valid agents.
     assert "$env:CODEX_HOME = $codexHome" in codex_branch    # still under the codex home
-    assert "& $AgenttalkPython -m agenttalk --version" in codex_branch
+    assert "& $AgenttalkPython @AgenttalkModuleFlags -m agenttalk --version" in codex_branch
     assert "& $file sandbox" not in codex_branch             # no codex sandbox probe
     assert "-P :workspace" not in codex_branch               # the drift-prone flag is gone
     # Phase C: a WRAPPED agent is preflighted before the codex branch using the
@@ -9501,10 +9503,12 @@ def _launch_admission_runtime_blocks(tmp_path: Path) -> tuple[str, str, str]:
     ids=lambda value: Path(value).stem if value else "unavailable",
 )
 @pytest.mark.parametrize("loop_option", ["--lo", "--loo"])
+@pytest.mark.parametrize("source_mode", [False, True])
 def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argument(
     tmp_path: Path,
     shell: str | None,
     loop_option: str,
+    source_mode: bool,
 ) -> None:
     """The typed artifact, not a second reconstruction, is executed.
 
@@ -9516,7 +9520,20 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         pytest.skip("Windows PowerShell hosts are unavailable")
     helpers, quote_arg, launchers = _launch_admission_runtime_blocks(tmp_path)
     cwd = str(tmp_path)
-    launch_root = "R"
+    launch_root = str(tmp_path)
+    if source_mode:
+        source_package = tmp_path / "src" / "agenttalk"
+        source_package.mkdir(parents=True)
+        (source_package / "__init__.py").write_text("", encoding="utf-8")
+        (source_package / "__main__.py").write_text(
+            "import os\nfrom pathlib import Path\n"
+            "Path(os.environ['AGENTTALK_ROOT'], 'source-ran').write_text('source')\n",
+            encoding="utf-8",
+        )
+    sup.init(Store(tmp_path), force=True, source_checkout=source_mode)
+    recorded_source = sup.recorded_source_mode(Store(tmp_path))
+    assert recorded_source is source_mode
+    python_file = sys.executable if source_mode else "python.exe"
     regular_argv = [
         "-m", "agenttalk", "--root", launch_root, "wrap", "--for", "worker",
         "--cli", "codex", loop_option, "--", "codex.exe", "alpha", "", "omega",
@@ -9534,7 +9551,7 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
                 "wrapped": True,
                 "cwd": cwd,
                 "launch": {
-                    "windows_file": "python.exe",
+                    "windows_file": python_file,
                     "windows_args": regular_argv,
                     "module_args_from": 0,
                 },
@@ -9554,6 +9571,7 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         regular_plan,
         regular_config,
         root=launch_root,
+        source_checkout=recorded_source,
     )
     regular_artifact = regular_plan["agents"]["worker"]["launch_admission"]
     assert regular_artifact["status"] == "accepted"
@@ -9562,7 +9580,7 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         "wrapped": True,
         "cwd": cwd,
         "launch": {
-            "windows_file": "python.exe",
+            "windows_file": python_file,
             "windows_args": ephemeral_argv,
             "module_args_from": 0,
         },
@@ -9573,6 +9591,7 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         agent="reviewer",
         root=launch_root,
         request_id="R1",
+        source_checkout=recorded_source,
     )
     assert ephemeral_problem is None
     assert ephemeral_candidate is not None
@@ -9617,7 +9636,7 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         "$ErrorActionPreference = 'Stop'",
         f"$Root = {_pslit(launch_root)}",
         "$AgenttalkPython = 'python.exe'",
-        "$SrcOnPyPath = $false",
+        f"$SrcOnPyPath = ${str(recorded_source).lower()}",
         "$WrapperLogMaxBytes = 1024",
         "$WrapperLogSegments = 2",
         "$WrapperLogEnvKeys = @()",
@@ -9630,11 +9649,17 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         "function Discard-PendingWrapperLogTargets($targets) {}",
         "function Proc-Start($id) { return '1' }",
         "function Start-WrapperProcess($startArgs) {",
+        "  if ($SrcOnPyPath -and $script:caseName -ne 'manual') {",
+        "    $child = Start-Process -FilePath $startArgs.FilePath -ArgumentList $startArgs.ArgumentList `",
+        "      -WorkingDirectory $startArgs.WorkingDirectory -WindowStyle Hidden -Wait -PassThru",
+        "    if ($child.ExitCode -ne 0) { throw 'source child failed' }",
+        "  }",
         "  $script:rows += [pscustomobject]@{",
         "    name = $script:caseName",
         "    file = [string]$startArgs.FilePath",
         "    cwd = [string]$startArgs.WorkingDirectory",
         "    argument_line = [string]$startArgs.ArgumentList",
+        "    pythonpath = [string]$env:PYTHONPATH",
         "  }",
         "  return [pscustomobject]@{",
         "    Process = [pscustomobject]@{ Id = 4242 }",
@@ -9700,19 +9725,26 @@ def test_launchers_consume_accepted_admission_argv_without_dropping_empty_argume
         ("ephemeral", ephemeral_argv),
     ):
         row = rows[name]
-        assert row["file"] == "python.exe", row
+        assert row["file"] == python_file, row
         assert row["cwd"] == cwd, row
         serialized = row["argument_line"].split(" ")
+        prefix = [] if source_mode else ["-I"]
+        assert serialized[:len(prefix)] == prefix
+        serialized = serialized[len(prefix):]
         assert serialized[:3] == [
             "-m", "agenttalk", "--supervisor-launch-nonce",
         ], row
         assert re.fullmatch(r"[0-9a-f]{32}", serialized[3]), row
         expected = [token if token else '\"\"' for token in admitted_argv]
         assert serialized[4:] == expected[2:], row
+        if source_mode:
+            assert row["pythonpath"].split(";")[0] == str(tmp_path / "src")
     manual_row = rows["manual"]
     assert manual_row["file"] == "configured.exe"
     assert manual_row["cwd"] == cwd
     assert manual_row["argument_line"].split(" ") == ["alpha", '\"\"', "omega"]
+    if source_mode:
+        assert (tmp_path / "source-ran").read_text(encoding="utf-8") == "source"
 
 
 @pytest.mark.parametrize(

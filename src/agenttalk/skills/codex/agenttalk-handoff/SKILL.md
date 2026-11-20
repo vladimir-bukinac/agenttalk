@@ -27,15 +27,15 @@ PEER="${AGENTTALK_PEER:-claude}"
 ```
 
 `PEER` is the default target for the canonical two-agent pair. In a
-larger roster, use `python -m agenttalk roster` and choose the reviewer or
+larger roster, use `python -I -m agenttalk roster` and choose the reviewer or
 consultant explicitly, e.g. `claude-rev` or `codex-rev`. Always
 resolve inside your current shell - env from prior tool calls does not
 persist across separate tool-call processes.
 
 If `.agenttalk/` is not under the current directory, pass `--root
 <path>` before the subcommand on every invocation, for example
-`python -m agenttalk --root <path> send --from "$SELF" --to "$PEER" ...`. Do
-not write `python -m agenttalk send --root ...`; global options must precede the
+`python -I -m agenttalk --root <path> send --from "$SELF" --to "$PEER" ...`. Do
+not write `python -I -m agenttalk send --root ...`; global options must precede the
 subcommand.
 
 ## Invoking agenttalk under the Codex sandbox
@@ -43,19 +43,19 @@ subcommand.
 Run bus commands from the current project WORKSPACE cwd, using AGENTTALK_ROOT for that workspace when it is set. If `AGENTTALK_PY` is set, invoke the bus with the pinned interpreter. In Bash:
 
 ```bash
-"$AGENTTALK_PY" -m agenttalk <subcommand> ...
+"$AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 In PowerShell:
 
 ```powershell
-& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...
+& "$env:AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 If `AGENTTALK_PY` is not set, fall back to the runnable module form:
 
 ```bash
-python -m agenttalk <subcommand> ...
+python -I -m agenttalk <subcommand> ...
 ```
 
 Treat `agenttalk` as the installed/runtime package for this environment. Do NOT cd to, import from, or reference an agenttalk SOURCE checkout outside the workspace for bus I/O: no `..\agenttalk`, no sibling source paths, and no `D:\Projects\claude\agenttalk`. The only source-tree exception is when the current workspace itself is the agenttalk repo being worked on; then `<workspace>\src\agenttalk` is acceptable.
@@ -95,8 +95,8 @@ section.
 - A second opinion before a non-trivial change.
 
 For fire-and-forget (no reply needed), use `$agenttalk-send`. For
-parallel input from several agents, use `python -m agenttalk broadcast --kind
-question`, then track the broadcast with `python -m agenttalk threads`.
+parallel input from several agents, use `python -I -m agenttalk broadcast --kind
+question`, then track the broadcast with `python -I -m agenttalk threads`.
 
 ## Procedure
 
@@ -108,7 +108,7 @@ For the default pair:
 TARGET="${AGENTTALK_PEER:-claude}"
 ```
 
-For a team, inspect `python -m agenttalk roster` and set `TARGET` to the named
+For a team, inspect `python -I -m agenttalk roster` and set `TARGET` to the named
 agent the user requested or the appropriate role-suffixed reviewer:
 
 ```bash
@@ -185,7 +185,7 @@ child turn.
 
 ```bash
 if [ -n "${AGENTTALK_WRAPPER_GENERATION:-}" ]; then
-  python -m agenttalk send --from "$SELF" --to "$TARGET" --kind review-request \
+  python -I -m agenttalk send --from "$SELF" --to "$TARGET" --kind review-request \
     --subject "<one-line>" --meta request_id="$REQ_ID" \
     --meta base_sha=<sha> --meta head_sha=<sha> --meta lane_id=<lane-id> \
     --await-reply -m "$BODY"
@@ -196,13 +196,13 @@ fi
 In a manual/unwrapped session, keep the existing scoped blocking wait:
 
 ```bash
-python -m agenttalk send --from "$SELF" --to "$TARGET" --kind review-request \
+python -I -m agenttalk send --from "$SELF" --to "$TARGET" --kind review-request \
   --subject "<one-line>" \
   --meta request_id="$REQ_ID" \
   --meta base_sha=<sha> --meta head_sha=<sha> \
   --meta lane_id=<lane-id> \
   -m "$BODY"
-python -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind review-result --timeout 600
+python -I -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind review-result --timeout 600
 ```
 
 Default 10-minute timeout. Extend with `--timeout 1800` for big
@@ -210,8 +210,8 @@ reviews, or `0` for no timeout. The scoped wait ignores unrelated
 traffic and does not advance your global cursor.
 
 If `wait` times out: tell the user and ask whether to keep waiting or
-check `python -m agenttalk status` to see whether the target's `last_seen` is
-fresh. Also run `python -m agenttalk sync --for "$SELF"` and `python -m agenttalk threads
+check `python -I -m agenttalk status` to see whether the target's `last_seen` is
+fresh. Also run `python -I -m agenttalk sync --for "$SELF"` and `python -I -m agenttalk threads
 --for "$SELF"`; if your correlated reply is already actionable,
 handle it before asking the user.
 
@@ -230,12 +230,12 @@ If ambiguous or asks for a decision only the human can make,
 Before declaring the handoff handled, run:
 
 ```bash
-python -m agenttalk sync --for "$SELF"
-python -m agenttalk threads --for "$SELF"
+python -I -m agenttalk sync --for "$SELF"
+python -I -m agenttalk threads --for "$SELF"
 ```
 
 Resolve any `reply-waiting` or `owed-inbound` rows. If multiple
-threads are open, use `python -m agenttalk reply --from "$SELF" --to-id <message_id>` or
+threads are open, use `python -I -m agenttalk reply --from "$SELF" --to-id <message_id>` or
 `--to-request <request_id>` so the reply echoes the intended
 `request_id`.
 
@@ -243,7 +243,7 @@ threads are open, use `python -m agenttalk reply --from "$SELF" --to-id <message
 
 Scoped wait intentionally ignores unrelated traffic. If your own
 request is outstanding but you suspect another urgent thread may be
-waiting on you, run `python -m agenttalk sync --for "$SELF"` and `python -m agenttalk
+waiting on you, run `python -I -m agenttalk sync --for "$SELF"` and `python -I -m agenttalk
 threads --for "$SELF"`. Handle the older or more urgent thread first
 to avoid both sides blocking each other, then resume the scoped wait
 for your request.
@@ -259,7 +259,7 @@ for your request.
 - **Check before irreversible actions (0.14.0).** Immediately before any
   irreversible action tied to a tracked request (merge, release, deploy,
   delete, fire-type actions), run
-  `python -m agenttalk check --for $SELF --to-request <RID> --epoch`. Exit 3 = the
+  `python -I -m agenttalk check --for $SELF --to-request <RID> --epoch`. Exit 3 = the
   request was RESCINDED or was sent before the latest epoch barrier:
   hard stop — do not act, and reply on the thread that you aborted.
   Exit 4 = unknown id: treat as stale and re-confirm with the
@@ -267,7 +267,9 @@ for your request.
   `--epoch` the check ignores barriers. When assurance gates apply, add
   `--gates` to the same check; exit 3 also means HOLD.
 - **Mark long drafts (0.14.0).** While drafting a long reply on a known
-  thread, ping `python -m agenttalk composing --from $SELF --to-request <RID>`
+  thread, ping `python -I -m agenttalk composing --from $SELF --to-request <RID>`
   (repeat roughly every 2 minutes). It extends the peer's scoped wait AND
   shows "(reply in flight)" in their threads/sync, preventing crossing
   messages. Prefer it over a hand-built `--meta request_id=...`.
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.

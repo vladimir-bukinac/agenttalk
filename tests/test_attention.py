@@ -852,7 +852,7 @@ def test_process_tree_refusal_is_operator_visible_with_working_manual_launch(
         "mode": "detached",
         "argv": [
             r"C:\Python\python.exe",
-            "-m", "agenttalk", "--root", root, "wrap", "--for", "worker",
+            "-I", "-m", "agenttalk", "--root", root, "wrap", "--for", "worker",
             "--loop", "--", r"C:\Codex\codex.exe",
         ],
         "cwd": "worker space",
@@ -1527,6 +1527,7 @@ def test_configured_launch_preserves_empty_argument_elements(
 
     assert item["configured_launch"]["argv"] == [
         windows_file,
+        *(["-I"] if wrapped else []),
         *[
             value.replace("{ROOT}", root)
             for value in windows_args
@@ -1610,7 +1611,7 @@ def test_process_tree_hold_hash_resurfaces_for_new_restart_and_launch() -> None:
         reset_admissions=_NO_RESET_ADMITTED,
     )[0]
     assert with_launch["source_hash"] != initial["source_hash"]
-    assert with_launch["configured_launch"]["argv"][3:6] == [
+    assert with_launch["configured_launch"]["argv"][4:7] == [
         "--root", r"D:\fleet", "wrap",
     ]
 
@@ -1874,6 +1875,7 @@ def _refresh_ephemeral_launch_binding(
         root=root,
         request_id=marker["request_id"],
         lane_id=marker.get("lane_id"),
+        source_checkout=bool(spec["recovery_environment"].get("PYTHONPATH_prepend")),
     )
     assert problem is None and candidate is not None
     spec["launch_admission"] = candidate.artifact()
@@ -1989,8 +1991,9 @@ def test_ephemeral_hold_uses_its_request_profile_for_detached_launch(
     assert configured["cwd"] == config["ephemeral_reviewers"][
         "allowed_profiles"
     ]["codex-evidence-reviewer"]["cwd"]
-    assert configured["argv"][:3] == [
+    assert configured["argv"][:4] == [
         str(Path(sys.executable).resolve()),
+        "-I",
         "-m",
         "agenttalk",
     ]

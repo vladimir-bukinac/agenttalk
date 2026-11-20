@@ -234,7 +234,7 @@ The wrapper hands the agent **one message per turn** and keeps the bookkeeping i
 flowchart TB
     TASK["Windows Scheduled Task (optional)"] --> SUP
     SUP["supervisor.ps1: thin PowerShell script, polls every 15 s by default"]
-    SUP -->|"asks each poll"| PLAN["python -m agenttalk supervise --plan: all decisions are made here"]
+    SUP -->|"asks each poll"| PLAN["python -I -m agenttalk supervise --plan: all decisions are made here"]
     SUP -->|"starts / stops"| W1["Wrapper for agent A: agenttalk wrap --loop"]
     SUP -->|"starts / stops"| W2["Wrapper for agent B"]
     SUP -->|"once per poll"| DR["supervise --drain-intents: carries out console requests"]

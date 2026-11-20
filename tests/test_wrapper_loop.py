@@ -89,8 +89,8 @@ def test_prompt_default_shell_is_powershell_unchanged() -> None:
            "id": "m-1", "correlation_id": "c-1", "request_id": "c-1",
            "broadcast_id": None}
     p = prompt.assemble_turn_prompt(rec)
-    assert '& "$env:AGENTTALK_PY" -m agenttalk reply' in p
-    assert '"$AGENTTALK_PY" -m agenttalk' not in p     # no bare bash form
+    assert '& "$env:AGENTTALK_PY" -I -m agenttalk reply' in p
+    assert '"$AGENTTALK_PY" -I -m agenttalk' not in p     # no bare bash form
 
 
 def test_prompt_bash_shell_rewrites_every_invocation() -> None:
@@ -98,12 +98,12 @@ def test_prompt_bash_shell_rewrites_every_invocation() -> None:
            "id": "m-1", "correlation_id": "c-1", "request_id": "c-1",
            "broadcast_id": None}
     p = prompt.assemble_turn_prompt(rec, reply_shell="bash")
-    assert '"$AGENTTALK_PY" -m agenttalk reply' in p
+    assert '"$AGENTTALK_PY" -I -m agenttalk reply' in p
     assert '$env:AGENTTALK_PY' not in p     # PowerShell env-var syntax gone
     assert '& "' not in p                   # PowerShell call operator gone
     # Every invocation this prompt renders, not just the reply command - the
     # substitution is a single mechanical pass over the WHOLE assembled text.
-    assert p.count('"$AGENTTALK_PY" -m agenttalk') >= 5
+    assert p.count('"$AGENTTALK_PY" -I -m agenttalk') >= 5
 
 
 def test_task_kind_prompt_states_task_response_kind_explicitly() -> None:
@@ -247,7 +247,7 @@ def test_prompt_is_pure_handler_no_consume_full_classification_and_safety() -> N
     # Sending IS the model's job (kept).
     assert "you may send" in low
     for cmd in ("reply", "send", "escalate", "composing", "check"):
-        assert f'& "$env:agenttalk_py" -m agenttalk {cmd}' in low
+        assert f'& "$env:agenttalk_py" -i -m agenttalk {cmd}' in low
     assert not re.search(
         r"(?<!-m )\bagenttalk (reply|send|escalate|composing|check)\b",
         p,
@@ -263,7 +263,7 @@ def test_cadence_prompt_has_bus_contract_and_no_bare_send_commands() -> None:
     assert "never cd to, import from, or reference an agenttalk source checkout outside" in low
     assert "installed/runtime package" in low
     for cmd in ("reply", "send", "escalate", "composing"):
-        assert f'& "$env:agenttalk_py" -m agenttalk {cmd}' in low
+        assert f'& "$env:agenttalk_py" -i -m agenttalk {cmd}' in low
     assert not re.search(
         r"(?<!-m )\bagenttalk (reply|send|escalate|composing|check)\b",
         p,
@@ -277,7 +277,7 @@ def test_cadence_prompt_respects_shell_param() -> None:
     # cadence sweep just as broken as its ordinary turns were.
     p = prompt.assemble_cadence_prompt(
         {"agent": "beta"}, [{"kind": "outbound_reminder"}], reply_shell="bash")
-    assert '"$AGENTTALK_PY" -m agenttalk reply' in p
+    assert '"$AGENTTALK_PY" -I -m agenttalk reply' in p
     assert '$env:AGENTTALK_PY' not in p
 
 
@@ -2673,7 +2673,7 @@ def test_agenttalk_runtime_preflight_uses_workspace_cwd_and_reports_bad_source(
 
     blocked = run.preflight_agenttalk_runtime(workspace_root=workspace, runner=runner)
     assert seen["argv"][0] == seen["env"]["AGENTTALK_PY"]
-    assert seen["argv"][1] == "-c"
+    assert seen["argv"][1:3] == ["-I", "-c"]
     assert seen["cwd"] == str(workspace.resolve())
     assert "AGENTTALK_LEAD_LOOP_LEASE" not in seen["env"]
     assert seen["env"]["AGENTTALK_ROOT"] == str(workspace.resolve())
@@ -3048,7 +3048,7 @@ def test_launch_preflight_resolves_known_npm_codex_shim_and_blocks_unknown(
         [str(shim), "exec"], "codex", tmp_path, env, runner=ok_runner)
     assert res.blocked is None
     assert res.argv == [str(native.resolve()), "exec"]
-    assert seen["argv"] == [sys.executable, "-m", "agenttalk", "--version"]
+    assert seen["argv"] == [sys.executable, "-I", "-m", "agenttalk", "--version"]
 
     unknown = tmp_path / "other" / "codex.cmd"
     unknown.parent.mkdir()
@@ -3169,7 +3169,7 @@ def test_launch_preflight_claude_shim_gives_no_codex_advice(tmp_path) -> None:
     assert "codex" not in remediation.lower()
 
 
-def test_agenttalk_runtime_preflight_ignores_ambiguous_probe_failures(tmp_path) -> None:
+def test_agenttalk_runtime_preflight_blocks_ambiguous_probe_failures(tmp_path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
 
@@ -3179,7 +3179,7 @@ def test_agenttalk_runtime_preflight_ignores_ambiguous_probe_failures(tmp_path) 
     assert run.preflight_agenttalk_runtime(
         workspace_root=workspace,
         runner=os_error_runner,
-    ) is None
+    ) is not None
 
     def transient_rc_runner(_argv, _cwd, _env, _timeout):
         return 1, "temporary import timeout"
@@ -3187,7 +3187,7 @@ def test_agenttalk_runtime_preflight_ignores_ambiguous_probe_failures(tmp_path) 
     assert run.preflight_agenttalk_runtime(
         workspace_root=workspace,
         runner=transient_rc_runner,
-    ) is None
+    ) is not None
 
     def malformed_runner(_argv, _cwd, _env, _timeout):
         return 0, "not json"
@@ -3195,7 +3195,7 @@ def test_agenttalk_runtime_preflight_ignores_ambiguous_probe_failures(tmp_path) 
     assert run.preflight_agenttalk_runtime(
         workspace_root=workspace,
         runner=malformed_runner,
-    ) is None
+    ) is not None
 
 
 def test_agenttalk_runtime_preflight_parks_denied_source_probe(tmp_path) -> None:

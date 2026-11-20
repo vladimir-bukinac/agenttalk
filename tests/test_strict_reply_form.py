@@ -26,7 +26,7 @@ def _python(tmp_path, folder="with space"):
 
 
 def _written(path: str) -> str:
-    return '"' + (path.replace("\\", "/") if os.name == "nt" else path) + '" -m agenttalk'
+    return '"' + (path.replace("\\", "/") if os.name == "nt" else path) + '" -I -m agenttalk'
 
 
 def test_strict_mode_renders_the_written_out_path_with_a_space(tmp_path) -> None:
@@ -49,7 +49,7 @@ def test_a_windows_path_is_written_with_forward_slashes(tmp_path) -> None:
     py = _python(tmp_path, "plain")
     assert "\\" in py
     assert prompt.strict_reply_invocation("claude", ["claude", "--permission-mode=acceptEdits"], py) == (
-        '"' + py.replace("\\", "/") + '" -m agenttalk')
+        '"' + py.replace("\\", "/") + '" -I -m agenttalk')
 
 
 @pytest.mark.skipif(os.name == "nt", reason="Windows cannot name a file with a backslash")
@@ -72,7 +72,7 @@ def test_a_posix_path_with_a_star_keeps_the_old_form(monkeypatch) -> None:
     monkeypatch.setattr(prompt, "os", SimpleNamespace(
         name="posix", path=SimpleNamespace(isabs=posixpath.isabs, isfile=lambda _path: True)))
     assert prompt.strict_reply_invocation("claude", STRICT, "/opt/pinned/bin/python") == (
-        '"/opt/pinned/bin/python" -m agenttalk')
+        '"/opt/pinned/bin/python" -I -m agenttalk')
     assert prompt.strict_reply_invocation("claude", STRICT, "/opt/pinned*/bin/python") is None
 
 
@@ -93,7 +93,8 @@ def test_bypass_and_other_launches_stay_byte_identical(tmp_path, cli_name, argv,
     invocation = prompt.strict_reply_invocation(cli_name, argv, _python(tmp_path))
     assert invocation is None
     before = prompt.assemble_turn_prompt(TASK, seat="beta")  # the PowerShell form, as before #822
-    expected = before.replace(prompt._POWERSHELL_INVOCATION, prompt._BASH_INVOCATION) if reply_shell == "bash" \
+    expected = before.replace(prompt._POWERSHELL_INVOCATION.replace(" -m", " -I -m"),
+                              prompt._BASH_INVOCATION.replace(" -m", " -I -m")) if reply_shell == "bash" \
         else before
     assert prompt.assemble_turn_prompt(TASK, reply_shell=reply_shell, reply_invocation=invocation,
                                        seat="beta") == expected
@@ -156,6 +157,8 @@ def _wrap(tmp_path, monkeypatch, py, *tail):
     _store(tmp_path)
     seen: dict = {}
     monkeypatch.setattr(run, "_agenttalk_py", lambda: py)
+    monkeypatch.setattr(run, "select_runtime_mode", lambda *args: "installed")
+    monkeypatch.delenv("AGENTTALK_RUNTIME_MODE", raising=False)
     monkeypatch.setattr(run, "preflight_launch_runtime",
                         lambda argv, _cli, _root, _env: run.LaunchPreflightResult(list(argv)))
     monkeypatch.setattr(cli, "_wrap_loop_mode", lambda store, agent, **kwargs: seen.update(kwargs) or 0)
@@ -173,7 +176,7 @@ def test_wrap_names_the_allow_rule_and_hands_the_form_to_the_loop(tmp_path, monk
     invocation = _written(py)
     assert seen["reply_invocation"] == invocation
     err = capsys.readouterr().err
-    assert f"add this allow rule to its settings: Bash({invocation} *)\n" in err
+    assert f"replace the old allow rule in its settings with: Bash({invocation} *)\n" in err
     assert err.count("allow rule") == 1
 
 

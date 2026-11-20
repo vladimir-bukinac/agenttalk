@@ -2672,7 +2672,8 @@ def _probe_env(store: Store, launch: dict, agent_cfg: dict) -> tuple[dict[str, s
         "AGENTTALK_ROOT": str(store.root),
         "AGENTTALK_PY": str(launch["agenttalk_py"]),
     }
-    src = _source_checkout_src(store.root)
+    from agenttalk.supervisor import recorded_source_mode
+    src = _source_checkout_src(store.root) if recorded_source_mode(store) else None
     if src is not None:
         old = env.get("PYTHONPATH")
         managed["PYTHONPATH"] = str(src) + (os.pathsep + old if old else "")
@@ -2783,7 +2784,11 @@ def _default_codex_runner(exe: str, args: list[str], timeout: float,
 
 def _check_agenttalk_runtime(project_root: Path) -> str | None:
     from agenttalk.wrapper import run as wrapper_run
-    return wrapper_run.preflight_agenttalk_runtime(workspace_root=project_root)
+    from agenttalk.supervisor import recorded_source_mode
+    source = recorded_source_mode(Store(project_root))
+    return wrapper_run.preflight_agenttalk_runtime(
+        workspace_root=project_root, source=source, source_path=project_root / "src" if source else None,
+    )
 
 
 def _call_probe(runner, exe: str, args: list[str], timeout: float,
@@ -2838,11 +2843,20 @@ def _check_supervised_codex(store: Store, *, runner=None, runtime_checker=None) 
     ]
     if not codex_agents:
         return None
+    from agenttalk.supervisor import ArtifactValidationError, recorded_source_mode
+    try:
+        source_mode = recorded_source_mode(store)
+    except (ArtifactValidationError, OSError, UnicodeError) as exc:
+        return Check(name="supervised_codex", status="error",
+                     details=f"Cannot read the supervisor source mode: {exc}",
+                     fix="Regenerate the supervisor scripts with the intended mode.")
 
     entries: list[dict] = []
     any_warn = False
     for name, agent_cfg in codex_agents:
         rec = resolve_supervised_codex_launch(name, agent_cfg, store)
+        rec["runtime_mode"] = "source" if source_mode else "installed"
+        module_args = ([] if source_mode else ["-I"]) + ["-m", "agenttalk", "--version"]
         cwd = Path(agent_cfg.get("cwd") if isinstance(agent_cfg.get("cwd"), str) else store.root)
         env, env_warnings = _probe_env(store, rec, agent_cfg)
         if env_warnings and rec["env_mirror"] == "full":
@@ -2859,7 +2873,7 @@ def _check_supervised_codex(store: Store, *, runner=None, runtime_checker=None) 
         wrapper_probe = {"status": "skipped", "version": None, "reason": ""}
         if rec["wrapped"]:
             wrapper_probe = (
-                _probe_version(runner, rec["wrapper_python"], ["-m", "agenttalk", "--version"],
+                _probe_version(runner, rec["wrapper_python"], module_args,
                                cwd=cwd, env=env, label="wrapper python")
                 if rec["wrapper_python_status"] == "ok"
                 else {"status": "warn", "version": None, "reason": rec["wrapper_python_reason"]}
@@ -2867,7 +2881,7 @@ def _check_supervised_codex(store: Store, *, runner=None, runtime_checker=None) 
             if wrapper_probe["status"] != "ok":
                 warnings.append(str(wrapper_probe["reason"]))
         agenttalk_probe = _probe_version(
-            runner, env.get("AGENTTALK_PY") or rec["agenttalk_py"], ["-m", "agenttalk", "--version"],
+            runner, env.get("AGENTTALK_PY") or rec["agenttalk_py"], module_args,
             cwd=cwd, env=env, label="AGENTTALK_PY",
         )
         if agenttalk_probe["status"] != "ok":
@@ -2897,7 +2911,7 @@ def _check_supervised_codex(store: Store, *, runner=None, runtime_checker=None) 
         version = e["version"] or "UNVERSIONED"
         target = e["base_cli"] or "UNRESOLVED"
         line = (f"{e['agent']} -> {target} [{version}] env_mirror={e['env_mirror']} "
-                f"agenttalk_py={e['agenttalk_py_provenance']}")
+                f"agenttalk_py={e['agenttalk_py_provenance']} runtime_mode={e['runtime_mode']}")
         if e["warnings"]:
             line += " WARN: " + "; ".join(dict.fromkeys(e["warnings"]))
         lines.append(line)

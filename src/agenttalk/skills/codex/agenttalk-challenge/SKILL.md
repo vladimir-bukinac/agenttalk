@@ -23,7 +23,7 @@ SELF="${AGENTTALK_SELF:-codex}"
 
 Always resolve inside your current shell - env from prior tool calls
 does not persist. Pick the challenger from
-`python -m agenttalk roster --json`. If `.agenttalk/` is not under the
+`python -I -m agenttalk roster --json`. If `.agenttalk/` is not under the
 current directory, pass `--root <path>` before the subcommand on every
 invocation.
 
@@ -32,19 +32,19 @@ invocation.
 Run bus commands from the current project WORKSPACE cwd, using AGENTTALK_ROOT for that workspace when it is set. If `AGENTTALK_PY` is set, invoke the bus with the pinned interpreter. In Bash:
 
 ```bash
-"$AGENTTALK_PY" -m agenttalk <subcommand> ...
+"$AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 In PowerShell:
 
 ```powershell
-& "$env:AGENTTALK_PY" -m agenttalk <subcommand> ...
+& "$env:AGENTTALK_PY" -I -m agenttalk <subcommand> ...
 ```
 
 If `AGENTTALK_PY` is not set, fall back to the runnable module form:
 
 ```bash
-python -m agenttalk <subcommand> ...
+python -I -m agenttalk <subcommand> ...
 ```
 
 Treat `agenttalk` as the installed/runtime package for this environment. Do NOT cd to, import from, or reference an agenttalk SOURCE checkout outside the workspace for bus I/O: no `..\agenttalk`, no sibling source paths, and no `D:\Projects\claude\agenttalk`. The only source-tree exception is when the current workspace itself is the agenttalk repo being worked on; then `<workspace>\src\agenttalk` is acceptable.
@@ -110,7 +110,7 @@ changes, or the cost grows by more than 25%.
    ```bash
    REQ_ID="ch-$(uuidgen 2>/dev/null || python -c 'import uuid; print(uuid.uuid4())')"
    if [ -n "${AGENTTALK_WRAPPER_GENERATION:-}" ]; then
-     python -m agenttalk send --from "$SELF" --to <challenger> --kind question \
+     python -I -m agenttalk send --from "$SELF" --to <challenger> --kind question \
        --subject "challenge: <outcome in a few words>" \
        --meta request_id="$REQ_ID" --meta challenge=true --meta round=1 \
        --await-reply --file <brief.md>
@@ -120,11 +120,11 @@ changes, or the cost grows by more than 25%.
    In a manual/unwrapped session, send WITHOUT `--await-reply` (it is
    refused outside a wrapper turn) and use the scoped wait:
    ```bash
-   python -m agenttalk send --from "$SELF" --to <challenger> --kind question \
+   python -I -m agenttalk send --from "$SELF" --to <challenger> --kind question \
      --subject "challenge: <outcome in a few words>" \
      --meta request_id="$REQ_ID" --meta challenge=true --meta round=1 \
      --file <brief.md>
-   python -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind message --timeout 900
+   python -I -m agenttalk wait --for "$SELF" --to-request "$REQ_ID" --kind message --timeout 900
    ```
    Do not dispatch the challenged work while its challenge is pending.
    **Two challengers** (only for money/security/irreversible work or an
@@ -136,11 +136,11 @@ changes, or the cost grows by more than 25%.
    ```bash
    REQ_A="ch-$(uuidgen 2>/dev/null || python -c 'import uuid; print(uuid.uuid4())')"
    REQ_B="ch-$(uuidgen 2>/dev/null || python -c 'import uuid; print(uuid.uuid4())')"
-   python -m agenttalk send --from "$SELF" --to <challenger-a> --kind question \
+   python -I -m agenttalk send --from "$SELF" --to <challenger-a> --kind question \
      --subject "challenge: <outcome in a few words>" \
      --meta request_id="$REQ_A" --meta challenge=true --meta round=1 \
      --await-reply --file <brief.md>
-   python -m agenttalk send --from "$SELF" --to <challenger-b> --kind question \
+   python -I -m agenttalk send --from "$SELF" --to <challenger-b> --kind question \
      --subject "challenge: <outcome in a few words>" \
      --meta request_id="$REQ_B" --meta challenge=true --meta round=1 \
      --await-reply --file <brief.md>
@@ -176,7 +176,7 @@ changes, or the cost grows by more than 25%.
      brief (concur: it stands; disagree: the operator decides), or escalate.
      Do this even when the operator asked for the work:
      ```bash
-     python -m agenttalk escalate --from "$SELF" --subject "challenge verdict: <verdict> on <outcome>" \
+     python -I -m agenttalk escalate --from "$SELF" --subject "challenge verdict: <verdict> on <outcome>" \
        --meta challenge="$REQ_ID" --meta challenge_verdict=<verdict> \
        -m "<headline> | <strongest reason> | <cheapest alternative> - reply GO, DROP or ALT"
      ```
@@ -209,7 +209,7 @@ with the typed CLI command - never a reply draft, which cannot carry the
 verdict meta (a wrapped turn offers no draft channel for a challenge):
 
 ```bash
-python -m agenttalk reply --from "$SELF" --to-request <RID> --kind message \
+python -I -m agenttalk reply --from "$SELF" --to-request <RID> --kind message \
   --meta challenge=true --meta verdict=<proceed|reshape|probe|replace|defer|stop|unassessed> \
   --meta confidence=<high|medium|low> --meta basis=<verified|reasoned|unknown> \
   --meta exposed=<yes|no> --meta minutes=<n> --file <verdict.md>
@@ -255,3 +255,5 @@ Never guess with high confidence.
   contrarianism. Never aim a verdict at a rate. Also watch coverage of
   major work, overrides later reverted, and cost (at most 5% of the
   screened work).
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.

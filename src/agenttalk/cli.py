@@ -14171,6 +14171,7 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
                     lifecycle_log: object | None = None,
                     reply_shell: str = "powershell",
                     reply_invocation: str | None = None,
+                    source: bool = False,
                     turn_events: bool = False) -> int:
     """The long-running supervised wrapper loop (design C): own the idle bus-wait +
     heartbeat, drive the CLI ONE turn per inbound message in structured-stream mode
@@ -14328,6 +14329,7 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
             persist=lambda st: wsession.save_session(store, agent, st),
             reply_shell=reply_shell,
             reply_invocation=reply_invocation,
+            source=source,
             turn_watchdog=turn_watchdog,
             health_writer=health_writer,
             runtime_writer=runtime_writer,
@@ -14423,6 +14425,7 @@ def _wrap_loop_mode(store, agent: str, *, cli: str, base_argv: list[str],
             persist=lambda st: wsession.save_session(store, agent, st),
             reply_shell=reply_shell,
             reply_invocation=reply_invocation,
+            source=source,
             runtime_writer=runtime_writer,
             work_heartbeat=work_heartbeat,
             lifecycle_log=lifecycle_log,
@@ -15082,6 +15085,14 @@ def _cmd_wrap_with_logging(args: argparse.Namespace) -> int:
         profile_env=profile_env,
         agent=agent,
     )
+    try:
+        runtime_mode = wrapper_run.select_runtime_mode(child_env["AGENTTALK_PY"], Path(launch_cwd), child_env)
+    except (OSError, ValueError) as exc:
+        mode = ("lead-loop" if lead_loop else "wrapper-one-shot" if args.one_shot else
+                "wrapper-loop" if getattr(args, "loop", False) else "wrapper")
+        return _handle_launch_config_blocked(
+            store, agent, args.cli, mode=mode, min_interval=args.min_interval, summary=str(exc))
+    child_env["AGENTTALK_RUNTIME_MODE"] = runtime_mode
     if backend_profile == "ovh-qwen":
         Path(child_env["CLAUDE_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
     launch = wrapper_run.preflight_launch_runtime(
@@ -15221,12 +15232,13 @@ def _cmd_wrap_with_logging(args: argparse.Namespace) -> int:
         # #822: a Claude seat in a stricter permission mode is given the interpreter's written-out path. Whether
         # the seat may run it is the team's decision, so the wrapper never adds the rule; it only names it.
         from agenttalk.wrapper import prompt as _wprompt
-        reply_invocation = _wprompt.strict_reply_invocation(args.cli, argv, child_env.get("AGENTTALK_PY"))
+        reply_invocation = _wprompt.strict_reply_invocation(
+            args.cli, argv, child_env.get("AGENTTALK_PY"), source=runtime_mode == "source")
         if reply_invocation:
             sys.stderr.write(
                 f"agenttalk wrap: {agent} runs in a Claude permission mode other than bypassPermissions, so its "
                 f"instructions write agenttalk commands as {reply_invocation} <subcommand>. To let the seat run "
-                f"them, add this allow rule to its settings: Bash({reply_invocation} *)\n")
+                f"them, replace the old allow rule in its settings with: Bash({reply_invocation} *)\n")
         return _wrap_loop_mode(
             store,
             agent,
@@ -15269,6 +15281,7 @@ def _cmd_wrap_with_logging(args: argparse.Namespace) -> int:
             ),
             reply_shell=reply_shell,
             reply_invocation=reply_invocation,
+            source=runtime_mode == "source",
             turn_events=_turn_events_wanted(args),
         )
     try:
@@ -16213,7 +16226,7 @@ def cmd_supervise(args: argparse.Namespace) -> int:
         return 3
     if args.init:
         try:
-            res = sup.init(store, force=args.force)
+            res = sup.init(store, force=args.force, source_checkout=getattr(args, "source_checkout", False))
         except (OSError, sup.ArtifactValidationError,
                 supervisor_lifecycle.SupervisorLifecycleError) as e:
             sys.stderr.write(f"agenttalk supervise --init: {e}\n")
@@ -16221,6 +16234,9 @@ def cmd_supervise(args: argparse.Namespace) -> int:
         for path, status in res.items():
             print(f"  {status}: {path}")
         wrote = [p for p, s in res.items() if s == "written"]
+        if (str(store.dir / "supervisor.ps1") in wrote and not getattr(args, "source_checkout", False)
+                and (store.root / "src" / "agenttalk" / "__init__.py").is_file()):
+            print("supervise --init: installed mode selected; use --source-checkout for source mode.")
         missing = [p for p, s in res.items() if s == "missing"]
         if missing:
             print(
@@ -17279,6 +17295,8 @@ def cmd_supervise(args: argparse.Namespace) -> int:
             plan,
             config,
             root=store.root,
+            source_checkout=(args.launch_src_on_pythonpath == "true" if args.launch_src_on_pythonpath is not None
+                             else sup.recorded_source_mode(store)),
         )
         print(json.dumps(plan, indent=2))
         if getattr(args, "record_events", False):
@@ -19519,6 +19537,8 @@ def build_parser() -> argparse.ArgumentParser:
     gsup = psup.add_mutually_exclusive_group(required=True)
     gsup.add_argument("--init", action="store_true",
                       help="Scaffold supervisor.json + PowerShell supervisor helpers.")
+    psup.add_argument("--source-checkout", action="store_true",
+                      help="With --init, explicitly select the source checkout runtime.")
     gsup.add_argument("--refresh-scripts", dest="refresh_scripts", action="store_true",
                       help="Refresh generated PowerShell helpers and shim; preserve config/state.")
     gsup.add_argument("--select-pwsh", dest="select_pwsh", action="store_true",

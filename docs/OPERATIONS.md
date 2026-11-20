@@ -170,12 +170,11 @@ Windows check that it supplies both `python.exe` and `pythonw.exe`.
    `-I` checks the installation in isolation; it does not prove what a normal
    wrapper or scheduled task will import.
 
-   Generated supervisor scripts and the project shim deliberately add
-   `<checkout>\src` when the project is an agenttalk source checkout. A pinned
-   interpreter alone does not override that behavior. For an installed-only host,
-   use a project root without that source tree. For an existing source-backed host,
-   review its actual launch environment and source revision before switching; do
-   not edit generated scripts by hand to conceal the difference.
+   A new supervisor uses installed mode by default, even if the project contains
+   a source checkout. To select source mode explicitly, run
+   `agenttalk supervise --init --source-checkout --force`. Source mode adds
+   `<checkout>\src` to `PYTHONPATH` and permits local module resolution. Existing
+   generated scripts keep their recorded mode until regenerated.
 
 On Linux, use `<runtime>/bin/python` and `<runtime>/bin/agenttalk` instead of the
 Windows `Scripts` paths. The supervisor host described here is PowerShell on

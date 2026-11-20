@@ -115,6 +115,13 @@ This creates the operator config plus four generated artifacts under
 `.agenttalk/`. `--init --force` refreshes only generated files; it preserves an
 existing `supervisor.json` byte-for-byte and does not touch runtime state.
 
+The generated supervisor uses the installed runtime in isolated mode by
+default. To develop from an agenttalk checkout, explicitly choose
+`agenttalk supervise --init --source-checkout`; add `--force` when replacing
+existing generated files. Source mode puts the checkout's `src` on
+`PYTHONPATH` and can load a local module. Existing scripts keep their recorded
+mode until regenerated; doctor reports the recorded mode.
+
 - **`supervisor.json`** — the config you fill in: cadence knobs plus a
   per-agent block describing how to launch each agent.
 - **`supervisor.ps1`** — the generated PowerShell monitor. You run this;
@@ -310,6 +317,8 @@ launch prompt drops the agent straight into `/agenttalk.listen`.
 Key differences for a wrapped agent:
 
 - `windows_file` is the **Python** exe, not the CLI exe.
+- In installed mode the supervisor adds Python's `-I` before the configured
+  wrapper arguments. In source mode it retains the configured module form.
 - The **real** codex/claude exe goes at the tail, after `--`, with its
   base launch args. The wrapper appends the per-turn streaming/session
   args itself.
@@ -786,7 +795,7 @@ without ever rebuilding state.
 
 | Command | What it does |
 | --- | --- |
-| `agenttalk supervise --init [--force]` | Scaffold config plus four generated artifacts. `--force` refreshes generated files and preserves existing config/state. |
+| `agenttalk supervise --init [--force] [--source-checkout]` | Scaffold config plus four generated artifacts. `--force` refreshes generated files and preserves existing config/state; `--source-checkout` explicitly selects source mode. |
 | `agenttalk supervise --select-pwsh [--pwsh ABSOLUTE_PATH]` | Probe and record the PowerShell Core 7+ host. An explicit candidate never falls through. |
 | `agenttalk supervise --refresh-scripts [--pwsh ABSOLUTE_PATH]` | Regenerate/validate all four artifacts under the lifecycle lock; preserve config/runtime state. |
 | `agenttalk supervise --repair-instance-marker --quarantine --acknowledge-no-live-supervisor` | Explicitly quarantine an invalid singleton marker after the operator confirms no supervisor is live. |

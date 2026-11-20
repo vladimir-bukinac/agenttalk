@@ -123,11 +123,11 @@ def test_the_claude_lead_lines_use_the_files_own_bare_form() -> None:
 @pytest.mark.parametrize("skill", DEVKIT_RUNNERS)
 def test_each_devkit_skill_that_runs_agenttalk_states_the_rule_once(skill) -> None:
     text = " ".join((SKILLS / "devkit" / skill / "SKILL.md").read_text(encoding="utf-8").split())
-    assert text.count('"$AGENTTALK_PY" -m agenttalk') == 1, text
+    assert text.count('"$AGENTTALK_PY" -I -m agenttalk') == 1, text
     assert "when `agenttalk_py` is set" in text.lower() and "otherwise" in text
-    assert text.count('& "$env:AGENTTALK_PY" -m agenttalk') == 1, text
+    assert text.count('& "$env:AGENTTALK_PY" -I -m agenttalk') == 1, text
     if skill != "assurance-scan":
-        assert "`python -m agenttalk` under Codex, `agenttalk` elsewhere" in text
+        assert "`python -I -m agenttalk` under Codex, `agenttalk` elsewhere" in text
 
 
 # ------------------------------------------------------------------------------ install-skills sync
@@ -386,7 +386,7 @@ def test_assurance_scan_keeps_the_release_build_exception_before_the_pinned_sent
     text = " ".join((SKILLS / "devkit" / "assurance-scan" / "SKILL.md").read_text(encoding="utf-8").split())
     exception = text.index("One exception to know about: the `release` profile's built-in `python-build` step")
     pinned = text.index("Run the package module. When `AGENTTALK_PY` is set (the seat's pinned runtime)")
-    example = text.index("python -m agenttalk.assurance --root . --profile change")
+    example = text.index("python -I -m agenttalk.assurance --root . --profile change")
     assert exception < pinned < example
     assert text.count("Run the package module.") == 1  # the two branches' sentences were joined, not both kept
 
@@ -406,7 +406,10 @@ def test_rule_requires_its_pinned_invocation_before_fallback(tmp_path, kind, rul
     assert pinned_findings(tmp_path, kind, rule + "\nRun `python -m agenttalk x`.\n")
 
 
-@pytest.mark.parametrize("command", ['"$AGENTTALK_PY" -m agenttalk', '& "$env:AGENTTALK_PY" -m agenttalk'])
+@pytest.mark.parametrize("command", [
+    '"$AGENTTALK_PY" -m agenttalk', '& "$env:AGENTTALK_PY" -m agenttalk',
+    '"$AGENTTALK_PY" -I -m agenttalk', '& "$env:AGENTTALK_PY" -I -m agenttalk',
+])
 def test_either_shell_pinned_invocation_states_the_rule(tmp_path, command):
     rule = f"When AGENTTALK_PY is set, use `{command}`; otherwise use your manual.\n"
     assert sc._states_pinned_rule(rule)
@@ -419,8 +422,8 @@ def test_every_pinned_runtime_skill_gives_both_labelled_shell_forms():
         text = path.read_text(encoding="utf-8")
         if "AGENTTALK_PY" not in text:
             continue
-        assert '"$AGENTTALK_PY" -m agenttalk' in text, path
-        assert '& "$env:AGENTTALK_PY" -m agenttalk' in text, path
+        assert '"$AGENTTALK_PY" -I -m agenttalk' in text, path
+        assert '& "$env:AGENTTALK_PY" -I -m agenttalk' in text, path
         assert "Bash" in text and "PowerShell" in text, path
 
 

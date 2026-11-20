@@ -29,7 +29,7 @@ Work the checklist top to bottom; don't skip the AFTER gate.
       come from its brief or docs.
 - [ ] If the assignment carries `lane_id`, run
       `agenttalk lane workspace --id <lane_id>` and work only in that
-      path. When `AGENTTALK_PY` is set (the seat's pinned runtime), run agenttalk commands with `"$AGENTTALK_PY" -m agenttalk` in Bash or `& "$env:AGENTTALK_PY" -m agenttalk` in PowerShell; otherwise use the form your project's agent manual gives (`python -m agenttalk` under Codex, `agenttalk` elsewhere). If no workspace resolves, STOP and ask the lead; never create or
+      path. When `AGENTTALK_PY` is set (the seat's pinned runtime), run agenttalk commands with `"$AGENTTALK_PY" -I -m agenttalk` in Bash or `& "$env:AGENTTALK_PY" -I -m agenttalk` in PowerShell; otherwise use the form your project's agent manual gives (`python -I -m agenttalk` under Codex, `agenttalk` elsewhere). If no workspace resolves, STOP and ask the lead; never create or
       reuse your own git worktree.
 - [ ] Restate the task as the **smallest concrete outcome**. List what is explicitly
       OUT of scope: no speculative features, flags, config knobs, or abstractions
@@ -108,3 +108,5 @@ Required fields:
 - `residual_risk`
 - `required_review_lenses`
 - `evidence`
+
+For a deliberately selected source checkout, use -m agenttalk without -I and set PYTHONPATH to its src folder. This source mode can load local modules.
