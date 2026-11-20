@@ -327,8 +327,9 @@ _DEFAULT_PROBLEM_SEVERITY = "warning"
 #: run that parsed no supported source file although it selected code in an unsupported language.
 NO_SUPPORTED_SOURCE_REASON = "no_supported_source"
 NO_SUPPORTED_SOURCE_NOTE = (
-    "No supported source files were parsed, so this run read none of the code it found: "
-    "source analysis is not available for its language yet."
+    "No supported source files were parsed, so this run read none of the code it found; "
+    "only a fixed list of general-purpose languages (such as Python or Elixir) is counted, "
+    "other file types are not."
 )
 
 
@@ -1692,13 +1693,13 @@ def run_scan(
         # #496: a run that parsed no supported source file but selected at least one unsupported,
         # code-bearing file read none of the code it found - it is degraded, not complete. Both
         # conditions are needed: Java plus Python helper scripts keeps its own, non-degrading rule.
-        supported_source_files_parsed = worker.count_parsed_supported_source_files(
-            worker_result.java_results)
-        no_supported_source_problems = [
-            _problem_record(NO_SUPPORTED_SOURCE_REASON, None, NO_SUPPORTED_SOURCE_NOTE)
-        ] if supported_source_files_parsed == 0 and any(
-            worker.is_unsupported_code_bearing_problem(p) for p in worker_result.problems
-        ) else []
+        supported_source_files_parsed = worker.count_parsed_supported_source_files(worker_result.java_results)
+        no_supported_source_problems = (
+            [_problem_record(NO_SUPPORTED_SOURCE_REASON, None, NO_SUPPORTED_SOURCE_NOTE)]
+            if supported_source_files_parsed == 0
+            and any(worker.is_unsupported_code_bearing_problem(p) for p in worker_result.problems)
+            else []
+        )
         forced_lock_recovery_problems = [
             _problem_record(
                 "scan_lock_forcibly_recovered", None,

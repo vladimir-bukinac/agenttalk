@@ -244,15 +244,41 @@ _LEGITIMATELY_TYPELESS_BASENAMES = frozenset({"package-info.java", "module-info.
 
 
 #: #496: the closed, PROVISIONAL list of general-purpose programming-language source extensions
-#: that are NOT in ``_DEGRADING_CODE_EXTENSIONS`` (a ``.py`` helper in a Java repository must keep
-#: not degrading it - round 17b above) but ARE code: when a run parsed no supported source file at
-#: all, one of these being present means the run read none of the code it found
-#: (``no_supported_source``). Only this list, ``_DEGRADING_CODE_EXTENSIONS`` and the tier-2 XML
-#: shapes count; an arbitrary unknown file never does.
-_UNSUPPORTED_SOURCE_EXTENSIONS = frozenset({
-    ".py", ".pyw", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx",
-    ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".rs", ".swift", ".dart", ".lua", ".pl",
-})
+#: that are NOT already in ``_DEGRADING_CODE_EXTENSIONS`` (Groovy, Kotlin, Scala, C#, PHP, Ruby, Go
+#: and the JVM/database shapes there already degrade a run on their own; this list is only for
+#: languages that stay non-degrading next to Java, so a ``.py`` helper in a Java repository keeps
+#: not degrading it - round 17b above). When a run parsed no supported source file at all, one of
+#: these (or a tier-2 shape) being present means the run read none of the code it found
+#: (``no_supported_source``). A file type on neither list never counts: counting every
+#: ``unsupported_language`` file would make a LICENSE or a README look like code.
+#:
+#: Judgment calls, so a later reader need not rediscover them:
+#:   * Shell and batch scripts (``.sh .bash .zsh .bat .cmd .ps1``) are left OUT: they are build and
+#:     deploy tooling in nearly every repository (the tier-3 reasoning above), so a repository of
+#:     docs plus a Dockerfile plus ``build.sh`` stays ``complete``.
+#:   * ``.d`` is left OUT: ``gcc -MD`` writes make dependency files with that suffix, which are
+#:     generated text far more often than D source (so a D-only repository is not counted).
+#:   * ``.m`` (Objective-C or MATLAB), ``.r`` (R), ``.v`` (Verilog or Coq), ``.pl`` (Perl or
+#:     Prolog), ``.el`` and ``.ss`` are KEPT: whichever language it is, it is source code.
+#:   * ``.f`` and ``.pp`` (old Fortran, Free Pascal) are left out: too ambiguous to be worth it.
+# fmt: off
+_UNSUPPORTED_SOURCE_EXTENSIONS = frozenset(
+    {
+        # scripting and web
+        ".py", ".pyw", ".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".pl", ".pm", ".lua", ".dart",
+        # systems
+        ".c", ".h", ".cc", ".cpp", ".cxx", ".hpp", ".rs", ".swift", ".zig", ".nim", ".cr", ".vala",
+        ".m", ".mm",
+        # functional and BEAM
+        ".ex", ".exs", ".erl", ".hrl", ".hs", ".lhs", ".ml", ".mli", ".clj", ".cljs", ".cljc",
+        ".elm", ".rkt", ".scm", ".ss", ".lisp", ".lsp", ".el",
+        # .NET and JVM scripts not covered by tier 2
+        ".kts", ".fs", ".fsx", ".fsi", ".vb",
+        # scientific, legacy and others
+        ".jl", ".r", ".f90", ".f95", ".f03", ".f08", ".adb", ".ads", ".pas", ".v", ".sol",
+    }
+)
+# fmt: on
 
 
 def count_parsed_supported_source_files(java_results: dict[str, Any]) -> int:
@@ -268,8 +294,7 @@ def is_unsupported_code_bearing_problem(problem: WorkerProblem) -> bool:
     is code: a tier-2 shape (``degrades_run``) or a listed source extension."""
     if problem.reason_code != "unsupported_language":
         return False
-    return problem.degrades_run or problem.relative_path.lower().endswith(
-        tuple(_UNSUPPORTED_SOURCE_EXTENSIONS))
+    return problem.degrades_run or problem.relative_path.lower().endswith(tuple(_UNSUPPORTED_SOURCE_EXTENSIONS))
 
 
 def is_a_code_bearing_extension_worth_degrading_when_silently_excluded(

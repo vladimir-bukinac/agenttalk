@@ -27,12 +27,14 @@ from agenttalk.comprehension import worker as workermod
 
 REASON = "no_supported_source"
 NOTE_START = "No supported source files were parsed"
+NOTE_RULE = "fixed list of general-purpose languages"
 
 
 @pytest.fixture(autouse=True)
 def _inprocess_worker(monkeypatch):
     monkeypatch.setattr(
-        scan_pipeline.worker, "run_sanitized_worker",
+        scan_pipeline.worker,
+        "run_sanitized_worker",
         lambda root, relative_paths, **_kwargs: workermod.process_paths(root, relative_paths),
     )
 
@@ -45,9 +47,11 @@ def _no_agent_identity(monkeypatch):
 def _repo(root: Path, files: dict[str, str]) -> Path:
     subprocess.run(["git", "-C", str(root), "init", "-q"], check=True)  # noqa: S603,S607  # nosec B603 B607
     subprocess.run(  # noqa: S603,S607  # nosec B603 B607
-        ["git", "-C", str(root), "config", "user.email", "t@t"], check=True)
+        ["git", "-C", str(root), "config", "user.email", "t@t"], check=True
+    )
     subprocess.run(  # noqa: S603,S607  # nosec B603 B607
-        ["git", "-C", str(root), "config", "user.name", "t"], check=True)
+        ["git", "-C", str(root), "config", "user.name", "t"], check=True
+    )
     (root / ".gitignore").write_text(".agenttalk/\n", encoding="utf-8")
     for name, text in files.items():
         target = root / name
@@ -70,6 +74,11 @@ PYTHON_PLUS_POM = {"app.py": PY, "pom.xml": POM}
 SQL_ONLY = {"db/schema.sql": "create table t (id int);\n"}
 DOCS_ONLY = {"README.md": "# hello\n"}
 TOOLING_ONLY = {"Dockerfile": "FROM scratch\n", "ci.yml": "a: 1\n"}
+# Not code, or tooling by choice (see worker._UNSUPPORTED_SOURCE_EXTENSIONS): stays complete.
+LICENSE_README_UNKNOWN = {"LICENSE": "MIT\n", "README.md": "# x\n", "data.xyz": "1 2 3\n"}
+SHELL_AND_MAKE_DEPS = {"build.sh": "echo hi\n", "deploy.ps1": "Write-Host hi\n", "main.d": "main.o: main.c\n"}
+ELIXIR_ONLY = {"main.ex": "defmodule Main do\n  def hello, do: :world\nend\n"}
+HASKELL_ONLY = {"Main.hs": 'main :: IO ()\nmain = putStrLn "hi"\n'}
 
 
 def _run(argv: list[str], root: Path) -> int:
@@ -95,8 +104,10 @@ def _scan_then_status(root: Path, capsys) -> dict:
 
 # ------------------------------------------------------- green today: the facts of the report
 
+
 def test_python_only_repo_has_nothing_parsed_and_one_unsupported_language_warning(
-    tmp_path: Path, capsys,
+    tmp_path: Path,
+    capsys,
 ) -> None:
     """Green before and after: the numbers that show nothing was understood."""
     _repo(tmp_path, PYTHON_ONLY)
@@ -114,16 +125,19 @@ def test_python_only_repo_has_nothing_parsed_and_one_unsupported_language_warnin
 
 # ------------------------------------------------------- the reproduction (red on master)
 
+
 def test_python_only_scan_json_is_degraded_and_names_the_reason(tmp_path: Path, capsys) -> None:
     _repo(tmp_path, PYTHON_ONLY)
     scan = _json(["comprehension", "scan", "--json"], tmp_path, capsys)
     assert scan["status"] == "degraded", f"scan --json: {scan}"
     assert scan.get("degraded_by") == [REASON], f"scan --json: {scan}"
     assert scan["note"].startswith(NOTE_START), f"scan --json: {scan}"
+    assert NOTE_RULE in scan["note"], f"scan --json: {scan}"
 
 
 def test_python_only_scan_human_output_says_degraded_with_one_plain_line(
-    tmp_path: Path, capsys,
+    tmp_path: Path,
+    capsys,
 ) -> None:
     _repo(tmp_path, PYTHON_ONLY)
     out = _text(["comprehension", "scan"], tmp_path, capsys)
@@ -147,7 +161,8 @@ def test_python_only_status_human_and_json(tmp_path: Path, capsys) -> None:
 
 
 def test_python_only_report_json_carries_reason_count_note_and_a_problem_record(
-    tmp_path: Path, capsys,
+    tmp_path: Path,
+    capsys,
 ) -> None:
     _repo(tmp_path, PYTHON_ONLY)
     _text(["comprehension", "scan"], tmp_path, capsys)
@@ -157,6 +172,7 @@ def test_python_only_report_json_carries_reason_count_note_and_a_problem_record(
     assert report["counts"]["supported_source_files_parsed"] == 0
     assert report["counts"]["units"] == 2  # existing key unchanged, next to the new one
     assert report["note"].startswith(NOTE_START)
+    assert NOTE_RULE in report["note"]
     codes = sorted(p["reason_code"] for p in report["problems"])
     assert codes == [REASON, "unsupported_language"], f"report problems: {codes}"
 
@@ -186,7 +202,8 @@ def test_python_plus_maven_descriptor_is_degraded(tmp_path: Path, capsys) -> Non
 
 
 def test_sql_only_stays_degraded_and_now_also_says_no_supported_source(
-    tmp_path: Path, capsys,
+    tmp_path: Path,
+    capsys,
 ) -> None:
     _repo(tmp_path, SQL_ONLY)
     status = _scan_then_status(tmp_path, capsys)
@@ -199,21 +216,129 @@ def test_scan_help_defines_complete_in_one_sentence(capsys) -> None:
         cli.main(["comprehension", "scan", "--help"])
     text = " ".join(capsys.readouterr().out.split())
     assert "complete means" in text, text
+    assert "fixed list of general-purpose languages" in text, text
+    assert "not on that list does not count" in text, text
     assert REASON in text, text
 
 
+@pytest.mark.parametrize("files", [ELIXIR_ONLY, HASKELL_ONLY], ids=["elixir", "haskell"])
+def test_other_unsupported_languages_are_degraded_too(tmp_path: Path, capsys, files) -> None:
+    """codex-rev's #496 finding: a repository of only `main.ex` was reported complete."""
+    _repo(tmp_path, files)
+    scan = _json(["comprehension", "scan", "--json"], tmp_path, capsys)
+    assert scan["status"] == "degraded", f"scan --json: {scan}"
+    assert scan["degraded_by"] == [REASON]
+    status = _json(["comprehension", "status", "--json"], tmp_path, capsys)
+    assert status["supported_source_files_parsed"] == 0
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "a.ex",
+        "a.exs",
+        "a.erl",
+        "a.hrl",
+        "a.kts",
+        "a.fs",
+        "a.fsx",
+        "a.fsi",
+        "a.vb",
+        "a.m",
+        "a.mm",
+        "a.hs",
+        "a.lhs",
+        "a.ml",
+        "a.mli",
+        "a.clj",
+        "a.cljs",
+        "a.cljc",
+        "a.jl",
+        "a.r",
+        "a.R",
+        "a.zig",
+        "a.nim",
+        "a.cr",
+        "a.f90",
+        "a.f95",
+        "a.f03",
+        "a.f08",
+        "a.adb",
+        "a.ads",
+        "a.pas",
+        "a.pm",
+        "a.pl",
+        "a.elm",
+        "a.rkt",
+        "a.scm",
+        "a.ss",
+        "a.lisp",
+        "a.lsp",
+        "a.el",
+        "a.v",
+        "a.vala",
+        "a.sol",
+        "a.py",
+        "a.ts",
+        "a.rs",
+        "dir/Deep.EX",
+    ],
+)
+def test_listed_language_files_count_as_unsupported_code(name: str) -> None:
+    problem = workermod.WorkerProblem(
+        reason_code="unsupported_language", relative_path=name, detail="x", degrades_run=False
+    )
+    assert workermod.is_unsupported_code_bearing_problem(problem), name
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "LICENSE",
+        "README.md",
+        "data.xyz",
+        "build.sh",
+        "run.bash",
+        "deploy.ps1",
+        "go.bat",
+        "main.d",
+        "Makefile",
+        "app.yml",
+        "Dockerfile",
+        "notes.txt",
+        "x.ex.md",
+    ],
+)
+def test_other_file_types_do_not_count_as_unsupported_code(name: str) -> None:
+    problem = workermod.WorkerProblem(
+        reason_code="unsupported_language", relative_path=name, detail="x", degrades_run=False
+    )
+    assert not workermod.is_unsupported_code_bearing_problem(problem), name
+
+
 # ------------------------------------------------------- controls: must stay as they are
+
 
 @pytest.mark.parametrize(
     ("files", "parsed"),
     [
         (JAVA_ONLY, 1),
-        (JAVA_PLUS_PY_HELPER, 1),   # a Python helper in a Java repository stays non-degrading
-        (DOCS_ONLY, 0),             # nothing code-bearing was selected
-        (TOOLING_ONLY, 0),          # tooling and config files are not code-bearing
-        ({}, 0),                    # an empty repository
+        (JAVA_PLUS_PY_HELPER, 1),  # a Python helper in a Java repository stays non-degrading
+        (DOCS_ONLY, 0),  # nothing code-bearing was selected
+        (TOOLING_ONLY, 0),  # tooling and config files are not code-bearing
+        (LICENSE_README_UNKNOWN, 0),  # a file type not on the list does not count
+        (SHELL_AND_MAKE_DEPS, 0),  # shell scripts and make .d files are tooling, by decision
+        ({}, 0),  # an empty repository
     ],
-    ids=["java", "java-plus-python-helper", "docs-only", "tooling-only", "empty"],
+    ids=[
+        "java",
+        "java-plus-python-helper",
+        "docs-only",
+        "tooling-only",
+        "license-readme-unknown",
+        "shell-and-make-deps",
+        "empty",
+    ],
 )
 def test_control_runs_stay_complete_and_quiet(tmp_path: Path, capsys, files, parsed) -> None:
     _repo(tmp_path, files)

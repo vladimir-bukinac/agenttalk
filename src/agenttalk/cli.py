@@ -2926,7 +2926,7 @@ def cmd_comprehension(args: argparse.Namespace) -> int:
             # artifact_integrity_hint right below.
             print(f"boundaries: {payload['boundary_count']}")
             print(f"degraded_by: {', '.join(payload['degraded_by']) or '(none)'}")
-            if "note" in payload:   # #496: only when no_supported_source fired
+            if "note" in payload:  # #496: only when no_supported_source fired
                 print(f"note:     {payload['note']}")
             _print_scan_json_integrity_if_not_verified(payload)
             # FIX ROUND 29 (twenty-fifth cold read, F8b polish): the
@@ -17985,7 +17985,9 @@ def build_parser() -> argparse.ArgumentParser:
                     ".agenttalk/comprehension/ under whatever root resolves either way. "
                     "Status complete means the run found no degrading problem, not that all "
                     "code was understood: a run that parsed no supported source file but found "
-                    "code in an unsupported language is degraded (no_supported_source).",
+                    "source files in a language no adapter reads, from a fixed list of "
+                    "general-purpose languages (such as Python), is degraded "
+                    "(no_supported_source), and a file type not on that list does not count.",
     )
     cscan.add_argument(
         "--work-id",
