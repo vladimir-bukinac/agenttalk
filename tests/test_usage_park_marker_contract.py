@@ -54,7 +54,7 @@ def test_the_writer_emits_the_version_and_the_provider(store):
     assert marker["schema_version"] == 1 and marker["provider"] == "claude"
 
 
-@pytest.mark.parametrize("provider", [None, "", "codex", "Claude", "beta", ["claude"]])
+@pytest.mark.parametrize("provider", [None, "", "Claude", "beta", ["claude"]])
 def test_the_writer_refuses_an_unproven_provider_and_writes_nothing(store, provider):
     with pytest.raises(ValueError):
         publish(store, provider=provider)
@@ -69,7 +69,6 @@ def test_the_writer_refuses_an_unproven_provider_and_writes_nothing(store, provi
     {"schema_version": 1.0},
     {"schema_version": "1"},
     {"provider": KeyError},                # missing
-    {"provider": "codex"},                 # not (yet) a known provider
     {"provider": "openai"},
     {"provider": None},
     {"provider": ["claude"]},

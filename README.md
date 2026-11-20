@@ -1448,9 +1448,9 @@ agenttalk replaces the file as a whole, but on Windows that can fall back to rew
 place, so a reader can catch it half written: treat a file that does not parse as "no reading"
 and read it again later.
 
-### When a Claude seat runs out of its allowance (the usage-limit park)
+### When a Claude seat runs out of its allowance, or a Codex seat does (the usage-limit park)
 
-**In plain words.** A Claude seat that has used up its 5-hour or weekly allowance cannot do
+**In plain words.** A Claude or Codex seat that has used up its 5-hour or weekly allowance cannot do
 any work until the allowance comes back. Before, its wrapper kept starting the model again every
 few seconds for four hours (hundreds of tries) and then threw the message away. Now the wrapper
 **parks** the message: it makes one try, sees the proof that the account is out of allowance,
@@ -1460,11 +1460,13 @@ stays alive and says so. This is on by default.
 **What you will notice**
 
 - `agenttalk status` flags the seat `usage_limit_parked(until=<time>)`. The time is in UTC, and
-  it is the reset time Claude stated. The flag reads `until=restarted` when no time is known
+  it is the reset time from the provider's reading. A Codex re-check has a `retry=<time>` flag.
+  The flag reads `until=restarted` when no time is known
   and `wrapper_not_responding` when the wrapper stopped refreshing its status.
 - `agenttalk attention`, `agenttalk doctor` and both web consoles show it too, as **PARKED**
   ("parked on a usage limit until ..."). A parked seat needs a look, but it is never shown as
-  down, never as "config blocked", and never as "not for you".
+  down, never as "config blocked", and never as "not for you". Until the console follow-up,
+  the web consoles can describe a Codex re-check as waiting for a restart; use `status` for its time.
 - When several facts disagree, the order is: the supervisor's verdict that the seat is stuck or dead,
   then current working evidence, then a fresh park, then old working history, then an old park.
   `agenttalk status`, `agenttalk supervisor` and both web consoles (the seat's row and its
@@ -1479,10 +1481,12 @@ stays alive and says so. This is on by default.
 **What the seat does by itself**
 
 - It tries the message **once** each time its wrapper is started again.
-- When Claude states when the allowance comes back, it tries once **30 seconds after** that
+- When the provider states when the allowance comes back, it tries once **30 seconds after** that
   time. If it is still limited and Claude states a later time, it waits for that one. The
   stated time must be in the future and at most 8 days ahead; otherwise there is no timed try.
-- It never retries on a timer otherwise, and it never reads a reset time from message text.
+- When Codex reports the specific usage-limit failure but its own current reading is unavailable,
+  it re-checks every 30 minutes, without counting those tries as failures. It never reads a reset
+  time from message text.
 
 **What you can do**
 
@@ -1504,6 +1508,11 @@ proof and local causes keep their own handling, but a non-zero exit after a prov
 still parks. Message
 text never decides anything: a weekly-limit message that Claude words as "prompt too long" is still
 a usage limit and is never counted as a bad message.
+
+For Codex, the terminal failure must contain `hit your usage limit` and a fresh reading from the
+same thread must show an exhausted window or a rate-limit-reached type. If the reading is missing
+or stale, the seat waits for a 30-minute re-check; a fresh reading below the limit keeps the usual
+failure handling. A local failure or safety refusal keeps its own handling.
 
 **With the turn journal on.** The journal records the turn that proved the limit as one failed
 dispatch, with the same failure class it has when this switch is off. While the seat is parked the
@@ -1555,10 +1564,10 @@ that is not parked has no file.
 | `schema_version` | integer | The version of this format: `1`. |
 | `agent` | text | The seat's name; the same as the file name. |
 | `state` | text | Always `usage_limit_parked`. |
-| `provider` | text | Whose allowance ran out. Today only `claude`. It comes from the proof the wrapper holds, never from the seat's name. |
+| `provider` | text | `claude` or `codex`; it comes from the wrapper's provider evidence, never from the seat's name. |
 | `window` | text or null | Which allowance the **latest** refusal named: `five_hour` or `seven_day`. |
 | `reset_epoch` | integer or null | When the provider says the allowance comes back: whole seconds since 1970, UTC. See "Reset and window" below. `null` when no reset time is known. |
-| `wake_epoch` | integer or null | When the wrapper will try again by itself, in the same unit (the reset plus 30 seconds). `null` when it will not: no reset known, or that try was already used. |
+| `wake_epoch` | integer or null | When the wrapper will try again by itself, in the same unit: the reset plus 30 seconds, or the Codex re-check time. `null` when no timed try is pending. |
 | `message_id` | text | The message the seat is holding. |
 | `parked_at` | text or null | When the **current** park began: the moment the wrapper saw the provider's refusal, as an ISO 8601 UTC time that may carry fractional seconds. It does not change when the file is refreshed or when a later try is refused for a usage limit again. If a try fails for another reason, that park ends; a later limit refusal of the same message starts a new park with a new time. |
 | `wrapper_generation` | text or null | Identifies the wrapper run that wrote the file. |
@@ -1568,7 +1577,9 @@ that is not parked has no file.
 example a try that was refused again): the window is the latest refusal's; the reset is replaced
 only by a **strictly later** reset. A later refusal that states no reset, or the same or an earlier
 one, keeps the reset already held. So `reset_epoch` is the latest reset seen, and the file can say
-`seven_day` beside a reset that came from an earlier `five_hour` refusal.
+`seven_day` beside a reset that came from an earlier `five_hour` refusal. For Codex, the latest
+fresh reading replaces the previous reset, even when it is earlier. A re-check without a fresh
+reading has a null `reset_epoch` and the next re-check time in `wake_epoch`.
 
 **The version rule.** A reader must refuse a file whose `schema_version` it does not know (and a
 `provider` it does not know), and must not guess what it means. A new version means the format

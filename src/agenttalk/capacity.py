@@ -6,10 +6,10 @@ signal and normalizes it to a :class:`CapacitySnapshot` that agents publish to
 the bus (``Store.write_capacity``) so a lead can factor remaining budget into
 how it organizes work.
 
-STRICTLY ADVISORY and best-effort: it is percent + reset time (NOT exact
-tokens), plan-specific (Pro/Max), lags ~1 turn behind real usage, and degrades
-to ``confidence="unknown"`` when absent/unreadable. It must NEVER gate protocol
-progress.
+Capacity snapshots are advisory and best-effort: they are percent + reset time
+(NOT exact tokens), plan-specific, can lag activity, and degrade to unknown when
+unreadable. The wrapper separately uses a fresh reading from the current Codex
+thread to corroborate a specific terminal usage-limit failure.
 
 Privacy: only DERIVED budget metadata is emitted — never account ids, auth
 paths, token bodies, file paths, prompts, or session contents. ``account`` is
@@ -432,7 +432,7 @@ def _claude_context(cw: object) -> tuple[float | None, int | None, int | None]:
     return pct, size, tokens
 
 
-def _normalize_ts(ts: object) -> str | None:
+def _normalize_ts(ts: object, *, precise: bool = False) -> str | None:
     """Normalize a provider timestamp to UTC ISO-Z seconds, or None."""
     if not isinstance(ts, str) or not ts:
         return None
@@ -447,10 +447,11 @@ def _normalize_ts(ts: object) -> str | None:
         return None
     if dt.tzinfo is None:
         return None
-    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return dt.astimezone(timezone.utc).isoformat(
+        timespec="microseconds" if precise else "seconds").replace("+00:00", "Z")
 
 
-def _last_capacity_snapshot(path: Path, source_agent: str) -> CapacitySnapshot | None:
+def _last_capacity_snapshot(path: Path, source_agent: str, *, precise: bool = False) -> CapacitySnapshot | None:
     """Stream a rollout JSONL and retain the LAST usable capacity snapshot.
 
     Marker keys only make a record worth parsing. The semantic parser decides
@@ -472,6 +473,8 @@ def _last_capacity_snapshot(path: Path, source_agent: str) -> CapacitySnapshot |
                 continue
             snapshot = _codex_snapshot(source_agent, rec)
             if snapshot is not None:
+                if precise:
+                    snapshot.observed_at = _normalize_ts(rec.get("timestamp"), precise=True)
                 last = snapshot
     except OSError:
         return None
@@ -534,7 +537,7 @@ def _codex_snapshot(source_agent: str, rec: dict) -> CapacitySnapshot | None:
     primary_used = _as_float(five.get("used_percent"))
     secondary_used = _as_float(week.get("used_percent"))
     has_budget = primary_used is not None or secondary_used is not None
-    if not has_budget and ctx_pct is None:
+    if not has_budget and ctx_pct is None and not _as_str(rl.get("rate_limit_reached_type")):
         return None
     # observed_at = when CODEX took the reading (the record timestamp), not when
     # WE read the file — so staleness reflects the agent's real last activity.
@@ -626,7 +629,7 @@ def _newest_codex_rollouts(
 def read_codex_rollout(
     source_agent: str, *, sessions_dir: str | os.PathLike | None = None,
     thread_id: str | None = None, max_files: int = CODEX_ROLLOUT_MAX_FILES,
-    max_scan_entries: int = CODEX_ROLLOUT_SCAN_LIMIT,
+    max_scan_entries: int = CODEX_ROLLOUT_SCAN_LIMIT, precise: bool = False,
 ) -> CapacitySnapshot | None:
     """Parse the CURRENT Codex session's rollout for its rate-limit budget.
 
@@ -655,7 +658,7 @@ def read_codex_rollout(
     if not complete or not candidates:
         return None
     for f in candidates[:max_files]:
-        snapshot = _last_capacity_snapshot(f, source_agent)
+        snapshot = _last_capacity_snapshot(f, source_agent, precise=precise)
         if snapshot is not None:
             return snapshot
     return None

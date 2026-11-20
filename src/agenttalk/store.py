@@ -4901,7 +4901,7 @@ class Store:
                 rec, at=at, generation=str(usage_limit.get("generation") or ""),
                 window=str(usage_limit.get("window") or ""),
                 reset_epoch=usage_limit.get("reset_epoch"), provider=usage_limit.get("provider"),
-                now_epoch=usage_limit.get("now_epoch"))
+                now_epoch=usage_limit.get("now_epoch"), recheck=usage_limit.get("recheck") is True)
             data["messages"][msg_id] = rec
             self._write_attempts(agent, data)
             return rec
@@ -6547,8 +6547,8 @@ class Store:
              never hidden behind an earlier one's row.
           2. The published marker adds reset/wake/age detail only when it matches THAT
              message and the live wrapper generation (a missing or mismatched marker never
-             removes the durable park - it only removes those details, falling back to the
-             durable record's own window/parked_at).
+             removes the durable park - it falls back to the durable record's own
+             window/parked_at). A Codex reset and wake are durable and remain visible too.
           3. Liveness/freshness comes ONLY from real evidence, on BOTH branches alike
              (fix round 1, finding 1: the matching-marker branch used to pass the marker's
              own ``fresh`` straight through with no heartbeat check of its own, so a
@@ -6621,7 +6621,7 @@ class Store:
                 effective = {**marker, "kind": usage_park.KIND_USAGE_LIMIT, "next_try_epoch": None, "park_rev": rev}
             else:
                 # #311 park reader recast: no matching marker to trust for reset/wake/age
-                # detail - the durable record alone decides freshness, and ``park_view``'s
+                # detail, except Codex's durable reset and wake. The record decides freshness and ``park_view``'s
                 # own heartbeat gate (fix round 1, finding 1) is now the ONE place that
                 # turns heartbeat evidence into freshness for both branches alike, so
                 # passing `fresh=True` here means exactly "whatever that shared gate
@@ -6650,6 +6650,10 @@ class Store:
                     "next_try_epoch": usage_park.displayable_epoch(usage_park.unused_wake(rec)) if cooling else None,
                     "park_rev": rev,
                 }
+                if rec.get("limit_provider") == usage_park.PROVIDER_CODEX:
+                    effective["provider"] = usage_park.PROVIDER_CODEX
+                    effective["reset_epoch"] = usage_park.displayable_epoch(rec.get("reset_epoch"))
+                    effective["wake_epoch"] = usage_park.displayable_epoch(usage_park.unused_wake(rec))
                 if usage_park.is_refusal_park(rec):
                     effective["tries"] = usage_park.refusal_total(rec)
                     effective["held"] = usage_park.is_held(rec)

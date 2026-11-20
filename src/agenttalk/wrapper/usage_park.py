@@ -1,17 +1,17 @@
 """Stopping retries at a provider usage limit: the pure rules.
 
-When a Claude seat runs out of its allowance, today's wrapper starts the model again
+When a seat runs out of its allowance, today's wrapper starts the model again
 and again for hours and then dead-letters the message. With this module's rules the
 wrapper PARKS the message instead: no retries, the message kept, the seat alive. It
-tries once each time the wrapper is started again, and once at the time Claude
-states the allowance comes back (plus a safety margin).
+tries once each time the wrapper is started again, and once at the provider's reset
+(plus a safety margin). A Codex failure without a fresh reading is re-checked on a timer.
 
 Everything here is a plain function over plain values, so the loop and the store
 only wire it in:
 
 * the switch (``AGENTTALK_STOP_RETRIES_AT_LIMIT``, on unless set to ``0``);
-* the proof read from ONE invocation's own stream-json (a rejected usage event with a
-  known window, then a final result that is an error) - never from message text;
+* Claude's rejected usage event and final error, or Codex's specific terminal failure
+  together with a fresh reading from that turn's own rollout;
 * the sanity rules for the stated reset time and the wake time;
 * the changes to a message's attempt record (counters that never count toward
   disposal while parked, the probe marker, the wake rules).
@@ -92,11 +92,12 @@ WAKE_REPAIR_MARGIN_SECONDS = 120
 MARKER_STATE = "usage_limit_parked"
 
 # The published marker's contract version, and the closed set of providers it may name. A
-# provider is only ever taken from the proof the wrapper holds (a Claude usage event proves
-# "claude"), never from an agent name.
+# provider comes from the wrapper's provider evidence, never from an agent name.
 MARKER_SCHEMA_VERSION = 1
 PROVIDER_CLAUDE = "claude"
-PROVIDERS = (PROVIDER_CLAUDE,)
+PROVIDER_CODEX = "codex"
+PROVIDERS = (PROVIDER_CLAUDE, PROVIDER_CODEX)
+CODEX_RECHECK_SECONDS = 30 * 60
 
 # The documented version-1 contract (README "Reading the park marker from another program"):
 # exactly these eleven keys, every time, nullable ones included. The reader requires every KEY
@@ -111,7 +112,7 @@ MARKER_KEYS = frozenset({
 # The only window names seen in real captured cases. Anything else is not proof.
 KNOWN_WINDOWS = ("five_hour", "seven_day")
 
-# The wake comes this long after the reset Claude states.
+# The wake comes this long after the provider's reset.
 WAKE_MARGIN_SECONDS = 30
 # A stated reset must lie in the future and at most this far ahead (the weekly window
 # is 7 days); otherwise it is treated as unknown and there is no timed wake.
@@ -562,14 +563,23 @@ def apply_probe_start(rec: dict, *, generation: str, consumed_wake: int | None) 
         rec["probed_wake_epoch"] = consumed_wake
 
 
+def _arm_codex_recheck(rec: dict, now_epoch: object) -> None:
+    """A new re-check cannot reuse a wake already consumed by a probe."""
+    wake = cooldown_clock(now_epoch) + CODEX_RECHECK_SECONDS
+    if wake == whole_seconds(rec.get("probed_wake_epoch")):
+        wake += 1
+    rec["wake_epoch"] = wake
+
+
 def apply_limit_result(rec: dict, *, at: str, generation: str, window: str,
                        reset_epoch: int | None, provider: str | None = None,
-                       now_epoch: object = None) -> None:
+                       now_epoch: object = None, recheck: bool = False) -> None:
     """A usage-limit result: park (or stay parked after a probe). No failure counter moves.
 
-    The wake rule: only a reset STRICTLY LATER than the latest one seen sets (or
+    Claude's wake rule: only a reset STRICTLY LATER than the latest one seen sets (or
     replaces) the wake; the same or an earlier reset leaves any existing wake as it is
-    (an unused one stays; a consumed one is never re-armed).
+    (an unused one stays; a consumed one is never re-armed). Codex uses the latest
+    reading's reset, even when earlier, without repeating a consumed wake.
 
     A quota retry that a cool-down set aside (``quota_wake_epoch``, see :func:`apply_cooldown_result`)
     comes back when the SAME limit returns from the cool-down, it is exactly the reset's own wake
@@ -577,6 +587,7 @@ def apply_limit_result(rec: dict, *, at: str, generation: str, window: str,
     clock. Otherwise nothing is armed (the rule above); a strictly later reset replaces it; the field
     goes either way."""
     was_parked = rec.get("park_state") in PARK_STATES
+    was_recheck = rec.get("limit_recheck") is True
     from_cooldown = was_parked and is_cooldown(rec)
     if not was_parked:
         rec["parked_at"] = at
@@ -595,18 +606,41 @@ def apply_limit_result(rec: dict, *, at: str, generation: str, window: str,
     rec["limit_window"] = window
     if provider in PROVIDERS:
         rec["limit_provider"] = provider
+    if provider == PROVIDER_CODEX and recheck:
+        rec["limit_recheck"] = True
+        rec.pop("reset_epoch", None)
+        _arm_codex_recheck(rec, now_epoch)
+    else:
+        rec.pop("limit_recheck", None)
+        if was_recheck:
+            rec.pop("wake_epoch", None)
     last = whole_seconds(rec.get("last_reset_epoch"))
-    if reset_epoch is not None and (last is None or reset_epoch > last):
+    if provider == PROVIDER_CODEX and not recheck:
+        if reset_epoch is None:
+            rec.pop("reset_epoch", None)
+            rec.pop("wake_epoch", None)
+        else:
+            rec["reset_epoch"] = reset_epoch
+            rec["last_reset_epoch"] = reset_epoch
+            if rec.get("probed_wake_epoch") == reset_epoch + WAKE_MARGIN_SECONDS:
+                rec.pop("wake_epoch", None)
+            else:
+                rec["wake_epoch"] = reset_epoch + WAKE_MARGIN_SECONDS
+        kept = None
+    elif not recheck and reset_epoch is not None and (last is None or reset_epoch > last):
         rec["reset_epoch"] = reset_epoch
         rec["last_reset_epoch"] = reset_epoch
         rec["wake_epoch"] = reset_epoch + WAKE_MARGIN_SECONDS
         kept = None
-    if (quota_wake_matches_reset(rec, kept) is not None and rec.get("probed_wake_epoch") != kept
+    if (provider != PROVIDER_CODEX and not recheck and quota_wake_matches_reset(rec, kept) is not None
+            and rec.get("probed_wake_epoch") != kept
             and kept > cooldown_clock(now_epoch)):
         rec["wake_epoch"] = kept                       # the same limit, its retry never used and still ahead
         rec["reset_epoch"] = last
     count = _int(rec.get("park_count"))
     transition = not was_parked or from_cooldown
+    if provider == PROVIDER_CODEX and not transition:
+        return
     if "park_rev" in rec:
         # A history that has used a cool-down kind. The notice bookkeeping (key, routed, tries, next
         # try) is renewed ONLY on a transition: a new park, or a return from a cool-down (the kind
@@ -625,7 +659,7 @@ def apply_limit_result(rec: dict, *, at: str, generation: str, window: str,
     rec["notice_next_at"] = None
 
 
-_PARK_KEYS = ("park_state", "probe_marker", "parked_generation", "reset_epoch", "wake_epoch",
+_PARK_KEYS = ("park_state", "probe_marker", "parked_generation", "reset_epoch", "wake_epoch", "limit_recheck",
               "limit_window", "limit_provider", "notice_key", "notice_routed", "notice_tries", "notice_next_at",
               "park_kind", "cooldown_step", "park_detail", "quota_wake_epoch")
 
@@ -799,6 +833,8 @@ def apply_crash_reconcile(rec: dict, now_epoch: object = None) -> None:
     rec["in_progress"] = False
     rec["probe_marker"] = False
     rec["park_state"] = PARKED
+    if rec.get("limit_provider") == PROVIDER_CODEX and rec.get("limit_recheck") is True:
+        _arm_codex_recheck(rec, now_epoch)
     if park_kind(rec) == KIND_REFUSED:
         # An attempt that was admitted and never reported back may well have been refused: it uses its try
         # (a crash never gives a free retry), then the wake is armed again at the new count.
@@ -965,6 +1001,8 @@ def park_view(marker: dict | None, health: dict | None = None, *, verdict_state:
         # exactly the keys they had, so no existing reader or payload contract changes.
         view["tries"] = _int(marker.get("tries"))
         view["held"] = bool(marker.get("held"))
+    if marker.get("provider") == PROVIDER_CODEX:
+        view["provider"] = PROVIDER_CODEX
     return view
 
 
@@ -1002,6 +1040,8 @@ def park_text(view: dict | None) -> str | None:
             text = f"{verb} {what}; tries again at {when}" if when else f"{verb} {what}; tries again shortly"
     elif view.get("state") == VIEW_STALE:
         text = "parked on a usage limit, wrapper not responding"
+    elif view.get("provider") == PROVIDER_CODEX and view.get("reset_epoch") is None and view.get("wake_epoch"):
+        text = f"waiting on a possible Codex usage limit; tries again at {format_epoch(view.get('wake_epoch'))}"
     else:
         when = format_epoch(view.get("reset_epoch")) if view.get("wake_epoch") else None
         text = f"parked on a usage limit until {when}" if when else "parked on a usage limit until restarted"

@@ -2382,6 +2382,8 @@ def _classify_drive_failure(
         # test proving this for both the rate_limit_event and result/status shapes);
         # widen THIS branch only with real evidence of a Claude payload that carries
         # no structured status at all.
+        if sig.get("codex_limit") is not None:
+            return CLASS_INFRA, "Codex usage limit or pending re-check"
         if not sig.get("structured_errors") and _looks_like_infra(text):
             return CLASS_AMBIGUOUS, f"terminal ambiguous infra-like text: {text[:160]}"
         return CLASS_AMBIGUOUS, (f"terminal failure, unrecognized cause: {text[:160]}"
@@ -2442,19 +2444,55 @@ def _soft_limit_fact(sig: dict, failure_class: str) -> dict | None:
     return {"word": word, "detail": provider_wait_detail(sig, word)}
 
 
-def _usage_limit_fact(sig: dict, failure_class: str) -> dict | None:
-    """The usage-limit fact for a failed Claude turn, or None.
+def _codex_usage_limit(agent: str, thread_id: str | None, started: float, *, now: float | None = None) -> dict | None:
+    """Use only this turn's rollout. No fresh budget is a timed re-check, not proof of exhaustion."""
+    from agenttalk import capacity
 
-    It exists only when this invocation's own stream proves the provider ended the turn
+    recheck = {"window": None, "reset_epoch": None, "recheck": True}
+    if not isinstance(thread_id, str) or not thread_id:
+        return recheck
+    try:
+        snapshot = capacity.read_codex_rollout(agent, thread_id=thread_id, precise=True)
+        if snapshot is None:
+            return recheck
+        observed = datetime.fromisoformat(snapshot.observed_at.replace("Z", "+00:00")).timestamp()
+        age = (time.time() if now is None else now) - observed
+        if observed <= started or not 0 <= age <= capacity.DEFAULT_STALE_AFTER_SECONDS:
+            return recheck
+        windows = [("five_hour", snapshot.primary_used_percent, snapshot.primary_resets_at),
+                   ("seven_day", snapshot.secondary_used_percent, snapshot.secondary_resets_at)]
+        reached = snapshot.rate_limit_reached_type
+        if not reached and any(used is not None and not 0 <= used <= 100 for _name, used, _reset in windows):
+            return recheck
+        exhausted = [(name, reset) for name, used, reset in windows
+                     if used == 100 or name == reached]
+        if exhausted:
+            unknown = next(((name, reset) for name, reset in exhausted if reset is None), None)
+            window, reset = unknown or max(exhausted, key=lambda item: item[1])
+            return {"window": window, "reset_epoch": reset}
+        if reached:
+            return {"window": None, "reset_epoch": None}
+        if all(used is None for _name, used, _reset in windows):
+            return recheck
+        return None
+    except (OSError, ValueError, OverflowError):
+        return recheck
+
+
+def _usage_limit_fact(sig: dict, failure_class: str) -> dict | None:
+    """The usage-limit fact for a failed provider turn, or None.
+
+    For Claude it exists only when this invocation's own stream proves the provider ended the turn
     on a usage limit (a rejected event with a known window, then a result whose
     ``is_error`` is exactly true) AND the classifier already attributes the failure to the
     provider (``known_global_infra``). A local cause - a watchdog kill, a configuration
     refusal, a bus-write fault, a held gateway - keeps its own class and never gets the
     fact; so a rejected event followed by anything other than a provider error parks
-    nothing. The fact only refines a provider-side failure; it never replaces a local one."""
+    nothing. A Codex terminal failure may carry its own corroborated or re-check fact.
+    The fact only refines a provider-side failure; it never replaces a local one."""
     from .loop import CLASS_INFRA
 
-    fact = _usage_park.fact_from_stream(sig.get("usage_stream"))
+    fact = sig.get("codex_limit") or _usage_park.fact_from_stream(sig.get("usage_stream"))
     if fact is None or failure_class != CLASS_INFRA:
         return None
     if _usage_park.local_cause_present(sig):
@@ -3109,6 +3147,15 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
                     continue
                 _capture_child_output("stdout", line)
                 _session.observe_event(session_state, raw)   # capture codex thread_id
+                if cli == "codex" and isinstance(raw, dict):
+                    if raw.get("type") == "thread.started":
+                        sig["codex_thread_id"] = raw.get("thread_id")
+                    elif raw.get("type") == "turn.started":
+                        sig["codex_started"] = time.time()
+                    elif raw.get("type") == "turn.failed" and isinstance(raw.get("error"), dict):
+                        message = raw["error"].get("message")
+                        sig["codex_limit_terminal"] = (isinstance(message, str)
+                                                       and "hit your usage limit" in message.casefold())
                 sig["conversation_fold"].note(raw)           # W1: this conversation's size
                 if trace is not None and cli == "claude":
                     usage = _result_usage(raw)
@@ -3235,6 +3282,9 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
         # cause of this turn's death. Its explicit wake ended the stream, so
         # rc/partial-stream signals are downstream noise. Carry it for _classify first.
         sig["watchdog"] = getattr(stream, "watchdog_result", None)
+        if cli == "codex" and park_on and sig.get("codex_limit_terminal"):
+            sig["codex_limit"] = _codex_usage_limit(
+                agent, sig.get("codex_thread_id"), sig.get("codex_started") or time.time())
         _finalize_child_output()
         sig["ok"] = (
             sig["completed"]
@@ -3314,7 +3364,9 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
                     "limit_detail": soft["detail"]}
         # This proof is read from Claude's own stream, so it names Claude (never an agent name).
         return {"limit_fact": _usage_park.FACT_USAGE_LIMIT, "limit_window": fact["window"],
-                "limit_reset_epoch": fact["reset_epoch"], "limit_provider": _usage_park.PROVIDER_CLAUDE}
+                "limit_reset_epoch": fact["reset_epoch"],
+                "limit_provider": "codex" if sig.get("codex_limit") is fact else _usage_park.PROVIDER_CLAUDE,
+                "limit_detail": "recheck" if fact.get("recheck") else None}
 
     def _finish_watchdog_recovery(sig: dict) -> None:
         if not sig.get("watchdog"):

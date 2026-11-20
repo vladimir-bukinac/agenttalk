@@ -782,7 +782,11 @@ def _usage_limit_park_flag(view: object) -> str | None:
         return f"provider_wait_parked(kind={kind},retry={when or 'soon'})"
     if view.get("state") == usage_park.VIEW_STALE:
         return "usage_limit_parked(wrapper_not_responding)"
+    if view.get("provider") == usage_park.PROVIDER_CODEX and view.get("reset_epoch") is None and view.get("wake_epoch"):
+        return f"usage_limit_parked(provider=codex,retry={usage_park.format_epoch(view.get('wake_epoch'))})"
     when = usage_park.format_epoch(view.get("reset_epoch")) if view.get("wake_epoch") else None
+    if view.get("provider") == usage_park.PROVIDER_CODEX:
+        return f"usage_limit_parked(provider=codex,until={when or 'restarted'})"
     return f"usage_limit_parked(until={when})" if when else "usage_limit_parked(until=restarted)"
 
 
@@ -13599,12 +13603,18 @@ def _usage_limit_notice_body(info: dict) -> str:
         return _provider_refusal_notice_body(info, facts)
     if kind in usage_park.COOLDOWN_KINDS:
         return _provider_wait_notice_body(info, facts, kind)
+    if facts.get("provider") == "codex" and facts.get("recheck"):
+        return (f"[usage-limit-parked] Seat {ag} is waiting after a possible Codex usage limit. "
+                f"It checks again in 30 minutes. Message {pc.meta_text(mid)} was not lost or dead-lettered. "
+                + usage_park.recovery_text(ag, mid))
     reset = usage_park.format_epoch(wake - 30) if isinstance(wake, int) and not isinstance(wake, bool) else None
     if reset:
-        state = (f"its Claude {window} allowance is used up until {reset}. It tries once more 30 "
+        provider = "Codex" if facts.get("provider") == "codex" else "Claude"
+        state = (f"its {provider} {window} allowance is used up until {reset}. It tries once more 30 "
                  "seconds after that time, and once each time it is started again.")
     else:
-        state = (f"its Claude {window} allowance is used up and no usable reset time was stated. "
+        provider = "Codex" if facts.get("provider") == "codex" else "Claude"
+        state = (f"its {provider} {window} allowance is used up and no usable reset time was stated. "
                  "It tries once more each time it is started again.")
     return (
         f"[usage-limit-parked] {head}Seat {ag} is parked: {state} Message {pc.meta_text(mid)} from "
@@ -13698,6 +13708,8 @@ def _dead_letter_notifier(store, agent: str):
     needs_operator meta at all - see ``_send_usage_limit_notice``. NEVER crashes the loop."""
     def emit(info: dict, *, disposed: bool) -> bool:
         try:
+            if info.get("dead_letter_resolved"):
+                return True
             from agenttalk import attention as A
             # #311 connector 4174800518, narrowed in round 2 (connector 4175000... shared-
             # helper-fixes-check-feature-off-siblings): when the PARKED agent is itself the
@@ -15593,6 +15605,18 @@ def _close_dead_letter_notice_threads(
     return closed
 
 
+def _resolved_seat_park(store: Store, agent: str) -> str:
+    """Show an existing park when resolution sends a notice behind the parked head."""
+    from agenttalk.wrapper import usage_park
+
+    view = store.usage_limit_park_view(agent)
+    if not view:
+        return ""
+    when = usage_park.format_epoch(view.get("wake_epoch"))
+    suffix = f"; next try {when}" if when else "; no timed try is known"
+    return f" Seat {agent} is parked{suffix}."
+
+
 def _cmd_dead_letter_resolve(store: Store, args: argparse.Namespace) -> int:
     """dead-letter resolve: an operator decision distinct from requeue. Preserves the
     payload + sidecar; appends an AUTHORITATIVE resolve_dead_letter event to the central
@@ -15636,7 +15660,8 @@ def _cmd_dead_letter_resolve(store: Store, args: argparse.Namespace) -> int:
         _close_dead_letter_notice_threads(
             store, agent=args.agent, msg_id=args.id, resolution=recorded,
         )
-        print(f"dead-letter {args.agent}/{pc.meta_text(args.id, source=pc.SUPPLIED_SOURCE)} already resolved")
+        print(f"dead-letter {args.agent}/{pc.meta_text(args.id, source=pc.SUPPLIED_SOURCE)} already resolved"
+              + _resolved_seat_park(store, args.agent))
         return 0
     event_id = "att-" + uuid.uuid4().hex[:12]
     A.append_disposition(store, {
@@ -15665,7 +15690,8 @@ def _cmd_dead_letter_resolve(store: Store, args: argparse.Namespace) -> int:
     )
     extra = f"; closed {closed} related escalation thread(s)" if closed else ""
     print(f"resolved dead-letter {args.agent}/{pc.meta_text(args.id, source=pc.SUPPLIED_SOURCE)} by {actor} "
-          f"(payload preserved; requeue with --force-resolved --reason to reopen{extra})")
+          f"(payload preserved; requeue with --force-resolved --reason to reopen{extra})"
+          + _resolved_seat_park(store, args.agent))
     return 0
 
 

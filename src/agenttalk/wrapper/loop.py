@@ -919,10 +919,11 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
     LOCK_CONTENTION_DIAGNOSTIC_AFTER_ATTEMPTS (the durable diagnostic).
 
     ``usage_limit_park`` (CONTINUOUS, legacy path only): stop retrying at a provider usage
-    limit. A turn the drive PROVES ended on a Claude usage limit (``DriveOutcome.limit_fact``)
+    limit. A turn the drive marks as a provider usage limit (``DriveOutcome.limit_fact``)
     parks its message instead of retrying: no retry, the message kept at the head, the seat
     alive and saying so. It tries once each time the wrapper is started again and once at
-    the reset time Claude states (plus a margin). None reads ``AGENTTALK_STOP_RETRIES_AT_LIMIT``
+    the provider reset time (plus a margin), or re-checks an unconfirmed Codex limit. None reads
+    ``AGENTTALK_STOP_RETRIES_AT_LIMIT``
     once (on unless ``0``); False restores the retry behaviour exactly. A provider safety REFUSAL (#857) is the
     one exception to "exactly": it is kept in every mode and on every path (continuous, scoped, through the
     commit gate) and is never disposed of; False only means it is held at once instead of after five tries."""
@@ -1274,6 +1275,8 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             bucket = "escalate_backstop"
         return {"agent": agent, "msg_id": record.get("id"), "from": record.get("from"),
                 "subject": record.get("subject"), "kind": record.get("kind"),
+                "dead_letter_resolved": (isinstance(record.get("meta"), dict)
+                                         and record["meta"].get("dead_letter_resolved") == "true"),
                 "request_id": record.get("request_id"),
                 "attempts": attempts,  # degrade-low
                 "attempts_bucket": bucket,
@@ -1466,6 +1469,8 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             "wake_epoch": usage_park.unused_wake(rec),
             "again": str(key).startswith("probe:"),
         }
+        if rec.get("limit_provider") == usage_park.PROVIDER_CODEX:
+            info["usage_limit"].update(provider="codex", recheck=bool(rec.get("limit_recheck")))
         if usage_park.is_cooldown(rec):
             # A cool-down names its kind and its next try (the saved wake); it has no window or reset.
             info["usage_limit"].update(kind=usage_park.park_kind(rec), next_try_epoch=usage_park.unused_wake(rec))
@@ -2658,6 +2663,7 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                 at=now_iso(),
                 usage_limit={"generation": park_generation, "window": outcome.limit_window,
                              "provider": outcome.limit_provider, "now_epoch": _now_epoch(),
+                             "recheck": outcome.limit_detail == "recheck",
                              "reset_epoch": usage_park.usable_reset(outcome.limit_reset_epoch,
                                                                     _now_epoch())})
             _park_usage_limit(record, store.attempt_record(agent, head_id) or {}, idle=True)
