@@ -114,13 +114,17 @@ def test_package_acquisition_site_inventory():
     # other ordered lock and no store write lock, so it is a leaf for this order, and nothing in doctor holds a lock
     # when it is called (the other checks take none). It is the read side of the same lock `read_selected_host` and
     # the supervisor lifecycle already take at rank 50; it never calls `read_selected_host`, which would take it again.
+    # wrapper/obligations.py 64 -> 65 (#857): `release_refused_dispatch` hands a reservation back to `reserved` after
+    # the provider refused the turn. It takes the gate's own ledger lock (`<ledger>.lock`) alone, once, the same lock at
+    # the same rank as `mark_dispatch_result` beside it, and calls nothing that takes another ordered lock while it
+    # holds it.
     assert found == {
         "assurance.py": 7, "attention.py": 2, "checkpoint.py": 1, "cli.py": 34,
         "close.py": 3, "doctor.py": 1, "gates.py": 1, "knowledge.py": 2, "knowledge_pack.py": 2, "lanes.py": 1,
         "lead_routine.py": 2, "lesson_context.py": 1, "onboarding.py": 2, "recovery.py": 1, "store.py": 70,
 
         "supervisor.py": 4, "supervisor_lifecycle.py": 14, "work_board_facts.py": 2, "worktree_release.py": 1,
-        "wrapper/obligations.py": 64, "wrapper/turn_watchdog.py": 1,
+        "wrapper/obligations.py": 65, "wrapper/turn_watchdog.py": 1,
     }
 
 

@@ -68,8 +68,10 @@ through the new session and cursor writes. CLI reset first takes lane-reset (70)
 A requeue keeps its recovery decision, record writes and publication inside
 retirement (150), then publication (160); it always re-reads config there.
 Reset never takes acceptance underneath publication. The persistent publication
-mutex lives outside the folders reset clears. The census is now 216 sites,
-including 70 in `store.py` and 1 in `doctor.py` (the host check, rank 50); all other per-file counts are unchanged.
+mutex lives outside the folders reset clears. The census is now 217 sites,
+including 70 in `store.py`, 1 in `doctor.py` (the host check, rank 50) and 65 in `wrapper/obligations.py` (one more
+since #857: the gate hands a refused dispatch back under its own ledger lock, the same lock at the same rank as
+`mark_dispatch_result`, taking no other ordered lock); all other per-file counts are unchanged.
 
 Stop agents before reset: every sender waits for its publication hold, and a wait
 longer than 10 seconds fails. Wrapper operation sends and compaction batches can

@@ -13625,7 +13625,8 @@ def _provider_refusal_notice_body(info: dict, facts: dict) -> str:
     span = f" since {first}" if first else ""
     return (
         f"[provider-refusal-held] Seat {ag} holds message {pc.meta_text(mid)} from {info.get('from')}: its AI "
-        f"provider refused {tries} turns on it for safety reasons{span}. The message was NOT lost and was NOT "
+        f"provider refused {'1 turn' if tries == 1 else f'{tries} turns'} on it for safety reasons{span}. The "
+        "message was NOT lost and was NOT "
         "dead-lettered, and nothing was changed, resent or answered. The seat tries it again only when it is "
         "started again, or you skip it. "
         + usage_park.recovery_text(ag, mid, usage_park.KIND_REFUSED, held=True)

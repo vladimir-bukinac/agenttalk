@@ -29,9 +29,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   health show the try and the hold. The refusal is recognised from the structured reason first
   (`cyber_policy`); an unknown or unusable reason proves nothing and never becomes "bad message". **The
   wording change applies to every seat, including Claude seats.** Scoped one-shot runs use the same count
-  and hold. The numbers are a stated choice, not a measured optimum, and the exact place of the
-  structured reason in Codex's output is not confirmed by a real sample. `AGENTTALK_STOP_RETRIES_AT_LIMIT=0`
-  restores the old behaviour. (#857)
+  and hold, keep stamping their heartbeat while they wait, and a held scoped request gets one more try
+  for each fresh start. A question the sender is waiting on (the reply gate) no longer ends as a failed
+  delivery after two refused turns: a refusal never uses one of the gate's two paid tries, so any number
+  of refusals only ever lead to the five-try schedule and the hold. With `AGENTTALK_STOP_RETRIES_AT_LIMIT=0`
+  a refusal gets no further tries: it is held at once with the same notice; the switch never turns a
+  refusal into a dead letter, a failed delivery or a skipped message. A gateway message such as "violates
+  retry policy" is no longer read as a safety refusal. The numbers are a stated choice, not a measured
+  optimum, and the exact place of the structured reason in Codex's output is not confirmed by a real
+  sample. (#857)
 - **Windows test jobs in CI may now run for 360 minutes instead of 330.** Between 16 and 18 November,
   18 Windows test jobs were stopped at the 330-minute limit without a single failing test, so pull
   requests waited for reruns. 360 minutes is the most GitHub's hosted runners allow; the 9,000-second

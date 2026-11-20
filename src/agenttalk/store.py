@@ -4908,7 +4908,8 @@ class Store:
         if is_cooldown:
             usage_park.apply_cooldown_result(
                 rec, at=at, generation=str(cooldown.get("generation") or ""), kind=cooldown_kind,
-                now_epoch=cooldown.get("now_epoch"), detail=cooldown.get("detail"))
+                now_epoch=cooldown.get("now_epoch"), detail=cooldown.get("detail"),
+                hold=cooldown.get("hold") is True)
             data["messages"][msg_id] = rec
             self._write_attempts(agent, data)
             return rec
@@ -5050,11 +5051,12 @@ class Store:
         return out
 
     def record_refusal_outcome(self, agent: str, record: dict, *, generation: str, at: str, now_epoch: float,
-                               detail: str | None = None) -> dict:
-        """A refused turn on a SCOPED one-shot run, which writes no attempt before it drives: the same refusal count,
-        waits and hold as the continuous loop's, in the same ledger entry, so a later invocation reads them (#857).
-        An entry that does not exist yet is made the way ``record_attempt_start`` makes one, with no attempt counted
-        (nothing here disposes of anything). Returns the record."""
+                               detail: str | None = None, hold: bool = False) -> dict:
+        """A refused turn on a run that writes no attempt before its FIRST try (a scoped one-shot run, or a request
+        that goes through the commit gate): the same refusal count, waits and hold as the continuous loop's, in the
+        same ledger entry, so a later invocation reads them (#857). An entry that does not exist yet is made the way
+        ``record_attempt_start`` makes one, with no attempt counted (nothing here disposes of anything). ``hold``:
+        stopping retries is switched off, so the request is held at once. Returns the record."""
         from agenttalk.wrapper import usage_park
 
         data = self.dead_letter_attempts(agent)
@@ -5076,7 +5078,7 @@ class Store:
         rec["last_failure_at"] = at
         usage_park.apply_cooldown_result(
             rec, at=at, generation=generation, kind=usage_park.KIND_REFUSED, now_epoch=now_epoch,
-            detail=detail or usage_park.REFUSAL_DETAIL)
+            detail=detail or usage_park.REFUSAL_DETAIL, hold=hold)
         data["messages"][mid] = rec
         self._write_attempts(agent, data)
         return rec

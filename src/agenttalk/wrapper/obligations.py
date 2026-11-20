@@ -4832,6 +4832,37 @@ class DetectionCommitGate:
                 )
             self._write(ledger)
 
+    def release_refused_dispatch(self, permit: DispatchPermit) -> None:
+        """The provider refused the turn this permit armed (#857): hand the reservation back.
+
+        A refusal is the provider's decision, not an agent that failed to reply, and a refusal alone must never
+        dispose of a request. So the dispatch is not a completed paid one: the reservation goes back to
+        ``reserved`` (the state of a permit that was reserved and never armed), nothing is classified, and the
+        paid-dispatch total is unchanged. The same permit is armed again by the next try, so any number of
+        refusals never uses up the two paid dispatches and can never reach the exhaustion rule that ends
+        delivery. How often and how soon the next try comes is the refusal schedule's business, not the gate's."""
+        with self.store._exclusive_lock(self.path.with_suffix(".lock"), timeout=10.0):
+            ledger = self._load()
+            admission = ledger["obligations"].get(permit.key_digest)
+            if not isinstance(admission, dict):
+                raise GateError("dispatch admission disappeared")
+            reservation = admission["reservations"].get(permit.nonce)
+            if not isinstance(reservation, dict):
+                raise GateError("dispatch reservation disappeared")
+            if reservation.get("state") != "dispatching":
+                raise GateError("dispatch result has no durable attempt barrier")
+            reservation["state"] = "reserved"
+            for field in ("dispatch_started_at", "dispatch_fence", "dispatch_owner_pid", "operation_intent"):
+                reservation.pop(field, None)
+            reservation["refused_dispatches"] = int(reservation.get("refused_dispatches", 0)) + 1
+            self._append(
+                ledger,
+                "DISPATCH_REFUSED_RELEASED",
+                key_digest=permit.key_digest,
+                data={"nonce": permit.nonce, "purpose": permit.purpose},
+            )
+            self._write(ledger)
+
     def mark_unsatisfied_attempt(self, permit: DispatchPermit, *, reason: str) -> None:
         """Classify an attempted operation that could not legally close this obligation."""
         with self.store._exclusive_lock(self.path.with_suffix(".lock"), timeout=10.0):

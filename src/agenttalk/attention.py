@@ -751,7 +751,8 @@ def _usage_limit_park_item(v: dict) -> dict:
         # #857: the provider refused a turn on safety grounds. Counts only; the message is kept either way.
         tries = max(1, v.get("tries") if isinstance(v.get("tries"), int) else 1)
         if v.get("held"):
-            why = (f"{ag} holds a message: its AI provider refused {tries} turns on it for safety reasons. The "
+            turns = "1 turn" if tries == 1 else f"{tries} turns"
+            why = (f"{ag} holds a message: its AI provider refused {turns} on it for safety reasons. The "
                    "message is kept, not retried, not dead-lettered and not answered, and the messages behind it "
                    "wait. A person should read it before deciding.")
         elif stale:

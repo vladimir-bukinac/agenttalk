@@ -236,6 +236,13 @@ def _as_outcome(ret: object) -> DriveOutcome:
     return DriveOutcome(ok=False, failure_class=CLASS_POISON, summary="drive returned False")
 
 
+def _is_refusal(outcome: DriveOutcome) -> bool:
+    """A turn the provider refused on safety grounds (#857). It is recorded as the refusal it is whatever the
+    stop-retries setting says: the setting decides how many tries it gets, never whether a refusal can dispose."""
+    return (not outcome.ok and outcome.failure_class == CLASS_PROVIDER_REFUSAL
+            and outcome.limit_fact == usage_park.FACT_REFUSED and not outcome.interrupted)
+
+
 # #201 wrapper-owned reply delivery (freeform path). Kinds whose natural
 # reply is a plain message get a wrapper-declared draft file the child can
 # answer through with nothing but its structured Write tool — the fix for
@@ -892,7 +899,9 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
     parks its message instead of retrying: no retry, the message kept at the head, the seat
     alive and saying so. It tries once each time the wrapper is started again and once at
     the reset time Claude states (plus a margin). None reads ``AGENTTALK_STOP_RETRIES_AT_LIMIT``
-    once (on unless ``0``); False restores the retry behaviour exactly."""
+    once (on unless ``0``); False restores the retry behaviour exactly. A provider safety REFUSAL (#857) is the
+    one exception to "exactly": it is kept in every mode and on every path (continuous, scoped, through the
+    commit gate) and is never disposed of; False only means it is held at once instead of after five tries."""
     stamp = heartbeat if heartbeat is not None else (lambda: store.write_heartbeat(agent))
     gate_generation = getattr(commit_gate, "fence", None)
     wait_token = (
@@ -1486,6 +1495,39 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
 
     _drop_marker()                          # a marker from an earlier run is rewritten if still true
 
+    def _park_decision(head_id: str, rec: dict) -> tuple[dict, bool, dict | None]:
+        """What a head that carries a park does this poll: ``(record, waiting, probe)``. ``waiting``: keep holding it.
+        Otherwise ``probe`` is the ONE try it is allowed (the wrapper was started again, or the saved time came);
+        it is written ahead with the attempt start, and one attempt consumes both triggers."""
+        now_e = _now_epoch()
+        # A held refusal has used its tries (or was held at once) and has NO saved time: it is not "cooling", so it
+        # waits for the wrapper to be started again, then makes the one try a start gets (never a fresh set).
+        cooling = usage_park.is_cooldown(rec) and not usage_park.is_held(rec)
+        if cooling:
+            # ONE validated clock for every decision about a cool-down head in this poll: the reading
+            # itself when a wake built from it is displayable, else the real time (the fallback the
+            # arming function uses). A wake armed from the real time is then never compared with
+            # the rejected reading, which would call it overdue at once.
+            now_e = usage_park.cooldown_clock(now_e)
+            # The saved time wins over a restart for a cool-down. A wake that cannot be trusted
+            # (absent, invalid, already used, or beyond any wake the schedule arms) is armed
+            # again here, at its current step, and the head is NOT probed at once.
+            rec = store.rearm_cooldown_wake(agent, head_id, now_epoch=now_e) or rec
+        wake_is_due = usage_park.wake_due(rec, now_e)
+        if (cooling or rec.get("parked_generation") == park_generation) and not wake_is_due:
+            return rec, True, None
+        return rec, False, {"generation": park_generation,
+                            "consumed_wake": usage_park.whole_seconds(rec.get("wake_epoch"))
+                            if wake_is_due else None}
+
+    def _record_refusal(record: dict, outcome: DriveOutcome) -> dict:
+        """A refused turn on a request that has no attempt entry yet (the commit gate's path writes none before its
+        first try): the refusal's own count, wait and hold, in the same entry the other paths use. Retries switched
+        off: held at once. Nothing else moves, and nothing is disposed."""
+        return store.record_refusal_outcome(
+            agent, record, generation=park_generation, at=now_iso(), now_epoch=_now_epoch(),
+            detail=outcome.limit_detail, hold=not usage_limit_park)
+
     def _park_config_blocked(record: dict, *, reason_code: str = "config_blocked") -> None:
         """Hold a deterministic local config denial (e.g. a held gateway, an exec-denied bus
         write) at the head WITHOUT consuming it. Emits a distinct advisory HEALTH state (via
@@ -1679,6 +1721,23 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             return turns
 
         legacy_gate_resolution = None
+        gate_probe: dict | None = None
+        if commit_gate is not None and isinstance(record.get("id"), str) and record.get("id"):
+            # #857: a head that carries a provider refusal waits, or is held, BEFORE the commit gate is asked
+            # anything: the gate's dispatch budget and exhaustion rules are for an agent that failed to reply, and a
+            # refusal is the provider's. The wait ends the poll; the try a start or the saved time allows is written
+            # ahead below, just before the gated drive, so a crash in it is counted.
+            gated_head_id = record["id"]
+            gated_rec = store.attempt_record(agent, gated_head_id) or {}
+            if usage_park.is_refusal_park(gated_rec) and gated_rec.get("in_progress"):
+                # a try that was admitted and never reported back (a crash): it counts as a refused try
+                store.reconcile_crash_in_progress(agent, gated_head_id, at=now_iso())
+                gated_rec = store.attempt_record(agent, gated_head_id) or {}
+            if usage_park.is_refusal_park(gated_rec) and usage_park.is_parked(gated_rec):
+                gated_rec, gated_waiting, gate_probe = _park_decision(gated_head_id, gated_rec)
+                if gated_waiting:
+                    _park_usage_limit(record, gated_rec, idle=False)
+                    continue
         if commit_gate is not None:
             from .obligations import GateError, ResolverState
 
@@ -1897,9 +1956,37 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                 # interruption accounting deliberately not wired for admitted
                 # dispatches - commit-gate integration is the #201 PR-2 work; see
                 # connector P1 2026-08-25
+                if gate_probe is not None:
+                    _drop_marker()              # change the parked view before the try starts
+                    store.record_attempt_start(agent, record, attempt_id=uuid.uuid4().hex[:12], at=now_iso(),
+                                               usage_probe=gate_probe)
                 outcome = _as_outcome(drive(dispatch_record))
+                if (_is_refusal(outcome) and not outcome.bus_action_attempted
+                        and not outcome.bus_action_rejected and not outcome.bus_action_infra):
+                    # #857: the provider refused the turn and no bus action was taken. Unless the reply landed all
+                    # the same, the reservation goes back to the gate (a refusal never uses a paid dispatch and can
+                    # never reach the exhaustion rule that ends delivery) and the refusal's own count, wait and hold
+                    # take over. Nothing is classified, advanced or disposed.
+                    if not settled_gate.resolve(record).terminal:
+                        settled_gate.release_refused_dispatch(permit)
+                        _record_refusal(record, outcome)
+                        _park_usage_limit(record, store.attempt_record(agent, record.get("id")) or {}, idle=True)
+                        continue
+                probed = store.attempt_record(agent, record.get("id")) if gate_probe is not None else None
+                if probed is not None and probed.get("probe_marker"):
+                    # The try a parked refusal was allowed ended some other way: it got through (the refusal record is
+                    # no longer true), or it failed otherwise (the park closes, the refusal count stays).
+                    if outcome.ok:
+                        store.clear_attempt(agent, record.get("id"))
+                    else:
+                        store.record_attempt_result(
+                            agent, record.get("id"), failure_class=outcome.failure_class or CLASS_AMBIGUOUS,
+                            summary=outcome.summary, at=now_iso())
+                # What is left of a refused turn here took a bus action (or its reply landed): it is still the
+                # provider's, so it is not read as an agent that failed to reply.
                 action_infra = (
-                    outcome.bus_action_infra or outcome.failure_class == CLASS_INFRA
+                    outcome.bus_action_infra
+                    or outcome.failure_class in (CLASS_INFRA, CLASS_PROVIDER_REFUSAL)
                 )
                 resolution = settled_gate.resolve(record)
                 post_budget_composing = resolution.reason == "post_budget_composing"
@@ -2172,35 +2259,18 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
         store.reconcile_crash_in_progress(agent, head_id, at=now_iso())
         rec = store.attempt_record(agent, head_id) or {}
         usage_probe: dict | None = None
-        if rec.get("park_state") in usage_park.PARK_STATES and not usage_limit_park:
+        if (rec.get("park_state") in usage_park.PARK_STATES and not usage_limit_park
+                and not usage_park.is_refusal_park(rec)):
             # Stopping retries is switched off but this head carries a park: drive it as
-            # before. The park closes, its time is kept out of every disposal decision.
+            # before. The park closes, its time is kept out of every disposal decision. A REFUSAL park is never
+            # closed this way: the setting decides how many tries a refusal gets, never whether it is kept.
             store.close_usage_park(agent, head_id, at=now_iso())
             rec = store.attempt_record(agent, head_id) or {}
-        elif usage_limit_park and usage_park.is_parked(rec):
-            now_e = _now_epoch()
-            # A held refusal has used its five tries and has NO saved time: it is not "cooling", so it waits for
-            # the wrapper to be started again, then makes the one try a start gets (never a fresh set of five).
-            cooling = usage_park.is_cooldown(rec) and not usage_park.is_held(rec)
-            if cooling:
-                # ONE validated clock for every decision about a cool-down head in this poll: the reading
-                # itself when a wake built from it is displayable, else the real time (the fallback the
-                # arming function uses). A wake armed from the real time is then never compared with
-                # the rejected reading, which would call it overdue at once.
-                now_e = usage_park.cooldown_clock(now_e)
-                # The saved time wins over a restart for a cool-down. A wake that cannot be trusted
-                # (absent, invalid, already used, or beyond any wake the schedule arms) is armed
-                # again here, at its current step, and the head is NOT probed at once.
-                rec = store.rearm_cooldown_wake(agent, head_id, now_epoch=now_e) or rec
-            wake_is_due = usage_park.wake_due(rec, now_e)
-            if (cooling or rec.get("parked_generation") == park_generation) and not wake_is_due:
+        elif (usage_limit_park or usage_park.is_refusal_park(rec)) and usage_park.is_parked(rec):
+            rec, waiting, usage_probe = _park_decision(head_id, rec)
+            if waiting:
                 _park_usage_limit(record, rec, idle=False)
                 continue
-            # One probe: the wrapper was started again, or the stated wake time came. One
-            # attempt consumes both triggers; it is written ahead with the attempt start.
-            usage_probe = {"generation": park_generation,
-                           "consumed_wake": usage_park.whole_seconds(rec.get("wake_epoch"))
-                           if wake_is_due else None}
         if rec.get("last_failure_class") == CLASS_CONFIG_BLOCKED:
             if isinstance(head_id, str):
                 config_blocked_ids.add(head_id)
@@ -2564,19 +2634,16 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                                                                     _now_epoch())})
             _park_usage_limit(record, store.attempt_record(agent, head_id) or {}, idle=True)
             continue
-        if outcome.failure_class == CLASS_PROVIDER_REFUSAL and not usage_limit_park:
-            # Stopping retries is switched off (AGENTTALK_STOP_RETRIES_AT_LIMIT=0): drive as before this change,
-            # that is, an unknown failure. The switch is the documented way back to the old behaviour.
-            outcome = replace(outcome, failure_class=CLASS_AMBIGUOUS, limit_fact=None, limit_detail=None)
-        if (usage_limit_park and outcome.failure_class == CLASS_PROVIDER_REFUSAL
-                and outcome.limit_fact == usage_park.FACT_REFUSED and not outcome.interrupted):
+        if _is_refusal(outcome):
             # The provider refused the turn (#857). Record it in the refusal's own count (no disposal counter
             # moves, the attempt is excluded) and wait on the saved schedule; the fifth refusal makes the hold.
-            # A refusal alone never disposes of the message and never advances the cursor.
+            # With stopping retries switched off the hold comes at once: the switch stops further tries, it never
+            # waives the rule that a refusal alone never disposes of the message or advances the cursor.
             store.record_attempt_result(
                 agent, head_id, failure_class=CLASS_PROVIDER_REFUSAL, summary=outcome.summary, at=now_iso(),
                 cooldown={"generation": park_generation, "kind": usage_park.KIND_REFUSED,
-                          "detail": outcome.limit_detail or usage_park.REFUSAL_DETAIL, "now_epoch": _now_epoch()})
+                          "detail": outcome.limit_detail or usage_park.REFUSAL_DETAIL, "now_epoch": _now_epoch(),
+                          "hold": not usage_limit_park})
             _park_usage_limit(record, store.attempt_record(agent, head_id) or {}, idle=True)
             continue
         quick_overload = False
@@ -2813,22 +2880,26 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
         value = usage_park.iso_epoch(now_iso())
         return value if value is not None else time.time()
 
+    # The start this run belongs to: a held request gets one more try for each fresh start, never a new set of five.
+    # A run that was not given a generation is a start of its own.
+    generation = wrapper_generation or uuid.uuid4().hex
+
     def _refusal_check(record: dict) -> float | str | None:
-        """None: drive. "held": all five tries are used, stop. A number: seconds to wait first."""
+        """None: drive. "held": the tries are used up (or retries are off) and this start has had its one try, stop.
+        A number: seconds to wait first. The stop-retries setting never comes in here: it decides how many tries a
+        refusal gets (see ``_refusal_settle``), never whether a refusal that is parked is kept."""
         head_id = record.get("id")
         if not isinstance(head_id, str) or not head_id:
             return None
-        store.reconcile_crash_in_progress(agent, head_id, at=now_iso())
         rec = store.attempt_record(agent, head_id) or {}
+        if usage_park.is_refusal_park(rec) and rec.get("in_progress"):
+            # a try that was admitted and never reported back (a crash): it counts as a refused try
+            store.reconcile_crash_in_progress(agent, head_id, at=now_iso())
+            rec = store.attempt_record(agent, head_id) or {}
         if not usage_park.is_refusal_park(rec):
             return None
-        if not usage_limit_park:
-            # Stopping retries is switched off (AGENTTALK_STOP_RETRIES_AT_LIMIT=0): as in the continuous loop, the park
-            # closes (its time stays out of every disposal count) and the request is driven, a hold included.
-            store.close_usage_park(agent, head_id, at=now_iso())
-            return None
         if usage_park.is_held(rec):
-            return "held"
+            return "held" if rec.get("parked_generation") == generation else None
         now_e = usage_park.cooldown_clock(_wall_epoch())
         rec = store.rearm_cooldown_wake(agent, head_id, now_epoch=now_e) or rec
         wake = usage_park.unused_wake(rec)
@@ -2836,41 +2907,35 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             return float(wake - now_e)
         return None
 
-    def _as_driven(outcome: DriveOutcome) -> DriveOutcome:
-        """Switched off, a refusal is driven as before this change: an unknown failure (no park, no wait, and not the
-        gate's infrastructure case below)."""
-        if usage_limit_park or outcome.failure_class != CLASS_PROVIDER_REFUSAL:
-            return outcome
-        return replace(outcome, failure_class=CLASS_AMBIGUOUS, limit_fact=None, limit_detail=None)
-
     def _refusal_admit(record: dict) -> None:
         """Write ahead the try a parked refusal gets (the existing probe write): a crash in the turn is then
         counted as a refused try, never a free one."""
         head_id = record.get("id")
         rec = store.attempt_record(agent, head_id) if isinstance(head_id, str) else None
-        if not usage_limit_park or not usage_park.is_refusal_park(rec) or rec.get("park_state") != usage_park.PARKED:
+        if not usage_park.is_refusal_park(rec) or rec.get("park_state") != usage_park.PARKED:
             return
         store.record_attempt_start(
             agent, record, attempt_id=uuid.uuid4().hex[:12], at=now_iso(),
-            usage_probe={"generation": wrapper_generation or "scoped",
-                         "consumed_wake": usage_park.unused_wake(rec)})
+            usage_probe={"generation": generation, "consumed_wake": usage_park.unused_wake(rec)})
 
     def _refusal_settle(record: dict, outcome: DriveOutcome) -> None:
-        """What a drive's result does to the refusal's own record (it never touches any other counter)."""
+        """What a drive's result does to the refusal's own record (it never touches any other counter). Stopping
+        retries switched off: a refusal is held at once instead of after five tries."""
         head_id = record.get("id")
         if not isinstance(head_id, str) or not head_id:
             return
-        if outcome.failure_class == CLASS_PROVIDER_REFUSAL and not outcome.ok and usage_limit_park:
+        if _is_refusal(outcome):
             store.record_refusal_outcome(
-                agent, record, generation=wrapper_generation or "scoped", at=now_iso(),
-                now_epoch=usage_park.cooldown_clock(_wall_epoch()), detail=outcome.limit_detail)
+                agent, record, generation=generation, at=now_iso(),
+                now_epoch=usage_park.cooldown_clock(_wall_epoch()), detail=outcome.limit_detail,
+                hold=not usage_limit_park)
             return
         rec = store.attempt_record(agent, head_id)
         if rec is None or rec.get("last_failure_class") != CLASS_PROVIDER_REFUSAL:
             return
         if outcome.ok:
             store.clear_attempt(agent, head_id)       # it got through: the refusal record is no longer true
-        elif rec.get("probe_marker") and usage_limit_park:
+        elif rec.get("probe_marker"):
             # another kind of failure ends the probe: the park closes, the refusal count stays
             store.record_attempt_result(
                 agent, head_id, failure_class=outcome.failure_class or CLASS_AMBIGUOUS,
@@ -2974,8 +3039,14 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
             if max_wall is not None and (clock() - start) + held > max_wall:
                 _stamp()
                 return turns            # the wait does not fit in this run; the saved time is kept
-            _stamp()
-            sleep(held)
+            # The wait is slept in heartbeat-sized pieces, each after a stamp: a wrapped seat reads stale after a
+            # few minutes without one, and a saved wait can be 15 minutes. The saved time itself is unchanged.
+            remaining = held
+            while remaining > 0:
+                _stamp()
+                chunk = min(max(0.1, float(heartbeat_interval)), remaining)
+                sleep(chunk)
+                remaining -= chunk
             continue
         legacy_gate_resolution = None
         if commit_gate is not None:
@@ -3123,12 +3194,22 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                     fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
                     continue
                 _refusal_admit(record)
-                outcome = _as_driven(_as_outcome(
-                    drive(_with_interruption_context(dispatch_record))))
+                outcome = _as_outcome(drive(_with_interruption_context(dispatch_record)))
                 _note_interruption(outcome)
+                if (_is_refusal(outcome) and not outcome.bus_action_attempted
+                        and not outcome.bus_action_rejected and not outcome.bus_action_infra
+                        and not commit_gate.resolve(record).terminal):
+                    # #857: the provider refused the turn and no bus action was taken (unless the reply landed all
+                    # the same). A refusal is the provider's, not an agent that failed to reply: the reservation goes
+                    # back to the gate, so it never uses a paid dispatch and can never reach the exhaustion rule that
+                    # ends delivery, and the refusal's own count, wait and hold take over.
+                    commit_gate.release_refused_dispatch(permit)
+                    _refusal_settle(record, outcome)
+                    _stamp()
+                    continue
                 _refusal_settle(record, outcome)
-                # A refused turn is the provider's, like an outage: it is not an agent that failed to reply, so it
-                # never counts toward the gate's "computed but did not emit" bound.
+                # What is left of a refused turn here took a bus action (or its reply landed): it is still the
+                # provider's, so it is not read as an agent that failed to reply.
                 action_infra = (
                     outcome.bus_action_infra or outcome.failure_class in (CLASS_INFRA, CLASS_PROVIDER_REFUSAL)
                 )
@@ -3297,7 +3378,7 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
         # THIS attempt's "previously interrupted" fact on the record itself.
         record = _with_reply_draft(store, agent, _with_interruption_context(record))
         _refusal_admit(record)
-        outcome = _as_driven(_as_outcome(drive(record)))
+        outcome = _as_outcome(drive(record))
         _note_interruption(outcome)
         _refusal_settle(record, outcome)
         # connector P2 (final head): one-shot is LEDGER-LESS, so the FIX 5

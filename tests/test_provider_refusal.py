@@ -8,12 +8,15 @@ marker word so a test can prove it never reaches a summary, the attempt record, 
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
 from agenttalk import attention, cli
-from agenttalk.wrapper import codex_adapter, events, loop, run, session
+from agenttalk.store import Store
+from agenttalk.wrapper import codex_adapter, events, loop, recv_api, run, session
 from agenttalk.wrapper import usage_park as park
+from agenttalk.wrapper.obligations import DETECTION_GRADE, DetectionCommitGate, PolicySnapshot
 from test_usage_park_loop import AGENT, T0, Clock, Crash, Seen, Spawner, head, ledger, make_store
 
 MARKER = "SECRETPROMPTECHO"  # stands for anything the provider's text might carry
@@ -557,14 +560,63 @@ def test_a_lower_disposal_ceiling_never_disposes_of_a_refusal_only_history(tmp_p
     assert park.is_held(ledger(store)) and head(store).body == "one"
 
 
-def test_with_stopping_retries_switched_off_a_refusal_is_driven_as_an_unknown_failure_as_before(tmp_path):
+def switch_setting(monkeypatch, how):
+    """The two ways the stop-retries setting reaches a run: the environment variable, or the argument."""
+    if how == "env":
+        monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
+        return {"park_on": None}
+    return {"park_on": False}
+
+
+@pytest.mark.parametrize("how", ["env", "argument"])
+def test_with_stopping_retries_switched_off_a_refusal_is_held_at_once_and_never_disposed(tmp_path, monkeypatch, how):
+    """Lead ruling: the switch may stop further tries, it never waives "a refusal alone never disposes"."""
     store = make_store(tmp_path)
     spawner = Recorder(refused())
     clock = Clock(T0)
-    seen = go(store, spawner, clock, polls=3, park_on=False)
+    seen = go(store, spawner, clock, polls=60, **switch_setting(monkeypatch, how))
     rec = ledger(store)
-    assert spawner.calls == 3 and rec["ambiguous_failures"] == 3 and "park_state" not in rec
-    assert rec["last_failure_class"] == "ambiguous_or_unknown" and not seen.notices
+    assert spawner.calls == 1, "no further tries: the request is held after the first refusal"
+    assert park.is_held(rec) and rec["refusal_total"] == 1 and "wake_epoch" not in rec
+    assert (rec["infra_failures"], rec["ambiguous_failures"], rec["poison_eligible_failures"]) == (0, 0, 0)
+    assert store.dead_lettered_count(AGENT) == 0 and store.cursor(AGENT) == "" and head(store).body == "one"
+    assert len(seen.notices) == 1 and seen.notices[0]["usage_limit"]["held"] is True  # visible to the lead
+    healths = [e for e in seen.events if isinstance(e, tuple) and e[0] == "health"]
+    assert healths[-1] == ("health", "provider_refusal_held", "provider_safety_refusal")
+
+
+def test_a_start_with_the_switch_off_gives_one_more_try_and_the_request_stays_held(tmp_path, monkeypatch):
+    store = make_store(tmp_path)
+    spawner = Recorder(refused())
+    clock = Clock(T0)
+    go(store, spawner, clock, polls=5, park_on=False, generation="g1")
+    go(store, spawner, clock, polls=5, park_on=False, generation="g1")  # the same start: nothing more
+    assert spawner.calls == 1
+    for n, generation in enumerate(("g2", "g3"), start=2):
+        go(store, spawner, clock, polls=5, park_on=False, generation=generation)
+        rec = ledger(store)
+        assert spawner.calls == n and park.is_held(rec) and rec["refusal_total"] == n
+    assert store.dead_lettered_count(AGENT) == 0 and store.cursor(AGENT) == ""
+
+
+@pytest.mark.parametrize("how", ["env", "argument"])
+def test_turning_the_switch_off_does_not_release_a_hold_or_dispose_of_it(tmp_path, monkeypatch, how):
+    store, spawner, clock, seen, times = refuse_until_held(tmp_path)
+    go(store, spawner, clock, polls=10, generation="g1", **switch_setting(monkeypatch, how))
+    rec = ledger(store)
+    assert spawner.calls == 5 and park.is_held(rec)  # still held: no try without a start
+    assert store.dead_lettered_count(AGENT) == 0 and store.cursor(AGENT) == "" and head(store).body == "one"
+
+
+def test_a_refusal_after_a_switched_off_hold_goes_back_to_the_schedule_when_retries_are_on_again(tmp_path):
+    store = make_store(tmp_path)
+    spawner = Recorder(refused())
+    clock = Clock(T0)
+    go(store, spawner, clock, polls=5, park_on=False, generation="g1")
+    assert park.is_held(ledger(store)) and spawner.calls == 1
+    go(store, spawner, clock, polls=1, park_on=True, generation="g2")  # a start with retries on: one try, refused
+    rec = ledger(store)
+    assert spawner.calls == 2 and not park.is_held(rec) and rec["wake_epoch"] > clock.t
 
 
 # -------------------------------------------------------------------------------- what the next turn is told
@@ -773,11 +825,71 @@ def test_a_scoped_hold_is_not_forgotten_by_the_next_invocation_and_the_gate_is_n
         if rec.get("wake_epoch"):
             clock.t = float(rec["wake_epoch"])
     assert len(calls) == 5 and park.is_held(store.attempt_record(AGENT, message_id))
-    for n in range(6, 12):  # six more invocations: nothing is driven, the gate is untouched
-        turns = run_scoped(store, drive, clock, generation=f"s{n}", max_polls=2, max_wall=30.0, commit_gate=Gate())
+    for _ in range(6):  # six more invocations of the SAME start: nothing is driven, the gate is untouched
+        turns = run_scoped(store, drive, clock, generation="s5", max_polls=2, max_wall=30.0, commit_gate=Gate())
         assert turns == 0
     assert len(calls) == 5 and store.dead_lettered_count(AGENT) == 0
     assert store.thread_seen(AGENT, "rq-1") in ("", None)  # the request is still unseen, not consumed
+
+
+def test_a_held_scoped_request_gets_one_more_try_for_each_fresh_start_and_never_a_new_set_of_five(tmp_path):
+    """zteam P2: the README and the recovery text promise one more try per start; scoped mode keeps that promise."""
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)  # generations h1..h5: five tries, then held
+    calls = []
+
+    def drive(record):
+        calls.append(record["id"])
+        return refusal_outcome()
+
+    for n, generation in enumerate(("fresh-1", "fresh-2", "fresh-3"), start=1):
+        run_scoped(store, drive, clock, generation=generation, max_polls=3, max_wall=30.0)
+        assert len(calls) == n and park.is_held(store.attempt_record(AGENT, message_id))
+        run_scoped(store, drive, clock, generation=generation, max_polls=3, max_wall=30.0)  # same start: none
+        assert len(calls) == n
+    assert store.attempt_record(AGENT, message_id)["refusal_total"] == 8
+    assert store.dead_lettered_count(AGENT) == 0 and store.thread_seen(AGENT, "rq-1") in ("", None)
+
+
+def test_a_held_scoped_request_that_gets_through_on_a_fresh_start_is_consumed(tmp_path):
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)
+    turns = run_scoped(
+        store,
+        lambda record: loop.DriveOutcome(ok=True),
+        clock,
+        generation="fresh",
+        max_polls=3,
+        max_turns=1,
+        max_wall=30.0,
+    )
+    assert turns == 1 and store.thread_seen(AGENT, "rq-1") == message_id
+    assert store.attempt_record(AGENT, message_id) is None
+
+
+def test_a_scoped_wait_keeps_stamping_the_heartbeat_while_it_sleeps(tmp_path):
+    """zteam P2: a saved wait of up to 15 minutes was one sleep with a single stamp before it (a 900 s gap), and a
+    wrapped seat reads stale after 180 s. The wait is cut into heartbeat-sized pieces; the saved time is unchanged."""
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    beats = []
+    run_scoped(
+        store,
+        lambda record: refusal_outcome(),
+        clock,
+        max_polls=15,
+        max_wall=4000.0,
+        heartbeat=lambda: beats.append(clock.t),
+    )
+    gaps = [b - a for a, b in zip(beats, beats[1:], strict=False)]
+    assert gaps and max(gaps) <= 2 * loop.HEARTBEAT_INTERVAL_SECONDS, max(gaps)  # a piece plus a poll, not 900 s
+    assert clock.t - T0 >= sum(WAITS), "the whole saved wait is still waited out"
+    rec = store.attempt_record(AGENT, store.messages_for(AGENT)[0].id)
+    assert rec["refusal_total"] == 5 and park.is_held(rec)  # the schedule is unchanged: 60, 180, 420, 900
 
 
 def test_a_scoped_crash_in_a_try_uses_the_try(tmp_path):
@@ -837,7 +949,7 @@ def test_the_park_view_of_every_other_kind_keeps_exactly_the_keys_it_had():
     assert shown["kind"] == "provider_refusal" and shown["tries"] == 3 and shown["held"] is False
 
 
-# ------------------------------------------------ the stop-retries switch (codex-rev, fix round 1)
+# ------------------------------------------------------------- round 2 (zteam's read of c85ab5cb)
 
 
 def scoped_hold(store, clock, message_id):
@@ -850,18 +962,8 @@ def scoped_hold(store, clock, message_id):
     assert park.is_held(store.attempt_record(AGENT, message_id))
 
 
-def switch_off(monkeypatch, how):
-    """The two ways the setting reaches a scoped run: the environment variable, or the argument."""
-    if how == "env":
-        monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
-        return {}
-    return {"usage_limit_park": False}
-
-
 @pytest.mark.parametrize("how", ["env", "argument"])
-def test_a_scoped_refusal_with_the_switch_off_is_an_ordinary_unknown_failure_and_never_parks(
-    tmp_path, monkeypatch, how
-):
+def test_a_scoped_refusal_with_the_switch_off_is_held_at_once_and_never_disposed(tmp_path, monkeypatch, how):
     store = scoped_store(tmp_path)
     clock = Clock(T0)
     calls = []
@@ -870,12 +972,16 @@ def test_a_scoped_refusal_with_the_switch_off_is_an_ordinary_unknown_failure_and
         calls.append(clock.t)
         return refusal_outcome()
 
-    kw = switch_off(monkeypatch, how)
-    run_scoped(store, drive, clock, max_polls=3, max_wall=30.0, **kw)
-    rec = store.attempt_record(AGENT, store.messages_for(AGENT)[0].id)
-    assert rec is None or (rec.get("park_kind") != "provider_refusal" and "park_state" not in rec), rec
-    assert len(calls) == 3, "driven again at the loop's own short back-off, as before: no saved wait"
-    assert store.dead_lettered_count(AGENT) == 0
+    kw = {} if how == "env" else {"usage_limit_park": False}
+    if how == "env":
+        monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
+    for _ in range(3):
+        run_scoped(store, drive, clock, max_polls=4, max_wall=30.0, **kw)  # the same start, three invocations
+    message_id = store.messages_for(AGENT)[0].id
+    rec = store.attempt_record(AGENT, message_id)
+    assert len(calls) == 1, "held after the first refusal: no further tries without a fresh start"
+    assert park.is_held(rec) and rec["refusal_total"] == 1 and "wake_epoch" not in rec
+    assert store.dead_lettered_count(AGENT) == 0 and store.thread_seen(AGENT, "rq-1") in ("", None)
 
 
 def test_a_scoped_refusal_with_the_switch_on_still_parks(tmp_path):
@@ -883,64 +989,260 @@ def test_a_scoped_refusal_with_the_switch_on_still_parks(tmp_path):
     clock = Clock(T0)
     run_scoped(store, lambda record: refusal_outcome(), clock, max_polls=3, max_wall=30.0, usage_limit_park=True)
     rec = store.attempt_record(AGENT, store.messages_for(AGENT)[0].id)
-    assert rec["park_kind"] == "provider_refusal" and rec["refusal_total"] == 1
+    assert rec["park_kind"] == "provider_refusal" and rec["refusal_total"] == 1 and not park.is_held(rec)
 
 
 @pytest.mark.parametrize("how", ["env", "argument"])
-def test_a_scoped_hold_is_driven_again_when_the_switch_is_turned_off(tmp_path, monkeypatch, how):
-    store = scoped_store(tmp_path)
-    clock = Clock(T0)
-    message_id = store.messages_for(AGENT)[0].id
-    scoped_hold(store, clock, message_id)
-    seen = []
-
-    def drive(record):
-        seen.append(record["id"])
-        return loop.DriveOutcome(ok=True)
-
-    kw = switch_off(monkeypatch, how)
-    turns = run_scoped(store, drive, clock, generation="off", max_polls=2, max_wall=30.0, **kw)
-    assert seen == [message_id] and turns == 1
-    assert store.thread_seen(AGENT, "rq-1") == message_id
-    assert store.attempt_record(AGENT, message_id) is None or not park.is_refusal_park(
-        store.attempt_record(AGENT, message_id)
-    )
-
-
-def test_a_scoped_hold_driven_with_the_switch_off_and_refused_again_is_not_parked_again(tmp_path, monkeypatch):
+def test_turning_the_switch_off_does_not_release_a_scoped_hold(tmp_path, monkeypatch, how):
     store = scoped_store(tmp_path)
     clock = Clock(T0)
     message_id = store.messages_for(AGENT)[0].id
     scoped_hold(store, clock, message_id)
     calls = []
-
-    def drive(record):
-        calls.append(record["id"])
-        return refusal_outcome()
-
-    monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
-    run_scoped(store, drive, clock, generation="off", max_polls=3, max_wall=30.0)
-    assert len(calls) == 3
-    assert not park.is_refusal_park(store.attempt_record(AGENT, message_id))
-
-
-@pytest.mark.parametrize("how", ["env", "argument"])
-def test_the_continuous_loop_drives_an_existing_hold_when_the_switch_is_turned_off(tmp_path, monkeypatch, how):
-    store, spawner, clock, seen, times = refuse_until_held(tmp_path)
-    message_id = head(store).id
-    spawner.steps = [ok_turn()]
+    kw = {}
     if how == "env":
         monkeypatch.setenv("AGENTTALK_STOP_RETRIES_AT_LIMIT", "0")
-        result = go(store, spawner, clock, polls=1, generation="off", park_on=None)
     else:
-        result = go(store, spawner, clock, polls=1, generation="off", park_on=False)
-    assert spawner.calls == 6 and result.turns == 1 and store.cursor(AGENT) == message_id
-    assert store.attempt_record(AGENT, message_id) is None
+        kw = {"usage_limit_park": False}
+    run_scoped(
+        store,
+        lambda record: calls.append(1) or refusal_outcome(),
+        clock,
+        generation="h5",
+        max_polls=3,
+        max_wall=30.0,
+        **kw,
+    )
+    assert calls == [] and park.is_held(store.attempt_record(AGENT, message_id))
+    assert store.dead_lettered_count(AGENT) == 0 and store.thread_seen(AGENT, "rq-1") in ("", None)
 
 
-def test_the_continuous_loop_with_the_switch_off_drives_a_refused_hold_as_an_unknown_failure(tmp_path):
-    store, spawner, clock, seen, times = refuse_until_held(tmp_path)
-    go(store, spawner, clock, polls=3, generation="off", park_on=False)
-    rec = ledger(store)
-    assert spawner.calls == 8 and "park_state" not in rec and rec["ambiguous_failures"] == 3
-    assert rec["last_failure_class"] == "ambiguous_or_unknown"
+# ---- the real commit gate (DetectionCommitGate), not a stub: a refusal never reaches its exhaustion rules ----
+
+
+def gate_store(tmp_path):
+    store = Store(tmp_path)
+    store.init(["alpha", AGENT, "lead", "gamma"])
+    store.set_operator_facing("lead")
+    return store
+
+
+def real_gate(store, fence="wrapper-1"):
+    store.write_waiting(
+        AGENT, {"mode": "wrapper-loop", "wrapper_generation": fence, "wait_token": fence, "pid": os.getpid()}
+    )
+    policy = PolicySnapshot.from_mapping({"schema_version": 1, "agents": {AGENT: {"grade": DETECTION_GRADE}}}, AGENT)
+    return DetectionCommitGate(store, AGENT, policy, fence=fence)
+
+
+def owed_question(store, rid="rq-1"):
+    return store.send(
+        sender="alpha", recipient=AGENT, kind="question", body="What is 19 * 21?", meta={"request_id": rid}
+    )
+
+
+def gate_ledger(gate):
+    return json.loads(gate.path.read_text(encoding="utf-8"))
+
+
+def only_admission(gate):
+    return next(iter(gate_ledger(gate)["obligations"].values()))
+
+
+def gated_go(store, spawner, clock, gate, *, scoped, generation, seen, polls=1, **kw):
+    extra = {"only_request_id": "rq-1"} if scoped else {}
+    return go(store, spawner, clock, polls=polls, generation=generation, commit_gate=gate, seen=seen, **extra, **kw)
+
+
+def gated_tries(store, spawner, clock, gate, seen, *, scoped, generation="wrapper-1", count=5, **kw):
+    """Drive a real-gate head through ``count`` refused tries, each started once its saved time has come."""
+    mid = store.messages_for(AGENT)[0].id
+    if scoped:  # one invocation waits out the saved times itself
+        gated_go(store, spawner, clock, gate, scoped=True, generation=generation, seen=seen, polls=60, **kw)
+        return
+    for _ in range(count + 3):
+        gated_go(store, spawner, clock, gate, scoped=False, generation=generation, seen=seen, **kw)
+        wake = (store.attempt_record(AGENT, mid) or {}).get("wake_epoch")
+        if wake:
+            clock.t = float(wake)
+
+
+def assert_nothing_disposed(store, gate, spawner, *, calls):
+    assert spawner.calls == calls
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed", status
+    admission = only_admission(gate)
+    assert admission["state"] == "open" and admission["paid_dispatches_total"] == 1
+    assert store.cursor(AGENT) == "" and store.dead_lettered_count(AGENT) == 0
+    assert store.thread_seen(AGENT, "rq-1") in ("", None)
+
+
+def test_releasing_a_refused_dispatch_gives_the_slot_back_every_time(tmp_path):
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate = real_gate(store)
+    record = recv_api.next_record(store, AGENT)
+    admitted = gate.admit_or_finalize(record)
+    for _ in range(6):
+        purpose = gate.next_dispatch_purpose(admitted.key)
+        assert purpose == "initial"
+        permit = gate.reserve_dispatch(admitted, purpose=purpose)
+        gate.dispatch_record(record, permit)
+        gate.release_refused_dispatch(permit)
+        assert not gate.dispatch_exhausted(admitted.key)
+    admission = only_admission(gate)
+    assert admission["paid_dispatches_total"] == 1 and len(admission["reservations"]) == 1
+    assert next(iter(admission["reservations"].values()))["state"] == "reserved"
+
+
+def test_a_refused_second_dispatch_does_not_use_up_the_budget_either(tmp_path):
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate = real_gate(store)
+    record = recv_api.next_record(store, AGENT)
+    admitted = gate.admit_or_finalize(record)
+    first = gate.reserve_dispatch(admitted, purpose="initial")
+    gate.dispatch_record(record, first)
+    gate.mark_dispatch_result(first, action_attempted=False)  # the agent did not reply: the recovery try is next
+    for _ in range(4):
+        purpose = gate.next_dispatch_purpose(admitted.key)
+        assert purpose == "recovery"
+        permit = gate.reserve_dispatch(gate.resolve(record), purpose=purpose)
+        gate.dispatch_record(record, permit)
+        gate.release_refused_dispatch(permit)
+    # the recovery dispatch is still owed, and still the SAME one: no further slot was used and none was lost
+    assert gate.next_dispatch_purpose(admitted.key) == "recovery"
+    admission = only_admission(gate)
+    assert admission["paid_dispatches_total"] == 2 and admission["paid_recoveries_total"] == 1
+    assert [row["state"] for row in admission["reservations"].values()] == ["completed", "reserved"]
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+def test_refusals_through_the_real_gate_hold_the_request_and_never_end_delivery(tmp_path, scoped):
+    """zteam P1: two refused turns ended delivery (delivery_failed); five tries and a hold are promised."""
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate, seen, clock = real_gate(store), Seen(), Clock(T0)
+    spawner = Recorder(refused())
+    gated_tries(store, spawner, clock, gate, seen, scoped=scoped)
+    mid = store.messages_for(AGENT)[0].id
+    assert park.is_held(store.attempt_record(AGENT, mid)), store.attempt_record(AGENT, mid)
+    assert_nothing_disposed(store, gate, spawner, calls=5)
+    gated_go(store, spawner, clock, gate, scoped=scoped, generation="wrapper-1", seen=seen, polls=20)
+    assert_nothing_disposed(store, gate, spawner, calls=5)  # held for good without a start
+    if not scoped:
+        assert len(seen.notices) == 1 and seen.notices[0]["usage_limit"]["held"] is True
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+def test_a_fresh_start_gives_a_gated_hold_exactly_one_more_try(tmp_path, monkeypatch, scoped):
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate, seen, clock = real_gate(store), Seen(), Clock(T0)
+    spawner = Recorder(refused())
+    gated_tries(store, spawner, clock, gate, seen, scoped=scoped)
+    # a start is a NEW wrapper process: the one that held the request before it is gone
+    monkeypatch.setattr("agenttalk.wrapper.obligations._process_liveness", lambda _pid: "dead")
+    for n, fence in enumerate(("wrapper-2", "wrapper-3"), start=1):
+        restarted = real_gate(store, fence)
+        gated_go(store, spawner, clock, restarted, scoped=scoped, generation=fence, seen=seen, polls=6)
+        assert_nothing_disposed(store, restarted, spawner, calls=5 + n)
+        gated_go(store, spawner, clock, restarted, scoped=scoped, generation=fence, seen=seen, polls=6)
+        assert spawner.calls == 5 + n  # the same start: nothing more
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+def test_a_gated_request_refused_twice_still_gets_its_reply_through_on_a_later_try(tmp_path, scoped):
+    from pathlib import Path
+
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock, calls = real_gate(store), Clock(T0), []
+
+    def drive(record):
+        calls.append(record["owed_action"]["purpose"])
+        if len(calls) <= 2:
+            return refusal_outcome()
+        Path(record["owed_action"]["draft_path"]).write_text("399", encoding="utf-8")
+        assert cli.main(["--root", str(tmp_path), *record["owed_action"]["argv"][3:], "--quiet"]) == 0
+        return loop.DriveOutcome(ok=True, bus_action_attempted=True)
+
+    turns = loop.run_loop(
+        store,
+        AGENT,
+        drive,
+        commit_gate=gate,
+        clock=clock.now,
+        now_iso=clock.iso,
+        sleep=lambda delay: clock.sleep(delay * 400),  # a poll of waiting spans the saved time, so the tries follow
+        max_turns=1,
+        max_polls=40,
+        wrapper_generation="wrapper-1",
+        on_escalate=lambda info: True,
+        **({"only_request_id": "rq-1"} if scoped else {}),
+    )
+    assert turns == 1 and calls == ["initial"] * 3, calls
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed"
+    assert store.cursor(AGENT) == inbound.id or store.thread_seen(AGENT, "rq-1") == inbound.id
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+def test_with_the_switch_off_a_gated_refusal_is_held_at_once_and_never_disposed(tmp_path, scoped):
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate, seen, clock = real_gate(store), Seen(), Clock(T0)
+    spawner = Recorder(refused())
+    gated_tries(store, spawner, clock, gate, seen, scoped=scoped, park_on=False)
+    mid = store.messages_for(AGENT)[0].id
+    assert park.is_held(store.attempt_record(AGENT, mid))
+    assert_nothing_disposed(store, gate, spawner, calls=1)
+
+
+# ---- a refusal is recognised by its wording only when the wording is the provider's safety refusal ----
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Gateway request violates retry policy",
+        "request violates the rate limit policy",
+        "flagged by the retry policy of the gateway",
+        "connection violates network policy",
+    ],
+)
+def test_a_gateway_policy_message_is_not_a_refusal(tmp_path, message):
+    outcome = drive_once(tmp_path, failed(None, message=message))
+    assert outcome.failure_class == "ambiguous_or_unknown", outcome.summary
+    assert outcome.limit_fact is None
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        f"{MARKER} violates our usage policy",
+        f"{MARKER} this prompt was flagged by our safety system",
+        f"{MARKER} violates the acceptable use policy",
+    ],
+)
+def test_the_providers_own_safety_wording_is_still_a_refusal(tmp_path, message):
+    outcome = drive_once(tmp_path, failed(None, message=message))
+    assert outcome.failure_class == "provider_refusal" and outcome.limit_fact == "provider_refusal"
+    assert MARKER not in outcome.summary
+
+
+def test_a_hold_made_at_once_reads_as_one_turn_in_every_reader(tmp_path):
+    """With stopping retries off the hold comes after ONE refusal: no reader says "1 turns" or "1 times"."""
+    store = make_store(tmp_path)
+    spawner = Recorder(refused())
+    clock = Clock(T0)
+    seen = go(store, spawner, clock, polls=5, park_on=False)
+    shown = store.usage_limit_park_view(AGENT, now_epoch=clock.t)
+    assert shown["held"] is True and shown["tries"] == 1 and shown["next_try_epoch"] is None
+    assert park.park_text(shown) == (
+        "held: the provider refused this message 1 time; it is kept and not retried until the seat is started again"
+    )
+    body = cli._usage_limit_notice_body(seen.notices[0])
+    assert "refused 1 turn on it" in body and "1 turns" not in body
+    item = attention._usage_limit_park_item(view(held=True, tries=1, next_try_epoch=None, state="parked"))
+    assert "refused 1 turn on it" in json.dumps(item) and "1 turns" not in json.dumps(item)

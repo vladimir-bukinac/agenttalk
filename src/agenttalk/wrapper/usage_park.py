@@ -28,7 +28,9 @@ grounds. It is a bounded cool-down: five tries in all, the waits between them 1,
 (26 minutes of waiting, about half an hour with the turns), then a HOLD: no wake time at all, the
 message kept at the head and never disposed, tried once more each time the seat is started again
 (never a fresh set of five). The count (``refusal_total``) is its own field, kept across a park that
-closes, so an unrelated failure in between never gives the budget back.
+closes, so an unrelated failure in between never gives the budget back. The stop-retries switch decides only
+how many tries a refusal gets: switched off, it is held at once (``refusal_hold``); it never lets a refusal
+dispose of the message.
 """
 
 from __future__ import annotations
@@ -507,8 +509,9 @@ def is_refusal_park(rec: dict | None) -> bool:
 
 
 def is_held(rec: dict | None) -> bool:
-    """True when a refusal park has used all its tries: kept at the head with no wake time."""
-    return is_refusal_park(rec) and refusal_total(rec) >= REFUSAL_TRIES
+    """True when a refusal park has used all its tries, or was held at once because stopping retries is switched
+    off (``refusal_hold``): kept at the head with no wake time, tried once more each time the seat is started."""
+    return is_refusal_park(rec) and (refusal_total(rec) >= REFUSAL_TRIES or rec.get("refusal_hold") is True)
 
 
 def park_rev(rec: dict | None) -> int:
@@ -670,11 +673,10 @@ def arm_cooldown_wake(rec: dict, *, now_epoch: object, step: object) -> None:
     already used (``probed_wake_epoch``) is moved one second, so it is never a wake that was
     already consumed. A step that is not a whole number of at least 0 counts as 0."""
     if park_kind(rec) == KIND_REFUSED:
-        total = refusal_total(rec)
-        if total >= REFUSAL_TRIES:
+        if is_held(rec):
             rec.pop("wake_epoch", None)      # held: no wake time, nothing tries it again but a restart
             return
-        step = max(total, 1) - 1             # the wait after try n is REFUSAL_WAIT_SECONDS[n - 1]
+        step = max(refusal_total(rec), 1) - 1  # the wait after try n is REFUSAL_WAIT_SECONDS[n - 1]
         schedule = REFUSAL_WAIT_SECONDS
     else:
         schedule = COOLDOWN_SECONDS
@@ -708,7 +710,7 @@ def wake_needs_arming(rec: dict, now_epoch: object) -> bool:
 
 
 def apply_cooldown_result(rec: dict, *, at: str, generation: str, kind: str, now_epoch: object,
-                          detail: object = None) -> None:
+                          detail: object = None, hold: bool = False) -> None:
     """A cool-down result (``overloaded`` or ``throttled``): park (or stay parked after a probe).
     No failure counter moves.
 
@@ -719,9 +721,13 @@ def apply_cooldown_result(rec: dict, *, at: str, generation: str, kind: str, now
     aside in ``quota_wake_epoch``, which a return of the same limit restores). ``park_rev`` is the transition
     identity: it goes up on a new park and on every change of kind (absent until the first
     cool-down), and the notice bookkeeping is renewed with it; a same-kind probe changes neither.
-    ``wake_epoch`` is written only by :func:`arm_cooldown_wake`."""
+    ``wake_epoch`` is written only by :func:`arm_cooldown_wake`.
+
+    ``hold`` (a refusal only, #857): stopping retries is switched off, so the refused message is held at once, with
+    no further tries and no wait. It is a property of this result: a later refusal with retries on takes it away."""
     if kind not in COOLDOWN_KINDS:
         raise ValueError("unknown cool-down kind")
+    was_held = kind == KIND_REFUSED and is_held(rec)
     was_parked = rec.get("park_state") in PARK_STATES
     same_kind = was_parked and park_kind(rec) == kind
     if was_parked and not is_cooldown(rec):
@@ -755,16 +761,20 @@ def apply_cooldown_result(rec: dict, *, at: str, generation: str, kind: str, now
     else:
         rec["park_detail"] = word
     if kind == KIND_REFUSED:
-        _count_refusal(rec, at=at)
+        if hold:
+            rec["refusal_hold"] = True
+        else:
+            rec.pop("refusal_hold", None)
+        _count_refusal(rec, at=at, was_held=was_held)
     arm_cooldown_wake(rec, now_epoch=now_epoch, step=rec["cooldown_step"])
 
 
-def _count_refusal(rec: dict, *, at: str) -> None:
+def _count_refusal(rec: dict, *, at: str, was_held: bool) -> None:
     """One more refused turn: the count, the first and last time (the timings of a run of refusals stay readable
     in the record), and the notice bookkeeping. While tries are left nothing is owed to anyone, so no notice is
-    asked for (a seat that gets through by itself sends none); the try that uses the last one is a transition
-    of its own: a new revision and a fresh notice, sent once (a later refused probe changes nothing)."""
-    was_held = is_held(rec)
+    asked for (a seat that gets through by itself sends none); the try that starts the hold (the last one, or the
+    first when stopping retries is switched off) is a transition of its own: a new revision and a fresh notice,
+    sent once (a later refused probe changes nothing). ``was_held`` is read before this result changed the record."""
     rec["refusal_total"] = refusal_total(rec) + 1
     rec.setdefault("refusal_first_at", at)
     rec["refusal_last_at"] = at
@@ -785,13 +795,14 @@ def apply_crash_reconcile(rec: dict, now_epoch: object = None) -> None:
 
     A cool-down park has no start probe (the saved time wins over a restart), so with its wake
     consumed it would have no next try at all: it is armed again at the SAME step."""
+    was_held = is_held(rec)
     rec["in_progress"] = False
     rec["probe_marker"] = False
     rec["park_state"] = PARKED
     if park_kind(rec) == KIND_REFUSED:
         # An attempt that was admitted and never reported back may well have been refused: it uses its try
         # (a crash never gives a free retry), then the wake is armed again at the new count.
-        _count_refusal(rec, at=epoch_iso(cooldown_clock(now_epoch)))
+        _count_refusal(rec, at=epoch_iso(cooldown_clock(now_epoch)), was_held=was_held)
     if is_cooldown(rec):
         arm_cooldown_wake(rec, now_epoch=cooldown_clock(now_epoch), step=cooldown_step(rec))
 
@@ -966,8 +977,8 @@ def park_text(view: dict | None) -> str | None:
         # A safety refusal: tries used of the five, then a hold. Counts and a time only, never provider text.
         tries = max(1, _int(view.get("tries")))
         if view.get("held"):
-            text = (f"held: the provider refused this message {tries} times; it is kept and not retried until "
-                    "the seat is started again")
+            text = (f"held: the provider refused this message {tries} time{'' if tries == 1 else 's'}; it is kept "
+                    "and not retried until the seat is started again")
         elif view.get("state") == VIEW_STALE:
             text = (f"waiting after the provider refused a turn (try {tries} of {REFUSAL_TRIES}), wrapper not "
                     "responding")

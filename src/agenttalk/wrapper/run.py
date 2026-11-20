@@ -1491,9 +1491,13 @@ _REFUSAL_POLICY_MARKERS = (
     "blocked by safety", "blocked by content policy",
     "flagged for possible cybersecurity risk",
 )
-# QUALIFIED: "violates"/"flagged by" are a refusal ONLY with a content/policy/safety/filter
-# qualifier - bare "violates the rate limit" / "flagged by the gateway" are neither poison nor refusal.
-_REFUSAL_CONTENT_QUALIFIERS = ("content", "policy", "safety", "filter")
+# QUALIFIED: "violates"/"flagged by" are a refusal ONLY when what follows, in the same sentence and close by, names a
+# content, safety or usage policy, filter, guideline or system - bare "violates the rate limit", "flagged by the
+# gateway" and above all any other "policy" ("violates retry policy", "network policy") are neither poison nor
+# refusal. (A gateway's retry-policy message was read as a safety refusal when any "policy" was enough.)
+_REFUSAL_QUALIFIED_RE = re.compile(
+    r"\b(?:violates|flagged by)\b[^.\n]{0,60}?\b(?:content|safety|usage|acceptable[ -]use)\s+"
+    r"(?:polic(?:y|ies)|filters?|guidelines|systems?)\b")
 # The one structured reason that PROVES a Codex safety refusal. Any other word, or an unusable field, proves
 # nothing either way and keeps the failure ambiguous (it never becomes poison or a refusal on wording alone).
 _CODEX_REFUSAL_CODES = ("cyber_policy",)
@@ -1520,14 +1524,14 @@ def _looks_like_content_poison(text: str | None) -> bool:
 
 def _looks_like_provider_refusal(text: str | None) -> bool:
     """True iff a TERMINAL failure's message is wording the provider uses to refuse a turn on safety grounds: a direct
-    policy phrase, or 'violates'/'flagged by' together with a content/policy/safety/filter word. It says the
-    provider refused, never that the message is bad. Applies to every seat (the sorter is shared); only the
-    structured Codex reason below is Codex-specific. Called only for a terminal failure's own message, never for model
-    output, tool output or the inbound message."""
+    policy phrase, or 'violates'/'flagged by' followed close by in the same sentence by a content, safety or usage
+    policy (filter, guideline, system). It says the provider refused, never that the message is bad. Applies to every
+    seat (the sorter is shared); only the structured Codex reason below is Codex-specific. Called only for a terminal
+    failure's own message, never for model output, tool output or the inbound message."""
     t = (text or "").lower()
     if any(m in t for m in _REFUSAL_POLICY_MARKERS):
         return True
-    return ("violates" in t or "flagged by" in t) and any(q in t for q in _REFUSAL_CONTENT_QUALIFIERS)
+    return _REFUSAL_QUALIFIED_RE.search(t) is not None
 
 
 def parse_lines(lines: Iterable[str], mapper: Callable[[object], list[Event]]) -> Iterator[Event]:

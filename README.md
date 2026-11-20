@@ -1738,8 +1738,10 @@ notice. A refusal alone never puts a message in the dead-letter list and never m
 `codex_error_info` is `cyber_policy` is a refusal. A reason that is present but unknown or unusable proves
 nothing and keeps the failure an ordinary unknown one; the wording cannot override it. With no structured
 reason, the provider's refusal wording is a refusal: the phrase above, and the older policy phrases
-(`content policy`, `content filter`, `safety policy`, `blocked by safety`, `violates` or `flagged by` with a
-content, policy, safety or filter word). **This wording change applies to every seat, Claude seats too:**
+(`content policy`, `content filter`, `safety policy`, `blocked by safety`, and `violates` or `flagged by`
+followed close by, in the same sentence, by a content, safety or usage policy, filter, guideline or system;
+a gateway message such as "violates retry policy" is not a refusal). **This wording change applies to every
+seat, Claude seats too:**
 those phrases used to be counted as "the message is bad" and ended in the dead-letter list after 3 tries.
 Size wording ("context length", "prompt is too long") is unchanged. Only a terminal failure's own message is
 read, never the model's output, a tool's output or an inbound message.
@@ -1750,18 +1752,32 @@ read, never the model's output, a tool's output or an inbound message.
   sample (the fixtures are made up from the wording above). The adapter reads it inside `error` and beside
   it, and the wording route covers a failure with neither.
 - A scoped one-shot run (an ephemeral reviewer) uses the same count, waits and hold, kept in the same
-  attempt record, and a later run reads them. It sends no notice and exits like any failed run while the
-  wait does not fit in its time limit. A crash in the very first try of a scoped run is not counted.
+  attempt record, and a later run reads them. While it waits it keeps stamping its heartbeat (every 10
+  seconds), so the supervisor never reads it as stuck. It sends no notice and exits like any failed run
+  while the wait does not fit in its time limit. A held scoped request gets one more try for each fresh
+  start, like the continuous seat (a fresh start is a new wrapper start; running the same start again does
+  nothing). A crash in the very first try of a scoped run is not counted.
+- A question the sender is waiting on goes through the reply check (the commit gate), which allows an agent
+  only two paid tries to answer before it records the delivery as failed. A refused turn is not an agent
+  failing to answer, so it never uses one of those two tries: the same try is armed again after each wait,
+  and no number of refusals can end the delivery. Only the refusal schedule above decides when it is tried
+  again, and the hold is kept until a person acts (or the seat is started again for one more try).
 - The count and the hold are kept in the message's attempt record. A record that is missing, torn or
   unreadable reads as no attempts, as it always did, so it cannot make a healthy message look refused.
-- With `AGENTTALK_STOP_RETRIES_AT_LIMIT` set to `0` a refusal is driven as before this change (an unknown
-  failure), for scoped one-shot runs as well as the continuous loop, and a message already held is driven
-  again: the switch is how an operator releases a hold.
+- With `AGENTTALK_STOP_RETRIES_AT_LIMIT` set to `0` (stopping retries is switched off) a refusal gets **no
+  further tries**: the message is held at once, after the first refusal, with the same notice, and starting
+  the seat again still gives one more try per start. The switch only decides how many tries a refusal gets.
+  It never turns a refusal into a failed message: a refusal is not dead-lettered, not recorded as a failed
+  delivery and never skipped, with the switch on or off, for scoped one-shot runs as well as the
+  continuous loop. Switching retries off later does not release a message that is already held (starting
+  the seat, `agenttalk request-restart --for <agent>` or `agenttalk ack` do).
 - Holding the message at the front of the queue holds the messages behind it too, as for a usage limit.
 
 **Technical detail.** New fields in the message's attempt record (added only): `park_kind`
-`provider_refusal`, `refusal_total`, `refusal_first_at`, `refusal_last_at`; the failure class word is
-`provider_refusal`. `refusal_total` is its own counter: it is never reset by a park that closes, so an
+`provider_refusal`, `refusal_total`, `refusal_first_at`, `refusal_last_at`, and `refusal_hold` (present when
+the hold was made at once because stopping retries is switched off); the failure class word is
+`provider_refusal`. The commit gate records a refused turn nowhere: its reservation goes back to
+`reserved` (transition `DISPATCH_REFUSED_RELEASED`) and the paid-dispatch total is unchanged. `refusal_total` is its own counter: it is never reset by a park that closes, so an
 unrelated failure between two refusals never gives a try back, and it moves no disposal counter. A crash
 in a try counts the try. The wait is armed by `usage_park.arm_cooldown_wake`; a hold has no `wake_epoch`.
 
