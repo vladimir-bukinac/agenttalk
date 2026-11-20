@@ -249,4 +249,3 @@ Other languages:
 - v1 does not claim complete assurance for these stacks. Missing or stubbed rows
   create residual risk instead of false pass evidence.
 - Rust SECURE is never satisfied by basic quality checks alone.
-
