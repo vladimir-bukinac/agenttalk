@@ -80,6 +80,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A capacity reading nested too deeply no longer crashes status or capacity (#871).** A damaged
+  capacity reading file holding JSON nested so deeply that Python cannot read it made `agenttalk
+  status`, `status --json` and `agenttalk capacity` stop with an error, and made the dashboard fail the
+  same way. That file is now skipped like any other damaged one, and the other seats' readings still
+  show. A damaged capacity file, one that cannot be opened or one that is not valid text is now
+  reported instead of skipped silently: `status` (as one more string in its `warnings`) and `capacity`
+  say in one line which seat's reading could not be read and how it can publish a new one. A missing
+  or empty file stays silent. Two other files on the same commands no longer crash either: a seat's
+  wrapper session file nested too deeply is treated as damaged (the seat starts a fresh session, as
+  for any damaged one), and a `supervisor.json` nested too deeply makes `status` print the same one
+  line as for a damaged one (`supervisor config is unreadable or invalid`) and stop.
+  The same supervisor reader also loads and saves the supervisor's own state file, so a state file nested
+  too deeply is now treated like a damaged one there as well: the supervisor uses the saved backup copy
+  when it is good and otherwise stops with the same one-line error (these crashes existed before #871; this change
+  only makes them match a damaged file). A capacity file whose size and type cannot even be checked (for example no access) is now
+  reported as unreadable instead of making the command stop or being skipped without a word, depending on
+  the Python version.
+
 - **A per-seat state file nested too deeply no longer crashes agenttalk (#872).** Before this, one of a
   seat's small state files holding JSON nested so deeply that Python cannot read it made `agenttalk status`,
   `status --json`, `doctor`, `threads`, `send`, the dashboard, the supervisor report, checkpoints, and the
@@ -91,6 +109,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start-fresh request that is too deep reads as the unusable marker, never as absent. Nothing new is shown
   and no message changes; what a damaged file means for each is unchanged (for example, a damaged lease
   still means no lease).
+
 
 - **A wrapped Claude seat in a strict permission mode can now send its replies by command (#828).** In a Claude
   Code mode other than `bypassPermissions` (`dontAsk` was measured), a command that starts with a

@@ -8453,35 +8453,50 @@ class Store:
     def read_capacity(self, agent: str) -> dict | None:
         """Return ``agent``'s published snapshot dict, or None if
         absent/empty/corrupt. Never raises."""
+        return self._read_capacity_file(agent)[0]
+
+    def _read_capacity_file(self, agent: str) -> tuple[dict | None, bool]:
+        """(snapshot, unreadable): ``unreadable`` is True when the file is there with
+        content but cannot be used (damaged, not text, nested too deeply, not an object).
+        An absent or empty file is just "no reading", not unreadable; a file that is there but
+        cannot be opened (no access, a folder in its place) is unreadable. Never raises."""
         p = self.state_dir / f"{agent}.capacity.json"
-        if not p.exists():
-            return None
-        try:
+        try:  # no separate exists(): it can hide or raise a stat error, and so call a locked file "absent"
             raw = p.read_text(encoding="utf-8").strip()
-        except OSError:
-            return None
+        except FileNotFoundError:  # no file: just no reading
+            return None, False
+        except (OSError, ValueError):  # cannot be read (no access...) or the bytes are not text
+            return None, True
         if not raw:
-            return None
+            return None, False
         try:
             d = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
-            return None
-        return d if isinstance(d, dict) else None
+        except (ValueError, RecursionError):  # JSONDecodeError is a ValueError; #871: too deeply nested
+            return None, True
+        return (d, False) if isinstance(d, dict) else (None, True)
+
+    def read_capacities_checked(self) -> tuple[dict[str, dict], list[str]]:
+        """Like ``read_all_capacities``, plus the sorted agent names whose file is there but
+        cannot be read, so a caller can say so instead of silently losing the reading."""
+        out: dict[str, dict] = {}
+        unreadable: list[str] = []
+        if not self.state_dir.is_dir():
+            return out, unreadable
+        suffix = ".capacity.json"
+        for p in sorted(self.state_dir.glob(f"*{suffix}")):
+            agent = p.name[: -len(suffix)]
+            d, bad = self._read_capacity_file(agent)
+            if d is not None:
+                out[agent] = d
+            elif bad:
+                unreadable.append(agent)
+        return out, unreadable
 
     def read_all_capacities(self) -> dict[str, dict]:
         """All published snapshots keyed by agent (derived from the state dir,
         so a retired/forgotten agent's stale file still surfaces). Skips
         absent/corrupt files."""
-        out: dict[str, dict] = {}
-        if not self.state_dir.is_dir():
-            return out
-        suffix = ".capacity.json"
-        for p in sorted(self.state_dir.glob(f"*{suffix}")):
-            agent = p.name[: -len(suffix)]
-            d = self.read_capacity(agent)
-            if d is not None:
-                out[agent] = d
-        return out
+        return self.read_capacities_checked()[0]
 
     # ----------------------------------------- wrapper runtime (v0.75.0)
     #
