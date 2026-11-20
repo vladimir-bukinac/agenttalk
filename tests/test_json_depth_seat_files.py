@@ -319,9 +319,14 @@ _SUFFIX = r"[A-Za-z0-9][A-Za-z0-9.-]*"
 # The seat part may be any variable, attribute or call: `seat`, `args.agent`, `validate_agent_name(agent)`.
 _CALL_ARGS = r"\((?:[^()]|\([^()]*\))*\)"
 _SEAT = r"[\w.]+(?:" + _CALL_ARGS + r")?"
-_FORMAT_FIELD = r"""\{[^{}"']*\}"""
+_FORMAT_FIELD = r"\{(?:(?!(?P=format_quote))[^{}])*\}"
+_F_FIELD = r"\{(?:(?!(?P=f_quote))[^{}])+\}"
 _FILE_NAME = (
-    r"""(?:(?i:rf|fr|f)(?P<f_quote>["'])\{[^{}"']+\}(?:\.\{[^{}"']+\})?\."""
+    r"""(?:(?i:rf|fr|f)(?P<f_quote>["'])"""
+    + _F_FIELD
+    + r"(?:\."
+    + _F_FIELD
+    + r")?\."
     + r"(?P<f_suffix>"
     + _SUFFIX
     + r")(?P=f_quote)"
@@ -372,7 +377,7 @@ def _per_seat_paths_in(lines):
     """Find the claimed single-line f-string, concatenation, percent and str.format path spellings.
 
     Inspect state_dir, a quoted or constant folder beneath it, its one continuation line,
-    and seat-named folders. Triple quotes, implicitly joined strings, joinpath,
+    and seat-named folders. It reports at most one label per line. Triple quotes, implicitly joined strings, joinpath,
     os.path.join, with_name, with_suffix, Path(folder, name), and names stored in
     variables then joined later are outside this line search. The session backup
     uses with_name and turn events use os.path.join; both are checked separately.
@@ -544,6 +549,18 @@ for quote in ("'", '"'):
 
 PLANTED["single-quoted seat folder"] = ("p = root / 'planted' / agent", 'folder "planted"')
 PLANTED["mixed folder and filename quotes"] = ("p = s.state_dir / 'planted' / f\"{seat}.json\"", "planted/*.json")
+PLANTED["double-quoted f-string with single-quoted key"] = (
+    '''p = state_dir / f"{row['agent']}.planted.json"''', ".planted.json"
+)
+PLANTED["single-quoted f-string with double-quoted key"] = (
+    """p = state_dir / f'{row["agent"]}.planted.json'""", ".planted.json"
+)
+PLANTED["double-quoted format with single-quoted key"] = (
+    '''p = state_dir / "{row['agent']}.planted.json".format(row=row)''', ".planted.json"
+)
+PLANTED["single-quoted format with double-quoted key"] = (
+    '''p = state_dir / '{row["agent"]}.planted.json'.format(row=row)''', ".planted.json"
+)
 PLANTED["format with second field"] = (
     "p = s.state_dir / '{seat}.{nonce}.json'.format(seat=seat, nonce=nonce)",
     ".json",
@@ -573,6 +590,14 @@ def test_the_guard_fails_on_a_new_per_seat_path_in_every_style(style, census_for
     assert found == {label}
     with pytest.raises(AssertionError, match=re.escape(repr(label))):
         _assert_every_path_accounted_for(census_for_planted_rows | found)
+
+
+def test_the_guard_does_not_cross_the_outer_quote_and_reports_one_label_per_line():
+    assert _per_seat_paths_in(['p = state_dir / f"{row["agent"]}.planted.json"']) == set()
+    assert _per_seat_paths_in(["p = state_dir / f'{row['agent']}.planted.json'"]) == set()
+    assert _per_seat_paths_in(['a = state_dir / f"{seat}.first.json"; b = state_dir / f"{seat}.second.json"']) == {
+        ".first.json"
+    }
 
 
 def test_every_covered_file_has_a_path_and_a_reader_test():
