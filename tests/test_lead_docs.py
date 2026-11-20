@@ -57,9 +57,10 @@ def _shipped_text(page: str) -> bytes:
 
 
 def _lead_documents_section(skill: str) -> str:
-    """Compare the shared section, including its isolated Python invocation."""
+    """The section in the same words for both skills: the Codex skill writes `python -I -m agenttalk`, the Claude
+    skill the bare `agenttalk` its seat's shim resolves; the wrapped-seat lines carry `-I` in both."""
     section = skill.replace("\r\n", "\n").split("\n## Lead documents\n", 1)[1].split("\n## ", 1)[0]
-    return section.replace("python -m agenttalk", "agenttalk")
+    return section.replace("python -I -m agenttalk", "agenttalk").replace("python -m agenttalk", "agenttalk")
 
 
 def test_the_wheel_carries_the_lead_pages_and_leaves_agenttalks_own_pages_out() -> None:
@@ -107,7 +108,7 @@ def test_both_lead_skills_send_a_lead_to_the_installed_pages_the_same_way() -> N
     claude, codex = ((REPO / "src" / "agenttalk" / skill).read_text(encoding="utf-8") for skill in LEAD_SKILLS)
     section = _lead_documents_section(claude)
     assert section == _lead_documents_section(codex)
-    assert "`python -I -m agenttalk doctor`" in section
+    assert "`agenttalk doctor`" in section
     assert "`module path`" in section and "`agenttalk_module_path`" in section
     named = set(DOCS_PATH.findall(section))
     assert "docs/LEAD-GUIDE.md" in named and named <= set(SHIPPED_PAGES)
