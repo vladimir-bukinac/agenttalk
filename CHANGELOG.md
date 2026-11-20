@@ -80,6 +80,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A comprehension record nested too deeply no longer stops the scan with a Python error (#876).** The
+  comprehension scan keeps a small lock record, and every comprehension file (the lock, the owner record of
+  a staging folder, `index.json` and the files of a run) is read by one shared reader that only expected
+  plainly damaged text. A file holding JSON nested so deeply that Python cannot read it used to stop
+  `comprehension scan` and `scan --recover-stale-lock`, and the other commands that read these files, with a
+  traceback. Now such a file is reported as malformed, exactly as damaged text is: the same error, the same
+  exit code and the same advice from every command. A lock record like that is still never taken over by an
+  ordinary scan; only the confirmed, attended `--recover-stale-lock` clears it, and records that the record
+  could not be read, as for any damaged record. The error says `malformed JSON: nested too deeply`. No size
+  limit, schema or stored file changes.
+
 - **`agenttalk doctor` no longer calls the PowerShell host check "not needed" while a seat that left the
   team list may still run a continuous Codex wrapper.** Retiring, renaming or removing a seat leaves its
   health marker behind, and its wrapper may still be running. Doctor now reads those markers too: a

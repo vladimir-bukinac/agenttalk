@@ -89,6 +89,10 @@ def strict_json_loads(text: str) -> Any:
         return json.loads(text, object_pairs_hook=_reject_duplicate_members)
     except (json.JSONDecodeError, ValueError) as exc:
         raise EnvelopeError(f"malformed JSON: {exc}") from exc
+    except RecursionError as exc:
+        # Nested past what the parser can read (#876): malformed like any other damaged document. The wording is
+        # fixed because the parser's own text differs between Python versions.
+        raise EnvelopeError("malformed JSON: nested too deeply") from exc
 
 
 def read_json_document(path: Path) -> Any:
