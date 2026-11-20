@@ -7,7 +7,7 @@ SKILLS = [
     ROOT / "src/agenttalk/skills/claude/agenttalk.lead.md",
     ROOT / "src/agenttalk/skills/codex/agenttalk-lead/SKILL.md",
 ]
-LINE = "Stopped at: <time or unknown>. Picture last verified: <time>. Still uncertain: <list>."
+LINE = "`Stopped at`: <time or unknown>. `Picture last verified`: <time UTC>. `Still uncertain`: <list>."
 
 
 def normalized(value):
@@ -22,11 +22,15 @@ def test_restart_checklist_and_dated_handover_are_in_both_skills():
         sections.append(section)
         for phrase in (
             "records written before the restart",
+            "never records written since",
             "last handover note",
             "checkpoint time",
             "last sent message",
             "one or two hours before the stop",
             "stop time is unknown",
+            "say so",
+            "the bus and the code host were last checked in full",
+            "newest such time is the last trustworthy checkpoint",
             "one or two hours before the last trustworthy checkpoint",
             "messages you read but did not act on",
             "lead once",
@@ -43,6 +47,10 @@ def test_restart_checklist_and_dated_handover_are_in_both_skills():
             "hold only decisions that depend on it",
             "short compaction",
             "bounded first pass",
+            "re-read the messages you read but did not act on",
+            "check the code host since your `Picture last verified` time",
+            "skip the other team's ask",
+            "hold decisions that depend on an unchecked gap",
             "Write the result in your next handover note's dated line.",
         ):
             assert phrase in section
@@ -54,3 +62,5 @@ def test_restart_checklist_and_dated_handover_are_in_both_skills():
     brief = normalized((ROOT / "docs/LEAD-SETUP-BRIEF.md").read_text(encoding="utf-8"))
     assert LINE in brief and "first note after a restart" in brief
     assert "agenttalk.lead" in brief and "restart" in brief
+    assert "agenttalk-lead/SKILL.md" in brief
+    assert "bus and the code host were last checked in full" in brief

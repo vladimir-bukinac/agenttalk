@@ -921,11 +921,11 @@ blocked and why, which decisions your human still owes, what each seat is doing,
 what happens next. Someone who starts reading cold (including you, after your own
 window is reset) must be able to carry on from it.
 
-Every note carries Picture last verified; the first note after a restart fills in Stopped at (or unknown) and Still uncertain.
+Every note carries `Picture last verified`; the first note after a restart fills in `Stopped at` (or unknown) and `Still uncertain`. `Picture last verified` is the time the bus and the code host were last checked in full.
 
-Stopped at: <time or unknown>. Picture last verified: <time>. Still uncertain: <list>.
+`Stopped at`: <time or unknown>. `Picture last verified`: <time UTC>. `Still uncertain`: <list>.
 
-Follow the [lead skill restart steps](https://github.com/zoolok17/agenttalk/blob/master/src/agenttalk/skills/claude/agenttalk.lead.md#hard-boundaries).
+Follow the restart steps in the [Claude lead skill](https://github.com/zoolok17/agenttalk/blob/master/src/agenttalk/skills/claude/agenttalk.lead.md#hard-boundaries) or the [Codex lead skill](https://github.com/zoolok17/agenttalk/blob/master/src/agenttalk/skills/codex/agenttalk-lead/SKILL.md#hard-boundaries) (`agenttalk-lead/SKILL.md`).
 
 ## Step 7. Giving work and checking it
 

@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Lead restart guidance now defines the first check after a short compaction.** It keeps the code host check and explains the dated handover checkpoint.
+
 - **The release checklist now names the README as the only install pin.** Since the user manuals
   stopped carrying their own install line (#835), step 1 of the release ritual in
   `docs/ROLES-SKILLS-PROCEDURES.md` still said to update one in the new user manual, which a test now
