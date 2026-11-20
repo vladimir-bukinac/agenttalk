@@ -27,7 +27,7 @@ from agenttalk.comprehension import worker as workermod
 
 REASON = "no_supported_source"
 NOTE_START = "No supported source files were parsed"
-NOTE_RULE = "fixed list of general-purpose languages"
+NOTE_RULE = "fixed list of programming languages and code file types"
 
 
 @pytest.fixture(autouse=True)
@@ -79,6 +79,20 @@ LICENSE_README_UNKNOWN = {"LICENSE": "MIT\n", "README.md": "# x\n", "data.xyz": 
 SHELL_AND_MAKE_DEPS = {"build.sh": "echo hi\n", "deploy.ps1": "Write-Host hi\n", "main.d": "main.o: main.c\n"}
 ELIXIR_ONLY = {"main.ex": "defmodule Main do\n  def hello, do: :world\nend\n"}
 HASKELL_ONLY = {"Main.hs": 'main :: IO ()\nmain = putStrLn "hi"\n'}
+# Files that only share a suffix with a listed language (see worker._is_listed_source_file):
+QT_TS = (
+    '<?xml version="1.0" encoding="utf-8"?>\n<!DOCTYPE TS>\n'
+    '<TS version="2.1" language="fr_FR"><context><name>Main</name></context></TS>\n'
+)
+REAL_TS = "export function hello(name: string): string {\n  return name;\n}\n"
+FREEMIND_MM = '<map version="1.0.1">\n<node TEXT="root"/>\n</map>\n'
+OBJC_MM = "#import <Foundation/Foundation.h>\nint main() { return 0; }\n"
+QT_TS_ONLY = {"translations/fr.ts": QT_TS}
+REAL_TS_ONLY = {"src/index.ts": REAL_TS}
+QT_TS_PLUS_PY_HELPER = {"translations/fr.ts": QT_TS, "tools/gen.py": PY}
+FREEMIND_ONLY = {"notes/plan.mm": FREEMIND_MM}
+OBJC_ONLY = {"App.mm": OBJC_MM}
+BLANKS = "\n\n"
 
 
 def _run(argv: list[str], root: Path) -> int:
@@ -216,12 +230,16 @@ def test_scan_help_defines_complete_in_one_sentence(capsys) -> None:
         cli.main(["comprehension", "scan", "--help"])
     text = " ".join(capsys.readouterr().out.split())
     assert "complete means" in text, text
-    assert "fixed list of general-purpose languages" in text, text
+    assert "fixed list of programming languages and code file types" in text, text
     assert "not on that list does not count" in text, text
     assert REASON in text, text
 
 
-@pytest.mark.parametrize("files", [ELIXIR_ONLY, HASKELL_ONLY], ids=["elixir", "haskell"])
+@pytest.mark.parametrize(
+    "files",
+    [ELIXIR_ONLY, HASKELL_ONLY, REAL_TS_ONLY, OBJC_ONLY, QT_TS_PLUS_PY_HELPER],
+    ids=["elixir", "haskell", "typescript", "objective-c++", "qt-translation-plus-python-helper"],
+)
 def test_other_unsupported_languages_are_degraded_too(tmp_path: Path, capsys, files) -> None:
     """codex-rev's #496 finding: a repository of only `main.ex` was reported complete."""
     _repo(tmp_path, files)
@@ -285,10 +303,7 @@ def test_other_unsupported_languages_are_degraded_too(tmp_path: Path, capsys, fi
     ],
 )
 def test_listed_language_files_count_as_unsupported_code(name: str) -> None:
-    problem = workermod.WorkerProblem(
-        reason_code="unsupported_language", relative_path=name, detail="x", degrades_run=False
-    )
-    assert workermod.is_unsupported_code_bearing_problem(problem), name
+    assert workermod.is_listed_source_file(name, b"x = 1"), name
 
 
 @pytest.mark.parametrize(
@@ -310,10 +325,51 @@ def test_listed_language_files_count_as_unsupported_code(name: str) -> None:
     ],
 )
 def test_other_file_types_do_not_count_as_unsupported_code(name: str) -> None:
-    problem = workermod.WorkerProblem(
-        reason_code="unsupported_language", relative_path=name, detail="x", degrades_run=False
-    )
-    assert not workermod.is_unsupported_code_bearing_problem(problem), name
+    assert not workermod.is_listed_source_file(name, b"x = 1"), name
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("fr.ts", QT_TS),
+        ("fr.ts", chr(0xFEFF) + "  " + BLANKS + QT_TS),  # BOM, then blank lines
+        ("fr.ts", '<!DOCTYPE TS><TS version="2.0"></TS>'),
+        ("fr.ts", '<TS version="2.0"></TS>'),
+        ("fr.ts", '<?xml version="1.0"?>'),
+        ("plan.mm", FREEMIND_MM),
+        ("plan.mm", '<?xml version="1.0"?><map/>'),
+        ("x.py", '<?xml version="1.0"?><a/>'),  # no listed language starts with an XML declaration
+    ],
+)
+def test_a_file_that_only_shares_a_suffix_is_not_source(name: str, text: str) -> None:
+    assert not workermod.is_listed_source_file(name, text.encode("utf-8")), (name, text[:30])
+
+
+@pytest.mark.parametrize(
+    ("name", "text"),
+    [
+        ("a.ts", REAL_TS),
+        ("a.ts", "// translations are in fr.ts" + BLANKS + REAL_TS),
+        ("a.ts", '/// <reference path="x.d.ts" />' + BLANKS),
+        ("a.ts", "const TS = 1;" + BLANKS),
+        ("a.mm", OBJC_MM),
+        ("a.mm", "// <map> of things" + BLANKS + "int x;" + BLANKS),
+        ("empty.ts", ""),
+    ],
+)
+def test_real_typescript_and_objective_cpp_still_count_as_source(name: str, text: str) -> None:
+    assert workermod.is_listed_source_file(name, text.encode("utf-8")), (name, text[:30])
+
+
+def test_the_worker_records_per_file_whether_an_unsupported_file_is_code(tmp_path: Path) -> None:
+    """The Qt file and the Python helper are both unsupported_language warnings; only the helper
+    is code."""
+    _repo(tmp_path, QT_TS_PLUS_PY_HELPER)
+    result = workermod.process_paths(tmp_path, ["translations/fr.ts", "tools/gen.py"])
+    flags = {p.relative_path: p.code_bearing for p in result.problems if p.reason_code == "unsupported_language"}
+    assert flags == {"translations/fr.ts": False, "tools/gen.py": True}
+    code = [p.relative_path for p in result.problems if workermod.is_unsupported_code_bearing_problem(p)]
+    assert code == ["tools/gen.py"]
 
 
 # ------------------------------------------------------- controls: must stay as they are
@@ -327,6 +383,8 @@ def test_other_file_types_do_not_count_as_unsupported_code(name: str) -> None:
         (DOCS_ONLY, 0),  # nothing code-bearing was selected
         (TOOLING_ONLY, 0),  # tooling and config files are not code-bearing
         (LICENSE_README_UNKNOWN, 0),  # a file type not on the list does not count
+        (QT_TS_ONLY, 0),  # Qt translation XML is not TypeScript
+        (FREEMIND_ONLY, 0),  # a FreeMind mind map is not Objective-C++
         (SHELL_AND_MAKE_DEPS, 0),  # shell scripts and make .d files are tooling, by decision
         ({}, 0),  # an empty repository
     ],
@@ -336,6 +394,8 @@ def test_other_file_types_do_not_count_as_unsupported_code(name: str) -> None:
         "docs-only",
         "tooling-only",
         "license-readme-unknown",
+        "qt-translation",
+        "freemind",
         "shell-and-make-deps",
         "empty",
     ],

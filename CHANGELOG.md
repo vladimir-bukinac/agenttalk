@@ -84,9 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Before this, a Python-only project scanned as `complete` although nothing in it had been read: no features,
   no dependencies and no entry points, with only a small warning per file. Now such a scan says `degraded`,
   and says in one plain line that no supported source files were parsed. It happens only when no supported
-  source file was parsed and at least one source file of a fixed list of general-purpose languages (Python,
-  Go, Elixir, Haskell, Rust and many more, listed in the code) was found; a file type that is not on that list
-  does not count, and shell scripts do not count either. A Java project with a few Python helper scripts stays
+  source file was parsed and at least one source file of a fixed list of programming languages and code
+  file types (Python, Go, Elixir, Haskell, Rust, SQL and many more, listed in the code) was found; a file type
+  that is not on that list does not count, shell scripts do not count either, and neither does a file that
+  only shares a suffix, such as a Qt translation `.ts` file or a FreeMind `.mm` mind map. A Java project with a few Python helper scripts stays
   `complete`. Nothing else changes: no new status value, the same exit codes (a published degraded run still
   exits 0), and a script that branches on `complete` will now see `degraded` for these runs. `status` and
   `report` also show how many supported source files were parsed (`supported_source_files_parsed`), and

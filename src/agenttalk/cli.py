@@ -17986,7 +17986,7 @@ def build_parser() -> argparse.ArgumentParser:
                     "Status complete means the run found no degrading problem, not that all "
                     "code was understood: a run that parsed no supported source file but found "
                     "source files in a language no adapter reads, from a fixed list of "
-                    "general-purpose languages (such as Python), is degraded "
+                    "programming languages and code file types (such as Python), is degraded "
                     "(no_supported_source), and a file type not on that list does not count.",
     )
     cscan.add_argument(

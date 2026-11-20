@@ -289,12 +289,41 @@ def count_parsed_supported_source_files(java_results: dict[str, Any]) -> int:
     return sum(1 for rel in java_results if rel.lower().endswith(suffixes))
 
 
+#: #496: a suffix is not proof of source. Some listed suffixes are also used by well-known non-code
+#: XML files: Qt Linguist translations are ``.ts`` (``<?xml ...?><!DOCTYPE TS><TS ...>``) and
+#: FreeMind mind maps are ``.mm`` (``<map ...>``). Nothing written in a listed language begins with
+#: an XML declaration or these roots, so the first bytes of the file settle it; only a small prefix
+#: is read. Checked per suffix against the whole list: ``.m .r .v .pl .fs .ml .h`` are code
+#: whatever they hold (Objective-C or MATLAB, R, Verilog or Coq, Perl or Prolog, F# or a GLSL
+#: shader, OCaml, a C header), and a binary ``.ts`` video never reaches this check (binary files are
+#: excluded before the worker). Only ``.ts`` and ``.mm`` produced a wrong result.
+_NON_CODE_START_BY_EXTENSION = {
+    ".ts": ("<!doctype ts", "<ts>", "<ts "),
+    ".mm": ("<map>", "<map "),
+}
+_XML_DECLARATION = "<?xml"
+_LEADING_JUNK = chr(0xFEFF) + " " + chr(9) + chr(13) + chr(10)  # BOM, blanks, tabs, line ends
+_SNIFF_PREFIX_BYTES = 512
+
+
+def is_listed_source_file(relative_path: str, data: bytes) -> bool:
+    """#496: true when ``relative_path`` has a listed source extension and its first bytes do not
+    show it is one of the non-code XML formats that share the suffix."""
+    lower = relative_path.lower()
+    extension = next((ext for ext in _UNSUPPORTED_SOURCE_EXTENSIONS if lower.endswith(ext)), None)
+    if extension is None:
+        return False
+    head = data[:_SNIFF_PREFIX_BYTES].decode("utf-8", errors="replace").lstrip(_LEADING_JUNK).lower()
+    return not head.startswith((_XML_DECLARATION, *_NON_CODE_START_BY_EXTENSION.get(extension, ())))
+
+
 def is_unsupported_code_bearing_problem(problem: WorkerProblem) -> bool:
     """#496: true when ``problem`` records a selected file of a language no adapter reads and that
-    is code: a tier-2 shape (``degrades_run``) or a listed source extension."""
+    is code: a tier-2 shape (``degrades_run``) or a listed source file (``code_bearing``, decided
+    in ``process_paths`` where the file's bytes are at hand)."""
     if problem.reason_code != "unsupported_language":
         return False
-    return problem.degrades_run or problem.relative_path.lower().endswith(tuple(_UNSUPPORTED_SOURCE_EXTENSIONS))
+    return problem.degrades_run or problem.code_bearing
 
 
 def is_a_code_bearing_extension_worth_degrading_when_silently_excluded(
@@ -487,6 +516,9 @@ class WorkerProblem:
     detail: str
     qualified_name: str | None = None
     degrades_run: bool = True
+    #: #496: an ``unsupported_language`` file that is source code of a listed language (see
+    #: ``is_listed_source_file``); never set for any other reason code.
+    code_bearing: bool = False
 
 
 @dataclass(frozen=True)
@@ -1163,10 +1195,15 @@ def process_paths(root: Path, relative_paths: list[str]) -> WorkerResult:
                     "no bundled adapter recognizes this file's language - not on the "
                     "recognized code-bearing list, so this run does not degrade over it"
                 )
-            problems.append(WorkerProblem(
-                reason_code="unsupported_language", relative_path=rel, detail=detail,
-                degrades_run=degrades_run,
-            ))
+            problems.append(
+                WorkerProblem(
+                    reason_code="unsupported_language",
+                    relative_path=rel,
+                    detail=detail,
+                    degrades_run=degrades_run,
+                    code_bearing=is_listed_source_file(rel, data),
+                )
+            )
 
     # MICRO-ROUND 49 (M3 MAJOR, wrong-data): every web.xml this run
     # found, processed HERE - after the main loop above, so
@@ -1349,6 +1386,7 @@ def _result_to_json(result: WorkerResult) -> dict[str, Any]:
                 "detail": problem.detail,
                 "qualified_name": problem.qualified_name,
                 "degrades_run": problem.degrades_run,
+                "code_bearing": problem.code_bearing,
             }
             for problem in result.problems
         ],
@@ -1397,6 +1435,7 @@ def _result_from_json(payload: Any) -> WorkerResult:
                 detail=item["detail"],
                 qualified_name=item.get("qualified_name"),
                 degrades_run=item.get("degrades_run", True),
+                code_bearing=item.get("code_bearing", False),
             )
             for item in payload["problems"]
         ]

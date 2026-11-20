@@ -328,8 +328,8 @@ _DEFAULT_PROBLEM_SEVERITY = "warning"
 NO_SUPPORTED_SOURCE_REASON = "no_supported_source"
 NO_SUPPORTED_SOURCE_NOTE = (
     "No supported source files were parsed, so this run read none of the code it found; "
-    "only a fixed list of general-purpose languages (such as Python or Elixir) is counted, "
-    "other file types are not."
+    "only a fixed list of programming languages and code file types (such as Python) counts, "
+    "other file types do not."
 )
 
 
