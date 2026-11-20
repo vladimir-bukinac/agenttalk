@@ -6159,27 +6159,16 @@ def test_generated_ps1_runs_bus_calls_without_console_script_on_path(tmp_path: P
     assert "worker:" in res.stdout, f"no plan emitted; stdout={res.stdout!r} stderr={res.stderr!r}"
 
 
-@pytest.mark.source_layout
-def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_path(tmp_path: Path) -> None:
-    """Run the default installed bundle against this checkout installed in an isolated venv."""
+@pytest.fixture
+def installed_runtime_with_decoy(tmp_path: Path):
     import agenttalk
 
-    shell = _pick_powershell()
-    if not shell:
-        pytest.skip("PowerShell is unavailable")
     runtime = tmp_path / "runtime"
     venv.EnvBuilder(with_pip=False).create(runtime)
     python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     site = (runtime / "Lib/site-packages" if os.name == "nt" else
             runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
     shutil.copytree(Path(agenttalk.__file__).parent, site / "agenttalk", ignore=shutil.ignore_patterns("__pycache__"))
-    store = _team(tmp_path)
-    (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
-    sup.init(store, python_exe=str(python), source_checkout=False)
-    assert not sup.recorded_source_mode(store)
-    assert sup.validate_artifact_bundle(store)["ok"]
-    _select_test_powershell(tmp_path, shell)
-    # A same-named local package must not be imported by the installed shim.
     shadow = tmp_path / "agenttalk"
     shadow.mkdir()
     marker = tmp_path / "shadow-imported"
@@ -6187,6 +6176,25 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
         f"from pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8"
     )
     (shadow / "__main__.py").write_text("raise SystemExit(42)\n", encoding="utf-8")
+    return python, marker
+
+
+@pytest.mark.source_layout
+def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_path(
+    tmp_path: Path, installed_runtime_with_decoy
+) -> None:
+    """Run the default installed bundle against this checkout installed in an isolated venv."""
+    shell = _pick_powershell()
+    if not shell:
+        pytest.skip("PowerShell is unavailable")
+    python, marker = installed_runtime_with_decoy
+    store = _team(tmp_path)
+    (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
+    sup.init(store, python_exe=str(python), source_checkout=False)
+    assert not sup.recorded_source_mode(store)
+    assert sup.validate_artifact_bundle(store)["ok"]
+    _select_test_powershell(tmp_path, shell)
+    # A same-named local package must not be imported by the installed shim.
     windir = os.environ.get("WINDIR", r"C:\Windows")
     # PATHEXT and ComSpec let PowerShell run the generated .cmd launcher as a program, not a document.
     keep = ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP", "PATHEXT", "ComSpec")
@@ -6195,7 +6203,6 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
     env["PATH"] = os.pathsep.join([os.path.join(windir, "System32"), windir])
     env["AGENTTALK_PYTHON"] = str(python)
     env["PYTHONPATH"] = str(tmp_path)
-    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
     result = subprocess.run(
         [shell, "-NoProfile", "-File", str(store.dir / "supervisor.ps1"), "-Once", "-DryRun"],
         capture_output=True, text=True, timeout=120, env=env, cwd=tmp_path,
@@ -6208,23 +6215,20 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
 
 
 @pytest.mark.source_layout
-def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(tmp_path: Path) -> None:
+def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(
+    tmp_path: Path, installed_runtime_with_decoy
+) -> None:
     """Exercise each direct installed-mode Python call with a local import decoy."""
-    import agenttalk
-
     shell = _pick_powershell()
     if not shell:
         pytest.skip("PowerShell is unavailable")
-    runtime = tmp_path / "runtime"
-    venv.EnvBuilder(with_pip=False).create(runtime)
-    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    site = (runtime / "Lib/site-packages" if os.name == "nt" else
-            runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
-    shutil.copytree(Path(agenttalk.__file__).parent, site / "agenttalk", ignore=shutil.ignore_patterns("__pycache__"))
+    python, marker = installed_runtime_with_decoy
     store = _team(tmp_path)
     (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
     sup.init(store, python_exe=str(python), source_checkout=False)
     script = (store.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
+    calls = re.findall(r"&\s+\$AgenttalkPython\b(?!\s+@AgenttalkModuleFlags\b)", script)
+    assert not calls, "a direct Python call is missing @AgenttalkModuleFlags"
     lines = []
     for name in ("AgenttalkPython", "SrcOnPyPath", "AgenttalkModuleFlags"):
         matches = re.findall(rf"(?m)^\${name} = [^\r\n]*", script)
@@ -6234,13 +6238,6 @@ def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(tmp_path
     admission_helpers = script[script.index("# region launch-admission-helpers"):
                                script.index("# endregion launch-admission-helpers")]
 
-    shadow = tmp_path / "agenttalk"
-    shadow.mkdir()
-    marker = tmp_path / "shadow-imported"
-    (shadow / "__init__.py").write_text(
-        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8"
-    )
-    (shadow / "__main__.py").write_text("raise SystemExit(42)\n", encoding="utf-8")
     stub = tmp_path / "python.cmd"
     _stub_cmd(stub, tmp_path / "wrapper.log")
     child = tmp_path / "codex.exe"
@@ -6262,6 +6259,10 @@ def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(tmp_path
     harness = "\n".join([
         "$ErrorActionPreference = 'Stop'",
         *lines,
+        "function Join-ModuleFlags { $args -join ' ' }",
+        "$flagText = Join-ModuleFlags @AgenttalkModuleFlags",
+        "Write-Output ('module-flags=' + $flagText)",
+        "if ($flagText -cne '-I') { throw 'incorrect module flags' }",
         f"$Root = {_pslit(str(tmp_path))}",
         helpers,
         admission_helpers,
@@ -6285,10 +6286,10 @@ def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(tmp_path
     env["PATH"] = os.pathsep.join([os.path.join(windir, "System32"), windir])
     env["AGENTTALK_PYTHON"] = str(python)
     env["PYTHONPATH"] = str(tmp_path)
-    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
     result = subprocess.run([shell, "-NoProfile", "-File", str(harness_path)], cwd=tmp_path,
                             env=env, capture_output=True, text=True, timeout=120)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "module-flags=-I" in result.stdout.splitlines()
     assert not marker.exists()
     assert json.loads(out.read_text(encoding="utf-8-sig")) == {"claude": True, "codex": True, "wrapped": True}, (
         result.stdout + result.stderr
