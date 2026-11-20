@@ -1,11 +1,14 @@
 """Deeply nested damaged files must follow the normal parse-error paths."""
 
 import json
+import os
+import time
 
 import pytest
 
 from agenttalk import cli, doctor, scratch, supervisor_lifecycle
 from agenttalk.store import Store
+from agenttalk import store as store_module
 
 
 DEPTH = 30000
@@ -118,3 +121,90 @@ def test_full_doctor_reports_nested_file(tmp_path, monkeypatch, capsys, bad_json
         assert check["status"] == "error"
         output = check["details"]
     assert ("config" if file_kind == "config" else "selection is malformed") in output
+
+
+@pytest.fixture(params=["deep", "forced"])
+def lock_json_875(request, monkeypatch):
+    original = json.loads
+    forced_values = set()
+
+    def loads(value, *args, **kwargs):
+        if value in forced_values:
+            raise RecursionError("forced lock record decoder failure")
+        return original(value, *args, **kwargs)
+
+    if request.param == "forced":
+        monkeypatch.setattr(json, "loads", loads)
+
+    def make(pid=None):
+        prefix = "" if pid is None else f'"pid": {pid}, '
+        value = "{" + prefix + '"nested":' + "[" * 2000 + "]" * 2000 + "}"
+        assert len(value.encode("utf-8")) <= 4096
+        if request.param == "deep":
+            try:
+                original(value)
+            except RecursionError:
+                pass
+            else:
+                pytest.skip("decoder accepts the bounded deeply nested record")
+        else:
+            forced_values.add(value)
+        return value
+
+    return make
+
+
+@pytest.mark.parametrize("with_pid", [False, True])
+def test_875_reader_follows_damaged_record_path(tmp_path, lock_json_875, with_pid):
+    pid = os.getpid() if with_pid else None
+    path = tmp_path / "owner.lock"
+    path.write_text(lock_json_875(pid), encoding="utf-8")
+    found_pid, identity, record = store_module._read_lock_owner(path)
+    assert found_pid == pid
+    assert identity.st_size <= 4096
+    assert record is None
+
+
+def test_875_prepare_recovery_preserves_both_names(tmp_path, lock_json_875):
+    path = tmp_path / "owner.lock"
+    alias = tmp_path / "prepare.lock"
+    path.write_text(lock_json_875(), encoding="utf-8")
+    os.link(path, alias)
+    assert store_module._recover_published_prepare_link(path) is False
+    assert path.exists() and alias.exists()
+    assert os.path.samefile(path, alias)
+
+
+@pytest.mark.parametrize("kind", ["nested", "damaged"])
+@pytest.mark.parametrize("age,live", [(0, False), (60, True), (60, False)])
+def test_875_lock_rules_match_damaged_records(tmp_path, lock_json_875, kind, age, live):
+    path = tmp_path / "owner.lock"
+    pid = os.getpid() if live else None
+    if kind == "nested":
+        value = lock_json_875(pid)
+    else:
+        value = f'{{"pid": {pid}, broken' if live else "{broken"
+    path.write_text(value, encoding="utf-8")
+    timestamp = time.time() - age
+    os.utime(path, (timestamp, timestamp))
+    store = Store(tmp_path)
+    if age and not live:
+        with store._exclusive_lock_unordered(path, timeout=1, poll=0.01):
+            assert path.exists()
+        assert not path.exists()
+    else:
+        with pytest.raises(store_module.LockContention):
+            with store._exclusive_lock_unordered(path, timeout=0.1, poll=0.01):
+                pytest.fail("a fresh or live-owner lock was broken")
+        assert path.read_text(encoding="utf-8") == value
+
+
+def test_875_stranded_sweep_leaves_unreadable_owner(tmp_path, lock_json_875):
+    path = tmp_path / "owner.lock"
+    path.write_text(lock_json_875(os.getpid()), encoding="utf-8")
+    store_module._remember_stranded_marker(path, path.stat(), "generation")
+    try:
+        assert Store(tmp_path).complete_stranded_lock_releases() == 0
+        assert path.exists()
+    finally:
+        store_module._forget_stranded_marker(path, "generation")

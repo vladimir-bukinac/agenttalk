@@ -686,7 +686,7 @@ def _recover_published_prepare_link(path: Path) -> bool:
         os.close(fd)
     try:
         record = json.loads(raw.decode("utf-8").strip(" \t\r\n\x00"))
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
         return False
     if not isinstance(record, dict) or record.get("protocol") != "o_excl_v2":
         return False
@@ -732,7 +732,7 @@ def _read_lock_owner(path: Path) -> tuple[int | None, os.stat_result, dict | Non
         os.close(fd)
     try:
         data = json.loads(raw.decode("utf-8").strip(" \t\r\n\x00"))
-    except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError, RecursionError):
         match = _LOCK_PID_PREFIX_RE.search(raw)
         pid = int(match.group(1)) if match is not None else None
         return pid if pid and pid > 0 else None, identity, None
