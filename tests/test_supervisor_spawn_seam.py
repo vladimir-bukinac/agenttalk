@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -131,13 +132,15 @@ def _run_powershell_script(
     harness: Path,
     *,
     env: dict[str, str],
-    cwd: str | None = None,
+    **run_options: Any,
 ) -> subprocess.CompletedProcess[str]:
     """Run a harness script in a PowerShell host; only a timeout text differs.
 
-    On a timeout the failure is still that timeout, with the host, the script,
-    the elapsed time, the output so far, the CPU count and one short probe of
-    the bare host added to its text. There is no retry.
+    Any other keyword (such as cwd) goes to subprocess.run exactly as given,
+    and is left out when the caller left it out. On a timeout the failure is
+    still that timeout, with the host, the script, the elapsed time, the output
+    so far, the CPU count and one short probe of the bare host added to its
+    text. There is no retry.
     """
     started = time.monotonic()
     try:
@@ -147,7 +150,7 @@ def _run_powershell_script(
             text=True,
             timeout=_SCRIPT_TIMEOUT_SECONDS,
             env=env,
-            cwd=cwd,
+            **run_options,
         )
     except subprocess.TimeoutExpired as original:
         elapsed = time.monotonic() - started
@@ -861,8 +864,13 @@ def test_a_failing_probe_does_not_hide_the_first_timeout(
 
 
 @pytest.mark.parametrize("returncode", [0, 3])
+@pytest.mark.parametrize(
+    "run_options",
+    [{}, {"cwd": "somewhere"}],
+    ids=["cwd-omitted", "cwd-given"],
+)
 def test_a_start_that_finishes_is_returned_unchanged_with_no_probe(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int, run_options: dict
 ) -> None:
     harness = tmp_path / "spawn-fast.ps1"
     finished = subprocess.CompletedProcess([_FAKE_HOST], returncode, stdout="out", stderr="err")
@@ -870,9 +878,11 @@ def test_a_start_that_finishes_is_returned_unchanged_with_no_probe(
     monkeypatch.setattr(subprocess, "run", fake)
     env = {"K": "v"}
 
-    result = _run_powershell_script(_FAKE_HOST, harness, env=env, cwd="somewhere")
+    result = _run_powershell_script(_FAKE_HOST, harness, env=env, **run_options)
 
     assert result is finished
+    # Exactly the keywords the caller gave: an omitted cwd stays omitted, as at
+    # the two call sites that never passed one.
     assert fake.calls == [
         (
             [_FAKE_HOST, "-NoProfile", "-File", str(harness)],
@@ -881,7 +891,7 @@ def test_a_start_that_finishes_is_returned_unchanged_with_no_probe(
                 "text": True,
                 "timeout": 120,
                 "env": env,
-                "cwd": "somewhere",
+                **run_options,
             },
         )
     ]
