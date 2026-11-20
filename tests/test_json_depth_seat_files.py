@@ -319,7 +319,7 @@ _SUFFIX = r"[A-Za-z0-9][A-Za-z0-9.-]*"
 # The seat part may be any variable, attribute or call: `seat`, `args.agent`, `validate_agent_name(agent)`.
 _CALL_ARGS = r"\((?:[^()]|\([^()]*\))*\)"
 _SEAT = r"[\w.]+(?:" + _CALL_ARGS + r")?"
-_FORMAT_FIELD = r"\{(?:[0-9]+|[A-Za-z_]\w*)?\}"
+_FORMAT_FIELD = r"""\{[^{}"']*\}"""
 _FILE_NAME = (
     r"""(?:(?i:rf|fr|f)(?P<f_quote>["'])\{[^{}"']+\}(?:\.\{[^{}"']+\})?\."""
     + r"(?P<f_suffix>"
@@ -373,8 +373,9 @@ def _per_seat_paths_in(lines):
 
     Inspect state_dir, a quoted or constant folder beneath it, its one continuation line,
     and seat-named folders. Triple quotes, implicitly joined strings, joinpath,
-    os.path.join, with_name, and names stored in variables then joined later are outside
-    this line search.
+    os.path.join, with_name, with_suffix, Path(folder, name), and names stored in
+    variables then joined later are outside this line search. The session backup
+    uses with_name and turn events use os.path.join; both are checked separately.
     """
     found = set()
     previous = ""
@@ -547,6 +548,10 @@ PLANTED["format with second field"] = (
     "p = s.state_dir / '{seat}.{nonce}.json'.format(seat=seat, nonce=nonce)",
     ".json",
 )
+PLANTED["format conversion"] = ("p = s.state_dir / '{0!s}.planted.json'.format(seat)", ".planted.json")
+PLANTED["format spec"] = ("p = s.state_dir / '{seat:s}.planted.json'.format(seat=seat)", ".planted.json")
+PLANTED["format attribute"] = ("p = s.state_dir / '{a.name}.planted.json'.format(a=a)", ".planted.json")
+PLANTED["format index"] = ("p = s.state_dir / '{a[0]}.planted.json'.format(a=a)", ".planted.json")
 for prefix in ("r", "R", "u", "U"):
     for name, expression in {
         "concatenation": f"(seat + {prefix}'.planted.json')",
