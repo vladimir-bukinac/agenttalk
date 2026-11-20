@@ -292,3 +292,126 @@ def test_supervisor_config_loader_reports_nested_json_both_ways(tmp_path, bad_ca
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     with pytest.raises(supervisor.SupervisorPersistenceError, match="unreadable or invalid"):
         supervisor.load_supervisor_config(path, expected_sha256=digest)
+
+
+# --- #871 round 2: the file's metadata lookup must not decide "absent" ---
+
+
+@pytest.mark.parametrize("lookup", ["raises", "says_absent"])
+def test_a_capacity_file_whose_metadata_lookup_fails_is_named(tmp_path, monkeypatch, capsys, lookup):
+    # Older Pythons let Path.exists raise PermissionError; 3.14 on Windows hides the error and says
+    # "absent". Either way the file is there and cannot be read, so it must be named, never crash or vanish.
+    store = _store_with_bad_capacity(tmp_path, "{}")
+    path = store.state_dir / "alpha.capacity.json"
+    _deny_reading(monkeypatch, path, PermissionError("injected denial"))
+    original_exists = Path.exists
+
+    def exists(self, *args, **kwargs):
+        if self == path:
+            if lookup == "raises":
+                raise PermissionError("injected stat failure")
+            return False
+        return original_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "exists", exists)
+    assert store.read_capacity("alpha") is None
+    assert store.read_capacities_checked() == ({"beta": GOOD_READING}, ["alpha"])
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "status", "--json"]) == 0
+    warnings = "\n".join(json.loads(capsys.readouterr().out)["warnings"])
+    assert "capacity reading for alpha could not be read" in warnings
+
+
+# --- #871 round 2: a supervisor STATE file nested too deeply is damaged, like a malformed one ---
+
+MALFORMED = "{not json"
+VALID_STATE = {"agents": {"alpha": {"note": "kept"}}}
+
+
+def _state_paths(tmp_path):
+    path = tmp_path / "supervisor-state.json"
+    return path, supervisor.supervisor_state_backup_path(path)
+
+
+def _same_outcome(text):
+    """What a message says, without the name of the parser error (JSONDecodeError or RecursionError)."""
+    import re
+
+    return re.sub(r"(unreadable or invalid): \w+", r"\1", text)
+
+
+def _outcome(action, *args):
+    try:
+        return ("ok", action(*args))
+    except supervisor.SupervisorPersistenceError as exc:
+        return ("failed closed", _same_outcome(str(exc)))
+
+
+def _write_state(path, content):
+    path.write_text(content if isinstance(content, str) else json.dumps(content), encoding="utf-8")
+
+
+@pytest.mark.parametrize("backup", ["valid", "damaged", "missing"])
+def test_load_state_treats_a_nested_primary_like_a_malformed_one(tmp_path, bad_capacity_json, backup):
+    outcomes = []
+    for primary_text in (MALFORMED, bad_capacity_json):
+        path, backup_path = _state_paths(tmp_path / ("m" if primary_text == MALFORMED else "d"))
+        path.parent.mkdir(parents=True)
+        _write_state(path, primary_text)
+        if backup == "valid":
+            _write_state(backup_path, VALID_STATE)
+        elif backup == "damaged":
+            _write_state(backup_path, bad_capacity_json)
+        outcomes.append(_outcome(supervisor.load_supervisor_state, path))
+    assert outcomes[0] == outcomes[1]
+    if backup == "valid":
+        assert outcomes[1] == ("ok", VALID_STATE)
+    else:
+        assert outcomes[1][0] == "failed closed" and "supervisor state is unreadable or invalid" in outcomes[1][1]
+
+
+@pytest.mark.parametrize("backup", ["valid", "damaged"])
+def test_load_state_treats_a_nested_backup_like_a_malformed_one(tmp_path, bad_capacity_json, backup):
+    outcomes = []
+    for backup_text in (MALFORMED, bad_capacity_json):
+        path, backup_path = _state_paths(tmp_path / ("m" if backup_text == MALFORMED else "d"))
+        path.parent.mkdir(parents=True)
+        if backup == "valid":  # a good primary is returned and the damaged backup is never needed
+            _write_state(path, VALID_STATE)
+        _write_state(backup_path, backup_text)
+        outcomes.append(_outcome(supervisor.load_supervisor_state, path))
+    assert outcomes[0] == outcomes[1]
+    if backup == "valid":
+        assert outcomes[1] == ("ok", VALID_STATE)
+    else:
+        assert (
+            outcomes[1][0] == "failed closed" and "supervisor state backup is unreadable or invalid" in outcomes[1][1]
+        )
+
+
+@pytest.mark.parametrize("backup", ["valid", "damaged", "missing"])
+def test_save_state_treats_a_nested_primary_like_a_malformed_one(tmp_path, bad_capacity_json, backup):
+    new_state = {"agents": {"beta": {}}}
+    results = []
+    for primary_text in (MALFORMED, bad_capacity_json):
+        path, backup_path = _state_paths(tmp_path / ("m" if primary_text == MALFORMED else "d"))
+        path.parent.mkdir(parents=True)
+        _write_state(path, primary_text)
+        if backup == "valid":
+            _write_state(backup_path, VALID_STATE)
+        elif backup == "damaged":
+            _write_state(backup_path, bad_capacity_json)
+        outcome = _outcome(supervisor.save_supervisor_state, path, new_state)
+        left = {
+            "primary": json.loads(path.read_text(encoding="utf-8"))
+            if outcome[0] == "ok"
+            else path.read_text(encoding="utf-8"),
+            "backup_exists": backup_path.exists(),
+        }
+        results.append((outcome, left["backup_exists"], outcome[0] == "ok" and left["primary"]))
+    assert results[0] == results[1]
+    if backup == "valid":
+        assert results[1][0][0] == "ok" and results[1][2] == new_state
+    else:
+        assert results[1][0][0] == "failed closed"
+        assert "supervisor state is unreadable or invalid" in results[1][0][1]

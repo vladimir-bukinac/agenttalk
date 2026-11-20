@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrapper session file nested too deeply is treated as damaged (the seat starts a fresh session, as
   for any damaged one), and a `supervisor.json` nested too deeply makes `status` print the same one
   line as for a damaged one (`supervisor config is unreadable or invalid`) and stop.
+  The same supervisor reader also loads and saves the supervisor's own state file, so a state file nested
+  too deeply is now treated like a damaged one there as well: the supervisor uses the saved backup copy
+  when it is good and otherwise stops with the same one-line error (these crashes existed before #871; this change
+  only makes them match a damaged file). A capacity file whose size and type cannot even be checked (for example no access) is now
+  reported as unreadable instead of making the command stop or being skipped without a word, depending on
+  the Python version.
 
 - **A wrapped Claude seat in a strict permission mode can now send its replies by command (#828).** In a Claude
   Code mode other than `bypassPermissions` (`dontAsk` was measured), a command that starts with a

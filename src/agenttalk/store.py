@@ -8457,11 +8457,9 @@ class Store:
         An absent or empty file is just "no reading", not unreadable; a file that is there but
         cannot be opened (no access, a folder in its place) is unreadable. Never raises."""
         p = self.state_dir / f"{agent}.capacity.json"
-        if not p.exists():
-            return None, False
-        try:
+        try:  # no separate exists(): it can hide or raise a stat error, and so call a locked file "absent"
             raw = p.read_text(encoding="utf-8").strip()
-        except FileNotFoundError:  # gone since the check above: just no reading
+        except FileNotFoundError:  # no file: just no reading
             return None, False
         except (OSError, ValueError):  # cannot be read (no access...) or the bytes are not text
             return None, True
