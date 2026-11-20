@@ -1275,8 +1275,12 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             bucket = "escalate_backstop"
         return {"agent": agent, "msg_id": record.get("id"), "from": record.get("from"),
                 "subject": record.get("subject"), "kind": record.get("kind"),
-                "dead_letter_resolved": (isinstance(record.get("meta"), dict)
-                                         and record["meta"].get("dead_letter_resolved") == "true"),
+                # Only an actual resolve-notice shape is eligible for the disposal backstop.
+                "dead_letter_resolved": (record.get("kind") == "message" and isinstance(record.get("meta"), dict)
+                                         and record["meta"].get("dead_letter_resolved") == "true"
+                                         and record["meta"].get("operator_answer") == "true"
+                                         and isinstance(record["meta"].get("dead_letter_msg_id"), str)
+                                         and bool(record["meta"]["dead_letter_msg_id"].strip())),
                 "request_id": record.get("request_id"),
                 "attempts": attempts,  # degrade-low
                 "attempts_bucket": bucket,
@@ -2658,14 +2662,16 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
             # result, in this invocation's own stream). Park the head: record the result
             # (no failure counter moves), then hold it. A stated reset only becomes a wake
             # when it lies in the future and at most 8 days ahead by THIS loop's clock.
+            now_epoch = _now_epoch()
+            reset = usage_park.usable_reset(outcome.limit_reset_epoch, now_epoch)
+            recheck = (outcome.limit_detail == "recheck"
+                       or (outcome.limit_provider == usage_park.PROVIDER_CODEX and reset is None))
             store.record_attempt_result(
                 agent, head_id, failure_class=CLASS_USAGE_LIMIT, summary=outcome.summary,
                 at=now_iso(),
                 usage_limit={"generation": park_generation, "window": outcome.limit_window,
-                             "provider": outcome.limit_provider, "now_epoch": _now_epoch(),
-                             "recheck": outcome.limit_detail == "recheck",
-                             "reset_epoch": usage_park.usable_reset(outcome.limit_reset_epoch,
-                                                                    _now_epoch())})
+                             "provider": outcome.limit_provider, "now_epoch": now_epoch,
+                             "recheck": recheck, "reset_epoch": reset})
             _park_usage_limit(record, store.attempt_record(agent, head_id) or {}, idle=True)
             continue
         if _is_refusal(outcome):

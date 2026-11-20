@@ -13708,8 +13708,6 @@ def _dead_letter_notifier(store, agent: str):
     needs_operator meta at all - see ``_send_usage_limit_notice``. NEVER crashes the loop."""
     def emit(info: dict, *, disposed: bool) -> bool:
         try:
-            if info.get("dead_letter_resolved"):
-                return True
             from agenttalk import attention as A
             # #311 connector 4174800518, narrowed in round 2 (connector 4175000... shared-
             # helper-fixes-check-feature-off-siblings): when the PARKED agent is itself the
@@ -13750,6 +13748,9 @@ def _dead_letter_notifier(store, agent: str):
                                  "dl_msg_id": str(mid),
                                  "dl_disposed": "false",
                                  "request_id": "esc-" + uuid.uuid4().hex[:12]})
+                return True
+            # Suppress only the disposal notice for a resolve notice; park and config alarms still route.
+            if disposed and info.get("dead_letter_resolved"):
                 return True
             state = A.dead_letter_notice_state(info, disposed=disposed)
             generation = str(

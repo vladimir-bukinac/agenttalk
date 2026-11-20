@@ -81,9 +81,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Codex tasks now wait when the seat hits its usage limit.** The message stays at the front of
   the queue instead of being retried into the dead-letter list. A fresh reading from the same
-  Codex thread supplies the reset time; when no current reading is available, the seat checks
-  again in 30 minutes. Resolving a dead letter no longer creates another operator escalation if
-  its notice also fails. The web-console display of the re-check follows separately. (#879)
+  Codex thread supplies the reset time; when the reading or a usable reset is unavailable, the seat
+  checks again in 30 minutes. A dead-lettered resolve notice cannot create another operator question,
+  while a park notice or configuration alarm still reaches the lead. The web-console display of the
+  re-check follows separately. (#879)
 
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup
   and the scratch janitor keep checkouts when Git could be hiding tracked work,

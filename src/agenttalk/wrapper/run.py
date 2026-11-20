@@ -3363,10 +3363,12 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
             return {"limit_fact": soft["word"], "limit_provider": _usage_park.PROVIDER_CLAUDE,
                     "limit_detail": soft["detail"]}
         # This proof is read from Claude's own stream, so it names Claude (never an agent name).
+        codex = sig.get("codex_limit") is fact
         return {"limit_fact": _usage_park.FACT_USAGE_LIMIT, "limit_window": fact["window"],
                 "limit_reset_epoch": fact["reset_epoch"],
-                "limit_provider": "codex" if sig.get("codex_limit") is fact else _usage_park.PROVIDER_CLAUDE,
-                "limit_detail": "recheck" if fact.get("recheck") else None}
+                "limit_provider": "codex" if codex else _usage_park.PROVIDER_CLAUDE,
+                "limit_detail": "recheck" if fact.get("recheck") or (codex and fact["reset_epoch"] is None)
+                else None}
 
     def _finish_watchdog_recovery(sig: dict) -> None:
         if not sig.get("watchdog"):

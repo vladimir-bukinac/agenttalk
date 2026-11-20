@@ -1461,7 +1461,7 @@ stays alive and says so. This is on by default.
 
 - `agenttalk status` flags the seat `usage_limit_parked(until=<time>)`. The time is in UTC, and
   it is the reset time from the provider's reading. A Codex re-check has a `retry=<time>` flag.
-  The flag reads `until=restarted` when no time is known
+  A Claude park reads `until=restarted` when no time is known
   and `wrapper_not_responding` when the wrapper stopped refreshing its status.
 - `agenttalk attention`, `agenttalk doctor` and both web consoles show it too, as **PARKED**
   ("parked on a usage limit until ..."). A parked seat needs a look, but it is never shown as
@@ -1483,10 +1483,10 @@ stays alive and says so. This is on by default.
 - It tries the message **once** each time its wrapper is started again.
 - When the provider states when the allowance comes back, it tries once **30 seconds after** that
   time. If it is still limited and Claude states a later time, it waits for that one. The
-  stated time must be in the future and at most 8 days ahead; otherwise there is no timed try.
-- When Codex reports the specific usage-limit failure but its own current reading is unavailable,
-  it re-checks every 30 minutes, without counting those tries as failures. It never reads a reset
-  time from message text.
+  stated time must be in the future and at most 8 days ahead; otherwise a Claude seat has no timed try.
+- When Codex reports the specific usage-limit failure but its current reading or its usable reset is
+  unavailable, it re-checks every 30 minutes without counting those tries as failures. It never reads
+  a reset time from message text.
 
 **What you can do**
 
@@ -1511,13 +1511,14 @@ a usage limit and is never counted as a bad message.
 
 For Codex, the terminal failure must contain `hit your usage limit` and a fresh reading from the
 same thread must show an exhausted window or a rate-limit-reached type. If the reading is missing
-or stale, the seat waits for a 30-minute re-check; a fresh reading below the limit keeps the usual
-failure handling. A local failure or safety refusal keeps its own handling.
+or stale, or its reset is absent, past, or more than eight days away, the seat waits for a 30-minute
+re-check; a fresh reading below the limit keeps the usual failure handling. A local failure or safety
+refusal keeps its own handling.
 
 **With the turn journal on.** The journal records the turn that proved the limit as one failed
 dispatch, with the same failure class it has when this switch is off. While the seat is parked the
-journal hears nothing more about the message (a park is not a consumption, and no second dispatch
-starts). When a later try succeeds, the journal records a new dispatch and then exactly one
+journal hears nothing more about the message between tries (a park is not a consumption).
+When a later try succeeds, the journal records a new dispatch and then exactly one
 `completed` for that message. In the new web console a parked seat is held to the rule of a stalled
 warning: it always counts as needing attention, is never "All quiet" or "not for you", and no saved
 "Later" choice can hide it.
@@ -1528,15 +1529,15 @@ warning: it always counts as needing attention, is never "All quiet" or "not for
   existing retries and the config-blocked park do. Stop the wrapper or skip the message.
 - Only the standard wrapper path parks. A seat under a commit-gate policy that owes an answer, and
   the one-shot reviewer launches, behave as before.
-- Claude only. A Codex usage limit or overload keeps today's behaviour for now. For a Claude seat,
-  an overload (HTTP 529) and a suspected limit now cool down instead (see the next section).
+- The overload and throttling cool-downs below apply only to Claude. A Codex overload retains the
+  existing failure handling.
 - The notice is not exactly-once: a crash between sending it and recording it can repeat one
   notice (the same thread). An unrouted notice is tried at most four times, 15 minutes apart;
   `agenttalk doctor` lists it.
 - A seat that is parked is alive, so the supervisor does not restart it and spends no restart
   budget; a parked wrapper that stops answering is recovered like any dead one.
-- A change of the clock can cause one early try, which cannot repeat: a try that finds the same or
-  an earlier reset schedules nothing.
+- A change of the clock can cause an early try. For Claude, a try that finds the same or an earlier
+  reset schedules nothing; Codex re-checks when its reset is no longer usable.
 - The `_epoch` fields a parked seat publishes are rounded down to whole seconds, so a status can be up to one
   second late in turning from "parked" to "wrapper not responding"; it is never early.
 - The test record that proves the off switch (`tests/golden/`) compares normalised observations,
@@ -1579,7 +1580,7 @@ only by a **strictly later** reset. A later refusal that states no reset, or the
 one, keeps the reset already held. So `reset_epoch` is the latest reset seen, and the file can say
 `seven_day` beside a reset that came from an earlier `five_hour` refusal. For Codex, the latest
 fresh reading replaces the previous reset, even when it is earlier. A re-check without a fresh
-reading has a null `reset_epoch` and the next re-check time in `wake_epoch`.
+reading or usable reset has a null `reset_epoch` and the next re-check time in `wake_epoch`.
 
 **The version rule.** A reader must refuse a file whose `schema_version` it does not know (and a
 `provider` it does not know), and must not guess what it means. A new version means the format
