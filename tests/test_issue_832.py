@@ -16,6 +16,33 @@ from agenttalk.wrapper import prompt, run
 from agenttalk.store import Store
 
 
+@pytest.mark.skipif(os.name != "nt", reason="the generated command shim runs on Windows")
+@pytest.mark.parametrize("installed", [True, False], ids=["installed-nonzero", "missing"])
+def test_installed_shim_only_suggests_install_for_missing_package(tmp_path, installed):
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    python = runtime / "Scripts" / "python.exe"
+    if installed:
+        package = runtime / "Lib" / "site-packages" / "agenttalk"
+        package.mkdir()
+        (package / "__init__.py").write_text("", encoding="utf-8")
+        (package / "__main__.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
+    shim = tmp_path / "agenttalk.cmd"
+    shim.write_bytes(supervisor.agenttalk_shim(str(python)).encode("utf-8"))
+    env = {k: os.environ[k] for k in ("SystemRoot", "WINDIR", "TEMP", "TMP") if k in os.environ}
+    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
+    result = subprocess.run(
+        [str(Path(env["SystemRoot"]) / "System32" / "cmd.exe"), "/d", "/c", str(shim), "check"],
+        cwd=tmp_path,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == (3 if installed else 1)
+    assert ("pip --user" in result.stderr) is (not installed)
+
+
 @pytest.mark.parametrize("source", [False, True])
 def test_init_and_validation_use_same_recorded_mode(store, source):
     args = ["--root", str(store.root), "supervise", "--init"]

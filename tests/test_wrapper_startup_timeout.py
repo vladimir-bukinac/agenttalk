@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import venv
 from pathlib import Path
 
 import pytest
@@ -131,6 +132,23 @@ def test_an_import_check_that_hangs_is_refused_in_bounded_time_with_the_reason(t
 
     assert time.monotonic() - started < 30
     assert blocked is not None  # before #714 a timed-out import check let the seat through
+    _plain_timeout_wording(blocked, "2")
+
+
+def test_an_installed_import_check_that_hangs_is_refused_in_bounded_time(tmp_path, monkeypatch) -> None:
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = (runtime / "Lib/site-packages" if os.name == "nt" else
+            runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+    package = site / "agenttalk"
+    package.mkdir()
+    (package / "__init__.py").write_text("import time\ntime.sleep(120)\n", encoding="utf-8")
+    monkeypatch.setattr(run, "_agenttalk_py", lambda: str(python))
+    started = time.monotonic()
+    blocked = run.preflight_agenttalk_runtime(workspace_root=tmp_path, timeout=2.0)
+    assert time.monotonic() - started < 30
+    assert blocked is not None
     _plain_timeout_wording(blocked, "2")
 
 

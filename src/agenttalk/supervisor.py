@@ -15489,7 +15489,10 @@ def agenttalk_shim(
         + ('"%AGENTTALK_PYTHON%" -m agenttalk %*\r\n' if source_checkout else
            '"%AGENTTALK_PYTHON%" -I -m agenttalk %*\r\n'
            'set "AGENTTALK_EXIT=%ERRORLEVEL%"\r\n'
-           'if not "%AGENTTALK_EXIT%"=="0" echo If agenttalk is missing, -I cannot see pip --user installs; install it in this Python environment. 1>&2\r\n'
+           'if not "%AGENTTALK_EXIT%"=="0" (\r\n'
+           '  "%AGENTTALK_PYTHON%" -I -c "import agenttalk" >nul 2>nul\r\n'
+           '  if errorlevel 1 echo If agenttalk is missing, -I cannot see pip --user installs; install it in this Python environment. 1>&2\r\n'
+           ')\r\n'
            'exit /b %AGENTTALK_EXIT%\r\n')
     )
 

@@ -638,7 +638,7 @@ def test_qwen_wrap_worker_spend_preflight_allows_accepted_canary(
     monkeypatch.setattr(ovh_gateway_service, "gateway_status", status_projection)
     monkeypatch.setattr(ovh_gateway, "read_secret_file", read_front_token)
     # Runtime identity is covered separately; this test exercises spend admission.
-    monkeypatch.setattr(wrapper_run, "select_runtime_mode", lambda *_args: "source")
+    monkeypatch.setattr(wrapper_run, "select_runtime_mode", lambda *_args: "installed")
     monkeypatch.setattr(
         wrapper_run,
         "preflight_launch_runtime",

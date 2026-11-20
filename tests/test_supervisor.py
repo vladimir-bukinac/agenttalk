@@ -19,6 +19,7 @@ import signal
 import subprocess
 import sys
 import time
+import venv
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -6156,6 +6157,52 @@ def test_generated_ps1_runs_bus_calls_without_console_script_on_path(tmp_path: P
     assert "is not recognized" not in combined and "CommandNotFound" not in combined, combined
     # the DryRun plan line for the dead worker actually printed (the bus call ran)
     assert "worker:" in res.stdout, f"no plan emitted; stdout={res.stdout!r} stderr={res.stderr!r}"
+
+
+@pytest.mark.source_layout
+def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_path(tmp_path: Path) -> None:
+    """Run the default installed bundle against this checkout installed in an isolated venv."""
+    import agenttalk
+
+    shell = _pick_powershell()
+    if not shell:
+        pytest.skip("PowerShell is unavailable")
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = (runtime / "Lib/site-packages" if os.name == "nt" else
+            runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+    shutil.copytree(Path(agenttalk.__file__).parent, site / "agenttalk", ignore=shutil.ignore_patterns("__pycache__"))
+    store = _team(tmp_path)
+    (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
+    sup.init(store, python_exe=str(python), source_checkout=False)
+    assert not sup.recorded_source_mode(store)
+    assert sup.validate_artifact_bundle(store)["ok"]
+    _select_test_powershell(tmp_path, shell)
+    # A same-named local package must not be imported by the installed shim.
+    shadow = tmp_path / "agenttalk"
+    shadow.mkdir()
+    marker = tmp_path / "shadow-imported"
+    (shadow / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8"
+    )
+    (shadow / "__main__.py").write_text("raise SystemExit(42)\n", encoding="utf-8")
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    env = {k: os.environ[k] for k in ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP")
+           if k in os.environ}
+    env["PATH"] = os.pathsep.join([os.path.join(windir, "System32"), windir])
+    env["AGENTTALK_PYTHON"] = str(python)
+    env["PYTHONPATH"] = str(tmp_path)
+    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
+    result = subprocess.run(
+        [shell, "-NoProfile", "-File", str(store.dir / "supervisor.ps1"), "-Once", "-DryRun"],
+        capture_output=True, text=True, timeout=120, env=env, cwd=tmp_path,
+    )
+    combined = result.stdout + result.stderr
+    assert result.returncode == 0, combined
+    assert "is not recognized" not in combined and "CommandNotFound" not in combined
+    assert "worker:" in result.stdout, combined
+    assert not marker.exists()
 
 
 def test_proc_start_falls_back_to_get_process_when_cim_denied(tmp_path: Path) -> None:
