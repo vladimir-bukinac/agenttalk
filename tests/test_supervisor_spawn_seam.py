@@ -78,6 +78,93 @@ def _runtime_env() -> dict[str, str]:
     return env
 
 
+_SCRIPT_TIMEOUT_SECONDS = 120
+_PROBE_TIMEOUT_SECONDS = 20
+_OUTPUT_TAIL_CHARS = 2000
+
+
+class _PowerShellTimeout(subprocess.TimeoutExpired):
+    """The original timeout, with a report about the slow start in its text."""
+
+    def __init__(self, original: subprocess.TimeoutExpired, report: str) -> None:
+        super().__init__(
+            original.cmd,
+            original.timeout,
+            output=original.output,
+            stderr=original.stderr,
+        )
+        self.report = report
+
+    def __str__(self) -> str:
+        return f"{super().__str__()}\n{self.report}"
+
+
+def _text_so_far(value: str | bytes | None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    return value[-_OUTPUT_TAIL_CHARS:]
+
+
+def _probe_powershell_host(shell: str, env: dict[str, str]) -> str:
+    # Told apart from a slow script: is the bare host itself slow to start?
+    started = time.monotonic()
+    try:
+        probe = subprocess.run(
+            [shell, "-NoProfile", "-Command", "exit"],
+            capture_output=True,
+            text=True,
+            timeout=_PROBE_TIMEOUT_SECONDS,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        return f"probe `-Command exit`: timed out after {_PROBE_TIMEOUT_SECONDS} s"
+    except Exception as error:
+        return f"probe `-Command exit`: could not run ({error})"
+    elapsed = time.monotonic() - started
+    return f"probe `-Command exit`: {elapsed:.1f} s, exit code {probe.returncode}"
+
+
+def _run_powershell_script(
+    shell: str,
+    harness: Path,
+    *,
+    env: dict[str, str],
+    cwd: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run a harness script in a PowerShell host; only a timeout text differs.
+
+    On a timeout the failure is still that timeout, with the host, the script,
+    the elapsed time, the output so far, the CPU count and one short probe of
+    the bare host added to its text. There is no retry.
+    """
+    started = time.monotonic()
+    try:
+        return subprocess.run(
+            [shell, "-NoProfile", "-File", str(harness)],
+            capture_output=True,
+            text=True,
+            timeout=_SCRIPT_TIMEOUT_SECONDS,
+            env=env,
+            cwd=cwd,
+        )
+    except subprocess.TimeoutExpired as original:
+        elapsed = time.monotonic() - started
+        report = "\n".join(
+            [
+                f"host: {shell}",
+                f"script: {harness.name}",
+                f"elapsed: {elapsed:.1f} s",
+                f"CPU count: {os.cpu_count()}",
+                f"stdout so far: {_text_so_far(original.output)!r}",
+                f"stderr so far: {_text_so_far(original.stderr)!r}",
+                _probe_powershell_host(shell, env),
+            ]
+        )
+        raise _PowerShellTimeout(original, report) from original
+
+
 def _wait_until(predicate, *, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -350,13 +437,7 @@ def test_spawn_seam_refuses_invalid_precreate_input_with_closed_result(
         encoding="utf-8-sig",
     )
 
-    result = subprocess.run(
-        [shell, "-NoProfile", "-File", str(harness)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=_runtime_env(),
-    )
+    result = _run_powershell_script(shell, harness, env=_runtime_env())
 
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
     payload = json.loads(output.read_text(encoding="utf-8-sig"))
@@ -421,13 +502,7 @@ def test_spawn_seam_reports_unknown_without_a_null_result(
         encoding="utf-8-sig",
     )
 
-    result = subprocess.run(
-        [shell, "-NoProfile", "-File", str(harness)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=_runtime_env(),
-    )
+    result = _run_powershell_script(shell, harness, env=_runtime_env())
 
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
     payload = json.loads(output.read_text(encoding="utf-8-sig"))
@@ -512,14 +587,7 @@ def test_spawn_seam_start_process_path_records_exact_identity(
         encoding="utf-8-sig",
     )
 
-    result = subprocess.run(
-        [shell, "-NoProfile", "-File", str(harness)],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        env=_runtime_env(),
-        cwd=str(tmp_path),
-    )
+    result = _run_powershell_script(shell, harness, env=_runtime_env(), cwd=str(tmp_path))
 
     assert result.returncode == 0, f"{result.stdout}{result.stderr}"
     _wait_until(child_record.exists, timeout=120)
@@ -641,14 +709,7 @@ def test_spawn_seam_real_wrapper_reaches_readiness_with_one_exact_identity(
         guard_identity = lifecycle_lock.process_identity(guard.pid)
         assert guard_identity is not None
 
-        launched = subprocess.run(
-            [shell, "-NoProfile", "-File", str(harness)],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=env,
-            cwd=str(tmp_path),
-        )
+        launched = _run_powershell_script(shell, harness, env=env, cwd=str(tmp_path))
         assert launched.returncode == 0, f"{launched.stdout}{launched.stderr}"
         payload = json.loads(result_path.read_text(encoding="utf-8-sig"))
         assert payload["outcome"] == "spawned", payload
@@ -695,3 +756,144 @@ def test_spawn_seam_real_wrapper_reaches_readiness_with_one_exact_identity(
             if lifecycle_lock.process_identity(guard.pid) == guard_identity:
                 guard.terminate()
             guard.wait(timeout=10)
+
+
+class _FakeRun:
+    """A stand-in for subprocess.run that records each call in order."""
+
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+        self.calls: list[tuple[list[str], dict]] = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append((list(argv), kwargs))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
+_FAKE_HOST = "C:/fake/powershell.exe"
+
+
+def _first_timeout(harness: Path) -> subprocess.TimeoutExpired:
+    return subprocess.TimeoutExpired(
+        [_FAKE_HOST, "-NoProfile", "-File", str(harness)],
+        120,
+        output=b"partial stdout line",
+        stderr="partial stderr line",
+    )
+
+
+def test_powershell_timeout_names_host_script_elapsed_output_and_cpu_count(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    harness = tmp_path / "spawn-slow.ps1"
+    first = _first_timeout(harness)
+    fake = _FakeRun(
+        first,
+        subprocess.CompletedProcess([_FAKE_HOST], 0, stdout="", stderr=""),
+    )
+    monkeypatch.setattr(subprocess, "run", fake)
+    monkeypatch.setattr(os, "cpu_count", lambda: 7)
+
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        _run_powershell_script(_FAKE_HOST, harness, env={"K": "v"})
+
+    # The failure is still the original timeout.
+    assert caught.value.timeout == 120
+    assert caught.value.cmd == first.cmd
+    assert caught.value.__cause__ is first
+    text = str(caught.value)
+    assert text.startswith(str(first))
+    assert f"host: {_FAKE_HOST}" in text
+    assert "script: spawn-slow.ps1" in text
+    assert re.search(r"elapsed: \d+\.\d s", text)
+    assert "partial stdout line" in text
+    assert "partial stderr line" in text
+    assert "CPU count: 7" in text
+    assert "probe" in text and "exit code 0" in text
+    # The script ran first; the probe ran once, only after it.
+    assert len(fake.calls) == 2
+    script_argv, script_kwargs = fake.calls[0]
+    assert script_argv == [_FAKE_HOST, "-NoProfile", "-File", str(harness)]
+    assert script_kwargs["timeout"] == 120
+    probe_argv, probe_kwargs = fake.calls[1]
+    assert probe_argv == [_FAKE_HOST, "-NoProfile", "-Command", "exit"]
+    assert 0 < probe_kwargs["timeout"] <= 30
+
+
+@pytest.mark.parametrize(
+    ("probe_outcome", "probe_words"),
+    [
+        (
+            subprocess.TimeoutExpired([_FAKE_HOST], 20),
+            "timed out",
+        ),
+        (OSError("cannot start the host"), "cannot start the host"),
+        (
+            subprocess.CompletedProcess([_FAKE_HOST], 1, stdout="", stderr="boom"),
+            "exit code 1",
+        ),
+    ],
+    ids=["probe-times-out", "probe-cannot-start", "probe-exits-nonzero"],
+)
+def test_a_failing_probe_does_not_hide_the_first_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    probe_outcome,
+    probe_words: str,
+) -> None:
+    harness = tmp_path / "spawn-slow.ps1"
+    first = _first_timeout(harness)
+    fake = _FakeRun(first, probe_outcome)
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        _run_powershell_script(_FAKE_HOST, harness, env={})
+
+    assert caught.value.timeout == 120
+    assert caught.value.__cause__ is first
+    text = str(caught.value)
+    assert "partial stdout line" in text
+    assert probe_words in text
+    assert len(fake.calls) == 2
+
+
+@pytest.mark.parametrize("returncode", [0, 3])
+def test_a_start_that_finishes_is_returned_unchanged_with_no_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, returncode: int
+) -> None:
+    harness = tmp_path / "spawn-fast.ps1"
+    finished = subprocess.CompletedProcess([_FAKE_HOST], returncode, stdout="out", stderr="err")
+    fake = _FakeRun(finished)
+    monkeypatch.setattr(subprocess, "run", fake)
+    env = {"K": "v"}
+
+    result = _run_powershell_script(_FAKE_HOST, harness, env=env, cwd="somewhere")
+
+    assert result is finished
+    assert fake.calls == [
+        (
+            [_FAKE_HOST, "-NoProfile", "-File", str(harness)],
+            {
+                "capture_output": True,
+                "text": True,
+                "timeout": 120,
+                "env": env,
+                "cwd": "somewhere",
+            },
+        )
+    ]
+
+
+def test_an_error_that_is_not_a_timeout_passes_through_with_no_probe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = _FakeRun(FileNotFoundError("no such host"))
+    monkeypatch.setattr(subprocess, "run", fake)
+
+    with pytest.raises(FileNotFoundError, match="no such host"):
+        _run_powershell_script(_FAKE_HOST, tmp_path / "x.ps1", env={})
+
+    assert len(fake.calls) == 1
