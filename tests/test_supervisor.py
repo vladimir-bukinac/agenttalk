@@ -6188,7 +6188,9 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
     )
     (shadow / "__main__.py").write_text("raise SystemExit(42)\n", encoding="utf-8")
     windir = os.environ.get("WINDIR", r"C:\Windows")
-    env = {k: os.environ[k] for k in ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP")
+    # PATHEXT and ComSpec let PowerShell run the generated .cmd launcher as a program, not a document.
+    keep = ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP", "PATHEXT", "ComSpec")
+    env = {k: os.environ[k] for k in keep
            if k in os.environ}
     env["PATH"] = os.pathsep.join([os.path.join(windir, "System32"), windir])
     env["AGENTTALK_PYTHON"] = str(python)
