@@ -921,6 +921,8 @@ blocked and why, which decisions your human still owes, what each seat is doing,
 what happens next. Someone who starts reading cold (including you, after your own
 window is reset) must be able to carry on from it.
 
+Stopped at: <time or unknown>. Picture last verified: <time>. Still uncertain: <list>.
+
 ## Step 7. Giving work and checking it
 
 ### 7a. Work orders
