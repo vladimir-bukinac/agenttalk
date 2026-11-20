@@ -678,6 +678,11 @@
       return { label: 'Parked · not responding', key: key, color: 'attn', grp: 'attn',
         desc: 'Waiting on an AI usage limit, but its wrapper has not refreshed that status lately — it may need a restart' };
     }
+    if (park.provider === 'codex' && park.reset_epoch == null && park.wake_epoch) {
+      var recheck = parkTime(park.wake_epoch);
+      return { label: 'Parked · usage limit', key: key, color: 'attn', grp: 'attn',
+        desc: 'Waiting after a Codex usage-limit signal; it tries again ' + (recheck ? 'at ' + recheck : 'shortly') };
+    }
     var when = park.wake_epoch ? parkTime(park.reset_epoch) : '';
     return { label: 'Parked · usage limit', key: key, color: 'attn', grp: 'attn',
       desc: when ? 'Waiting on an AI usage limit; it tries again shortly after ' + when

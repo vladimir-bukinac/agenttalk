@@ -539,7 +539,11 @@
       else setState('parked', waitWhat + ' · ' + (nextWhen ? 'tries again at ' + nextWhen : 'tries again shortly'));
     } else if (park) {
       var parkWhen = park.wake_epoch ? parkTimeLabel(park.reset_epoch) : '';
+      var parkRecheck = park.provider === 'codex' && park.reset_epoch == null && park.wake_epoch
+        ? parkTimeLabel(park.wake_epoch) : '';
       if (park.state === 'stale') setState('parked', 'Parked on a usage limit \u00b7 wrapper not responding');
+      else if (park.provider === 'codex' && park.reset_epoch == null && park.wake_epoch)
+        setState('parked', 'Waiting after a Codex usage-limit signal \u00b7 ' + (parkRecheck ? 'tries again at ' + parkRecheck : 'tries again shortly'));
       else setState('parked', 'Parked on a usage limit \u00b7 ' + (parkWhen ? 'until ' + parkWhen : 'until it is started again'));
     } else if (hs === 'idle_waiting') {
       setState('idle', sinceAge === null ? 'Idle' : 'Idle · ' + fmtAge(sinceAge));

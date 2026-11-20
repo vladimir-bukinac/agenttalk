@@ -83,8 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the queue instead of being retried into the dead-letter list. A fresh reading from the same
   Codex thread supplies the reset time; when the reading or a usable reset is unavailable, the seat
   checks again in 30 minutes. A dead-lettered resolve notice cannot create another operator question,
-  while a park notice or configuration alarm still reaches the lead. The web-console display of the
-  re-check follows separately. (#879)
+  while a park notice or configuration alarm still reaches the lead. Both web consoles now show
+  the next re-check time instead of saying the seat must be restarted. (#879)
 
 - **Cleanup keeps files that Git has been told not to check (#794).** Lane cleanup
   and the scratch janitor keep checkouts when Git could be hiding tracked work,

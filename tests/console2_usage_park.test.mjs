@@ -238,4 +238,25 @@ test('#298: the stalled warning and the parked card are both kept and both count
   assert.equal(v.chip.needsCount, 2);
 });
 
+test('Codex rechecks show the actual next try for unconfirmed and confirmed limits', () => {
+  for (const window of [null, 'five_hour']) {
+    const v = view(parked({}, PARK({ provider: 'codex', window, reset_epoch: null, wake_epoch: RESET })));
+    assert.equal(v.line, 'Waiting after a Codex usage-limit signal · tries again at ' + label(RESET));
+  }
+});
+
+test('Codex known reset and Claude no-reset displays remain unchanged', () => {
+  const known = view(parked({}, PARK({ provider: 'codex' })));
+  assert.equal(known.line, 'Parked on a usage limit · until ' + label(RESET));
+  const claude = view(parked({}, PARK({ provider: 'claude', reset_epoch: null, wake_epoch: RESET })));
+  assert.equal(claude.line, 'Parked on a usage limit · until it is started again');
+});
+
+test('Codex recheck handles stale status and unrepresentable wake times', () => {
+  const stale = view(parked({}, PARK({ provider: 'codex', state: 'stale', reset_epoch: null, wake_epoch: RESET })));
+  assert.equal(stale.line, 'Parked on a usage limit · wrapper not responding');
+  const invalid = view(parked({}, PARK({ provider: 'codex', reset_epoch: null, wake_epoch: 100000000000000 })));
+  assert.equal(invalid.line, 'Waiting after a Codex usage-limit signal · tries again shortly');
+});
+
 run();

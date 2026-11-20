@@ -13604,7 +13604,7 @@ def _usage_limit_notice_body(info: dict) -> str:
     if kind in usage_park.COOLDOWN_KINDS:
         return _provider_wait_notice_body(info, facts, kind)
     if facts.get("provider") == "codex" and facts.get("recheck"):
-        return (f"[usage-limit-parked] Seat {ag} is waiting after a possible Codex usage limit. "
+        return (f"[usage-limit-parked] Seat {ag} is waiting after a Codex usage-limit signal. "
                 f"It checks again in 30 minutes. Message {pc.meta_text(mid)} was not lost or dead-lettered. "
                 + usage_park.recovery_text(ag, mid))
     reset = usage_park.format_epoch(wake - 30) if isinstance(wake, int) and not isinstance(wake, bool) else None

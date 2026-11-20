@@ -162,6 +162,31 @@ test('the stylesheet has the parked state in all four places a state colour is s
   }
 });
 
+test('Codex rechecks show the actual next try for unconfirmed and confirmed limits', () => {
+  for (const window of [null, 'five_hour']) {
+    const info = api.agentStateInfo(agent({ usage_limit_park: park({ provider: 'codex', window,
+      reset_epoch: null, wake_epoch: RESET }) }));
+    assert.match(info.desc, new RegExp('tries again at ' + WHEN));
+    assert.ok(!/each time it is started/.test(info.desc));
+  }
+});
+
+test('Codex known reset and Claude no-reset displays remain unchanged', () => {
+  const known = api.agentStateInfo(agent({ usage_limit_park: park({ provider: 'codex' }) }));
+  assert.match(known.desc, new RegExp('tries again shortly after ' + WHEN));
+  const claude = api.agentStateInfo(agent({ usage_limit_park: park({ provider: 'claude', reset_epoch: null, wake_epoch: RESET }) }));
+  assert.match(claude.desc, /each time it is started/);
+});
+
+test('Codex recheck handles stale status and unrepresentable wake times', () => {
+  const stale = api.agentStateInfo(agent({ usage_limit_park: park({ provider: 'codex', state: 'stale',
+    reset_epoch: null, wake_epoch: RESET }) }));
+  assert.equal(stale.label, 'Parked · not responding');
+  const invalid = api.agentStateInfo(agent({ usage_limit_park: park({ provider: 'codex',
+    reset_epoch: null, wake_epoch: 100000000000000 }) }));
+  assert.match(invalid.desc, /tries again shortly/);
+});
+
 const failed = results.filter((r) => !r[0]);
 for (const r of results) console.log((r[0] ? 'PASS ' : 'FAIL ') + r[1] + (r[0] ? '' : '\n' + r[2]));
 console.log('classic console usage-limit park: ' + (results.length - failed.length) + '/' + results.length + ' passed');

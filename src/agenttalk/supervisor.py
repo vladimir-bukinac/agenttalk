@@ -2051,6 +2051,8 @@ def _usage_limit_park_row(view: object, *, consulted: bool = True) -> dict:
         and not isinstance(view.get("next_try_epoch"), bool) else None,
         "supervisor_consulted": consulted,
     }
+    if view.get("provider") == "codex":
+        row["provider"] = "codex"
     if row["kind"] == "provider_refusal":
         # Refusal kind only (#857): the tries used and whether they are all used (a hold). Other kinds keep
         # exactly the keys they had.
