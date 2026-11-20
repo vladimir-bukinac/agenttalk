@@ -87,7 +87,11 @@ QT_TS = (
 REAL_TS = "export function hello(name: string): string {\n  return name;\n}\n"
 FREEMIND_MM = '<map version="1.0.1">\n<node TEXT="root"/>\n</map>\n'
 OBJC_MM = "#import <Foundation/Foundation.h>\nint main() { return 0; }\n"
+QT_TS_COMMENT_LED = '<!-- translation file -->\n<TS version="2.1" language="fr"><context/></TS>\n'
+TS_GENERIC_ARROW = "<TS extends unknown>(x: TS) => x;\n"
 QT_TS_ONLY = {"translations/fr.ts": QT_TS}
+QT_TS_COMMENT_LED_ONLY = {"translations/fr.ts": QT_TS_COMMENT_LED}
+TS_GENERIC_ONLY = {"src/main.ts": TS_GENERIC_ARROW}
 REAL_TS_ONLY = {"src/index.ts": REAL_TS}
 QT_TS_PLUS_PY_HELPER = {"translations/fr.ts": QT_TS, "tools/gen.py": PY}
 FREEMIND_ONLY = {"notes/plan.mm": FREEMIND_MM}
@@ -237,8 +241,15 @@ def test_scan_help_defines_complete_in_one_sentence(capsys) -> None:
 
 @pytest.mark.parametrize(
     "files",
-    [ELIXIR_ONLY, HASKELL_ONLY, REAL_TS_ONLY, OBJC_ONLY, QT_TS_PLUS_PY_HELPER],
-    ids=["elixir", "haskell", "typescript", "objective-c++", "qt-translation-plus-python-helper"],
+    [ELIXIR_ONLY, HASKELL_ONLY, REAL_TS_ONLY, OBJC_ONLY, QT_TS_PLUS_PY_HELPER, TS_GENERIC_ONLY],
+    ids=[
+        "elixir",
+        "haskell",
+        "typescript",
+        "objective-c++",
+        "qt-translation-plus-python-helper",
+        "typescript-generic-arrow",
+    ],
 )
 def test_other_unsupported_languages_are_degraded_too(tmp_path: Path, capsys, files) -> None:
     """codex-rev's #496 finding: a repository of only `main.ex` was reported complete."""
@@ -333,12 +344,17 @@ def test_other_file_types_do_not_count_as_unsupported_code(name: str) -> None:
     [
         ("fr.ts", QT_TS),
         ("fr.ts", chr(0xFEFF) + "  " + BLANKS + QT_TS),  # BOM, then blank lines
+        ("fr.ts", QT_TS_COMMENT_LED),  # comment first, no declaration (codex-rev P1-2)
+        ("fr.ts", '<?xml version="1.0"?><!-- c --><!DOCTYPE TS><!-- d --><TS version="2"/>'),
         ("fr.ts", '<!DOCTYPE TS><TS version="2.0"></TS>'),
         ("fr.ts", '<TS version="2.0"></TS>'),
-        ("fr.ts", '<?xml version="1.0"?>'),
+        ("fr.ts", "<TS version='2.0' language='fr'>" + BLANKS),  # single quotes
+        ("fr.ts", "<!DOCTYPE TS><TS>" + BLANKS),  # a bare root is fine once XML context is shown
         ("plan.mm", FREEMIND_MM),
         ("plan.mm", '<?xml version="1.0"?><map/>'),
-        ("x.py", '<?xml version="1.0"?><a/>'),  # no listed language starts with an XML declaration
+        ("plan.mm", "<!-- exported -->" + BLANKS + FREEMIND_MM),
+        ("plan.mm", '<?xml version="1.0"?><!-- c --><map>' + BLANKS),
+        ("x.py", '<?xml version="1.0"?><a/>'),  # no other listed language starts with an XML declaration
     ],
 )
 def test_a_file_that_only_shares_a_suffix_is_not_source(name: str, text: str) -> None:
@@ -352,8 +368,22 @@ def test_a_file_that_only_shares_a_suffix_is_not_source(name: str, text: str) ->
         ("a.ts", "// translations are in fr.ts" + BLANKS + REAL_TS),
         ("a.ts", '/// <reference path="x.d.ts" />' + BLANKS),
         ("a.ts", "const TS = 1;" + BLANKS),
+        ("a.ts", TS_GENERIC_ARROW),  # codex-rev P1-1: a generic arrow function, not XML
+        ("a.ts", "<TS,>(x: TS) => x;" + BLANKS),
+        ("a.ts", "<TS>(x: TS) => x;" + BLANKS),  # a bare <TS> with no XML context is TypeScript
+        ("a.ts", "<TS extends unknown, U>(x: TS, y: U) => x;" + BLANKS),
+        ("a.ts", '<?xml version="1.0"?><other version="1"/>'),  # XML, but not a Qt translation
+        ("a.ts", '<?xml version="1.0"?>' + BLANKS),  # a declaration with no root at all
+        ("a.ts", "<!-- only a comment -->" + BLANKS),  # no root: not recognised, so not excluded
+        ("a.ts", "<!-- never closed" + BLANKS + '<TS version="2"/>'),
+        ("a.ts", '<!DOCTYPE TS [ <!ENTITY x "y"> ]><TS version="2"/>'),  # an internal subset: unsure
+        ("a.ts", '<!DOCTYPE TS><!DOCTYPE TS><TS version="2"/>'),  # only one DOCTYPE is allowed
+        ("a.ts", '<TS version="2" language=fr>' + BLANKS),  # not an XML attribute
+        ("a.ts", "<!-- " + "x" * 5000 + ' --><TS version="2"/>'),  # root past the 4 KB bound: code
         ("a.mm", OBJC_MM),
         ("a.mm", "// <map> of things" + BLANKS + "int x;" + BLANKS),
+        ("a.mm", "<map>" + BLANKS),  # a bare <map> with no XML context
+        ("a.mm", "<!-- " + "x" * 5000 + " --><map/>"),
         ("empty.ts", ""),
     ],
 )
@@ -383,7 +413,8 @@ def test_the_worker_records_per_file_whether_an_unsupported_file_is_code(tmp_pat
         (DOCS_ONLY, 0),  # nothing code-bearing was selected
         (TOOLING_ONLY, 0),  # tooling and config files are not code-bearing
         (LICENSE_README_UNKNOWN, 0),  # a file type not on the list does not count
-        (QT_TS_ONLY, 0),  # Qt translation XML is not TypeScript
+        (QT_TS_ONLY, 0),
+        (QT_TS_COMMENT_LED_ONLY, 0),  # Qt translation XML is not TypeScript
         (FREEMIND_ONLY, 0),  # a FreeMind mind map is not Objective-C++
         (SHELL_AND_MAKE_DEPS, 0),  # shell scripts and make .d files are tooling, by decision
         ({}, 0),  # an empty repository
@@ -395,6 +426,7 @@ def test_the_worker_records_per_file_whether_an_unsupported_file_is_code(tmp_pat
         "tooling-only",
         "license-readme-unknown",
         "qt-translation",
+        "qt-translation-comment-led",
         "freemind",
         "shell-and-make-deps",
         "empty",

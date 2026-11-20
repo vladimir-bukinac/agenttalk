@@ -290,31 +290,79 @@ def count_parsed_supported_source_files(java_results: dict[str, Any]) -> int:
 
 
 #: #496: a suffix is not proof of source. Some listed suffixes are also used by well-known non-code
-#: XML files: Qt Linguist translations are ``.ts`` (``<?xml ...?><!DOCTYPE TS><TS ...>``) and
-#: FreeMind mind maps are ``.mm`` (``<map ...>``). Nothing written in a listed language begins with
-#: an XML declaration or these roots, so the first bytes of the file settle it; only a small prefix
-#: is read. Checked per suffix against the whole list: ``.m .r .v .pl .fs .ml .h`` are code
-#: whatever they hold (Objective-C or MATLAB, R, Verilog or Coq, Perl or Prolog, F# or a GLSL
-#: shader, OCaml, a C header), and a binary ``.ts`` video never reaches this check (binary files are
-#: excluded before the worker). Only ``.ts`` and ``.mm`` produced a wrong result.
-_NON_CODE_START_BY_EXTENSION = {
-    ".ts": ("<!doctype ts", "<ts>", "<ts "),
-    ".mm": ("<map>", "<map "),
-}
+#: XML files: Qt Linguist translations are ``.ts`` (``<TS version=...>``, usually after an XML
+#: declaration and ``<!DOCTYPE TS>``) and FreeMind mind maps are ``.mm`` (``<map version=...>``).
+#: A file is "not code" only when it really is XML of that kind, never on a look-alike start: after
+#: a byte-order mark and blanks, any number of XML comments and processing instructions (the
+#: declaration is one) and at most one DOCTYPE (without an internal subset) may come first; then the
+#: root start tag must be exactly ``<TS`` / ``<map`` with XML attributes only (``name="value"``).
+#: ``<TS extends unknown>(x: TS) => x;`` is TypeScript: ``extends`` is not an attribute. A bare
+#: ``<TS>`` or ``<map>`` (no attribute) counts only when something before it already showed XML
+#: (a comment, declaration or DOCTYPE); alone it is a TypeScript generic arrow function.
+#: Only the first 4 KB is read, never the whole file. Whatever is not recognised (no root, an
+#: unterminated comment, a root past the bound, an unusual DOCTYPE) is treated as CODE: wrongly
+#: calling a translation code costs a visible "degraded" with its note, wrongly calling code a
+#: translation brings back the original "complete with nothing read".
+#: Every other listed suffix starting with an XML declaration is not code either (no listed
+#: language begins that way). Checked per suffix against the whole list: ``.m .r .v .pl .fs .ml .h``
+#: are code whatever they hold (Objective-C or MATLAB, R, Verilog or Coq, Perl or Prolog, F# or a
+#: GLSL shader, OCaml, a C header), and a binary ``.ts`` video never reaches this check (binary
+#: files are excluded before the worker). Only ``.ts`` and ``.mm`` produced a wrong result.
+_XML_ROOT_BY_EXTENSION = {".ts": "TS", ".mm": "map"}
 _XML_DECLARATION = "<?xml"
 _LEADING_JUNK = chr(0xFEFF) + " " + chr(9) + chr(13) + chr(10)  # BOM, blanks, tabs, line ends
-_SNIFF_PREFIX_BYTES = 512
+_SNIFF_PREFIX_BYTES = 4096
+_XML_ROOT_TAG_RE = re.compile(r"<([A-Za-z_][\w.-]*)((?:\s+[A-Za-z_:][\w:.-]*\s*=\s*(?:\"[^\"<]*\"|'[^'<]*'))*)\s*/?>")
+
+
+def _xml_root_of(head: str) -> tuple[str, bool, bool] | None:
+    """The first element of an XML-looking ``head``: ``(name, has_attributes, saw_xml_context)``,
+    or None when it is not recognisably XML."""
+    pos = 0
+    saw_context = False
+    saw_doctype = False
+    while True:
+        while pos < len(head) and head[pos] in _LEADING_JUNK:
+            pos += 1
+        if head.startswith("<!--", pos):
+            end = head.find("-->", pos + 4)
+            pos = end + 3 if end != -1 else -1
+        elif head.startswith("<?", pos):
+            end = head.find("?>", pos + 2)
+            pos = end + 2 if end != -1 else -1
+        elif head.startswith("<!DOCTYPE", pos) and not saw_doctype:
+            end = head.find(">", pos)
+            if end == -1 or "[" in head[pos:end]:
+                return None
+            saw_doctype = True
+            pos = end + 1
+        else:
+            break
+        if pos == -1:
+            return None
+        saw_context = True
+    match = _XML_ROOT_TAG_RE.match(head, pos)
+    if match is None:
+        return None
+    return match.group(1), bool(match.group(2)), saw_context
 
 
 def is_listed_source_file(relative_path: str, data: bytes) -> bool:
     """#496: true when ``relative_path`` has a listed source extension and its first bytes do not
-    show it is one of the non-code XML formats that share the suffix."""
+    show it is one of the non-code XML formats that share the suffix (see the note above)."""
     lower = relative_path.lower()
     extension = next((ext for ext in _UNSUPPORTED_SOURCE_EXTENSIONS if lower.endswith(ext)), None)
     if extension is None:
         return False
-    head = data[:_SNIFF_PREFIX_BYTES].decode("utf-8", errors="replace").lstrip(_LEADING_JUNK).lower()
-    return not head.startswith((_XML_DECLARATION, *_NON_CODE_START_BY_EXTENSION.get(extension, ())))
+    head = data[:_SNIFF_PREFIX_BYTES].decode("utf-8", errors="replace").lstrip(_LEADING_JUNK)
+    expected_root = _XML_ROOT_BY_EXTENSION.get(extension)
+    if expected_root is None:
+        return not head.startswith(_XML_DECLARATION)
+    root = _xml_root_of(head)
+    if root is None:
+        return True
+    name, has_attributes, saw_context = root
+    return not (name == expected_root and (has_attributes or saw_context))
 
 
 def is_unsupported_code_bearing_problem(problem: WorkerProblem) -> bool:
