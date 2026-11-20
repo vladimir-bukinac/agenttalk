@@ -30,6 +30,7 @@ def test_installed_shim_only_suggests_install_for_missing_package(tmp_path, inst
     shim = tmp_path / "agenttalk.cmd"
     shim.write_bytes(supervisor.agenttalk_shim(str(python)).encode("utf-8"))
     env = {k: os.environ[k] for k in ("SystemRoot", "WINDIR", "TEMP", "TMP") if k in os.environ}
+    env["ERRORLEVEL"] = "0"
     env["ATK_FAKE_SECRET"] = "made-up-test-secret"
     result = subprocess.run(
         [str(Path(env["SystemRoot"]) / "System32" / "cmd.exe"), "/d", "/c", str(shim), "check"],

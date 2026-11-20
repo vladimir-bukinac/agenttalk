@@ -15487,6 +15487,7 @@ def agenttalk_shim(
         # %~dp0 = <root>\\.agenttalk\\bin\\ ; ..\\..\\src = <root>\\src
         + ('set "PYTHONPATH=%~dp0..\\..\\src;%PYTHONPATH%"\r\n' if source_checkout else '')
         + ('"%AGENTTALK_PYTHON%" -m agenttalk %*\r\n' if source_checkout else
+           'set "ERRORLEVEL="\r\n'
            '"%AGENTTALK_PYTHON%" -I -m agenttalk %*\r\n'
            'set "AGENTTALK_EXIT=%ERRORLEVEL%"\r\n'
            'if not "%AGENTTALK_EXIT%"=="0" (\r\n'

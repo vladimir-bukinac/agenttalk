@@ -106,6 +106,12 @@ def test_a_lead_page_names_in_its_text_only_pages_that_ship(page: str) -> None:
 
 def test_both_lead_skills_send_a_lead_to_the_installed_pages_the_same_way() -> None:
     claude, codex = ((REPO / "src" / "agenttalk" / skill).read_text(encoding="utf-8") for skill in LEAD_SKILLS)
+    for skill, command in ((claude, "agenttalk"), (codex, "python -I -m agenttalk")):
+        original = skill.split("\n## Lead documents\n", 1)[1].split("\n## ", 1)[0]
+        assert f"`{command} doctor`" in original
+        assert f"`{command} doctor --json`" in original
+        assert '`"$AGENTTALK_PY" -I -m agenttalk doctor`' in original
+        assert '`& "$env:AGENTTALK_PY" -I -m agenttalk doctor`' in original
     section = _lead_documents_section(claude)
     assert section == _lead_documents_section(codex)
     assert "`agenttalk doctor`" in section
