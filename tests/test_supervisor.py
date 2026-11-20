@@ -6207,6 +6207,94 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
     assert not marker.exists()
 
 
+@pytest.mark.source_layout
+def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(tmp_path: Path) -> None:
+    """Exercise each direct installed-mode Python call with a local import decoy."""
+    import agenttalk
+
+    shell = _pick_powershell()
+    if not shell:
+        pytest.skip("PowerShell is unavailable")
+    runtime = tmp_path / "runtime"
+    venv.EnvBuilder(with_pip=False).create(runtime)
+    python = runtime / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    site = (runtime / "Lib/site-packages" if os.name == "nt" else
+            runtime / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages")
+    shutil.copytree(Path(agenttalk.__file__).parent, site / "agenttalk", ignore=shutil.ignore_patterns("__pycache__"))
+    store = _team(tmp_path)
+    (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
+    sup.init(store, python_exe=str(python), source_checkout=False)
+    script = (store.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
+    lines = []
+    for name in ("AgenttalkPython", "SrcOnPyPath", "AgenttalkModuleFlags"):
+        matches = re.findall(rf"(?m)^\${name} = [^\r\n]*", script)
+        assert len(matches) == 1
+        lines.append(matches[0])
+    helpers = script[script.index("# region exec-helpers"):script.index("# endregion exec-helpers")]
+    admission_helpers = script[script.index("# region launch-admission-helpers"):
+                               script.index("# endregion launch-admission-helpers")]
+
+    shadow = tmp_path / "agenttalk"
+    shadow.mkdir()
+    marker = tmp_path / "shadow-imported"
+    (shadow / "__init__.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).touch()\n", encoding="utf-8"
+    )
+    (shadow / "__main__.py").write_text("raise SystemExit(42)\n", encoding="utf-8")
+    stub = tmp_path / "python.cmd"
+    _stub_cmd(stub, tmp_path / "wrapper.log")
+    child = tmp_path / "codex.exe"
+    child.touch()
+    plan = {"agents": {"wrapped-codex": {"action": sup.RELAUNCH, "launch_mode": "wrap", "session_args": []}}}
+    sup.attach_regular_launch_admissions(
+        plan,
+        {"agents": {"wrapped-codex": {
+            "cli": "codex", "wrapped": True, "cwd": str(tmp_path),
+            "launch": {"windows_file": str(stub), "windows_args": [
+                "-m", "agenttalk", "wrap", "--for", "wrapped-codex", "--loop", "--", str(child),
+            ]},
+        }}},
+        root=tmp_path,
+    )
+    admission = plan["agents"]["wrapped-codex"]["launch_admission"]
+    assert admission["status"] == "accepted"
+    out = tmp_path / "preflight.json"
+    harness = "\n".join([
+        "$ErrorActionPreference = 'Stop'",
+        *lines,
+        f"$Root = {_pslit(str(tmp_path))}",
+        helpers,
+        admission_helpers,
+        f"$admission = ({_pslit(json.dumps(admission))} | ConvertFrom-Json)",
+        "$prefixTokens = Get-LaunchAdmissionPrefixTokens $admission",
+        "$null = Resolve-AgenttalkScratchRoot 'worker'",
+        "$claude = Preflight 'claude' ([pscustomobject]@{ cli='claude'; launch_mode='resume' }) "
+        f"{_pslit(str(stub))} $null",
+        "$codex = Preflight 'codex' ([pscustomobject]@{ cli='codex'; launch_mode='resume' }) "
+        f"{_pslit(str(stub))} $null",
+        f"$wrapped = Preflight 'wrapped-codex' ([pscustomobject]@{{ cli='codex'; launch_mode='wrap' }}) "
+        f"{_pslit(str(stub))} $null $prefixTokens $admission",
+        "@{ claude=$claude; codex=$codex; wrapped=$wrapped } | ConvertTo-Json | "
+        f"Set-Content {_pslit(str(out))} -Encoding utf8",
+    ])
+    harness_path = tmp_path / "direct-calls.ps1"
+    harness_path.write_text(harness, encoding="utf-8-sig")
+    windir = os.environ.get("WINDIR", r"C:\Windows")
+    keep = ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP", "PATHEXT", "ComSpec")
+    env = {k: os.environ[k] for k in keep if k in os.environ}
+    env["PATH"] = os.pathsep.join([os.path.join(windir, "System32"), windir])
+    env["AGENTTALK_PYTHON"] = str(python)
+    env["PYTHONPATH"] = str(tmp_path)
+    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
+    result = subprocess.run([shell, "-NoProfile", "-File", str(harness_path)], cwd=tmp_path,
+                            env=env, capture_output=True, text=True, timeout=120)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not marker.exists()
+    assert json.loads(out.read_text(encoding="utf-8-sig")) == {"claude": True, "codex": True, "wrapped": True}, (
+        result.stdout + result.stderr
+    )
+
+
 def test_proc_start_falls_back_to_get_process_when_cim_denied(tmp_path: Path) -> None:
     shell = _pick_powershell()
     if not shell:
@@ -21519,3 +21607,4 @@ def test_cli_child_verdict_is_launching_is_unreachable_from_the_planner() -> Non
     assert "cli_child_verdict_is_launching" not in src, (
         "_plan_one now references the display-only launching helper - "
         "it was documented as unreachable from planner logic")
+
