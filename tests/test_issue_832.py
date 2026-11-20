@@ -44,6 +44,35 @@ def test_installed_shim_only_suggests_install_for_missing_package(tmp_path, inst
     assert ("pip --user" in result.stderr) is (not installed)
 
 
+@pytest.mark.parametrize("source", [False, True], ids=["installed", "source"])
+def test_generated_module_flags_splat_as_whole_arguments(store, source):
+    shell = shutil.which("pwsh")
+    if shell is None:
+        pytest.skip("PowerShell is unavailable")
+    supervisor.init(store, python_exe=sys.executable, source_checkout=source)
+    script = (store.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
+    lines = []
+    for name in ("$SrcOnPyPath = ", "$AgenttalkModuleFlags = "):
+        matches = [line for line in script.splitlines() if line.startswith(name)]
+        assert len(matches) == 1
+        lines.append(matches[0])
+    python = "'" + sys.executable.replace("'", "''") + "'"
+    command = "\n".join(
+        [
+            *lines,
+            f"& {python} -c 'import sys, json; print(json.dumps(sys.argv[1:]))' @AgenttalkModuleFlags -m x",
+        ]
+    )
+    keep = ("SystemRoot", "WINDIR", "TEMP", "TMP", "PATHEXT", "ComSpec")
+    env = {key: os.environ[key] for key in keep if key in os.environ}
+    env["ATK_FAKE_SECRET"] = "made-up-test-secret"
+    result = subprocess.run(
+        [shell, "-NoProfile", "-Command", command], env=env, input="", capture_output=True, text=True, timeout=30
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ([] if source else ["-I"]) + ["-m", "x"]
+
+
 @pytest.mark.parametrize("source", [False, True])
 def test_init_and_validation_use_same_recorded_mode(store, source):
     args = ["--root", str(store.root), "supervise", "--init"]

@@ -870,7 +870,7 @@ def test_supervise_init_generates_and_is_idempotent(tmp_path: Path, capsys) -> N
     # the REAL exe via -FilePath/-ArgumentList (NOT Invoke-Expression), applies
     # + restores env, the dry-run hook, and preserves state on a failed launch.
     ps = (s.dir / "supervisor.ps1").read_text(encoding="utf-8")
-    assert "$AgenttalkModuleFlags = if ($SrcOnPyPath) { @() } else { @('-I') }" in ps
+    assert "$AgenttalkModuleFlags = @(if ($SrcOnPyPath) { } else { '-I' })" in ps
     assert "supervise --plan --state-file" in ps
     assert "--record-events" in ps
     assert "--json" not in ps                       # blocker regression guard

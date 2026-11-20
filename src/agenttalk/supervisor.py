@@ -12820,7 +12820,7 @@ $cfgSha256 = $script:SupervisorConfigSha256
 # source checkout (prepend <root>/src to PYTHONPATH) vs a pip install.
 $AgenttalkPython = '__AGENTTALK_PYTHON__'
 $SrcOnPyPath = __SRC_ON_PYPATH__
-$AgenttalkModuleFlags = if ($SrcOnPyPath) { @() } else { @('-I') }
+$AgenttalkModuleFlags = @(if ($SrcOnPyPath) { } else { '-I' })
 $WrapperLogRoot = '__AGENTTALK_WRAPPER_LOG_ROOT__'
 $WrapperLogFallbackRoot = Join-Path (
   Join-Path ([IO.Path]::GetTempPath()) 'agenttalk-wrapper-logs'
