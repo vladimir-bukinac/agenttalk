@@ -6576,10 +6576,23 @@ class Store:
             # marker read an O(inbox size) one on every status/attention/doctor poll.
             cursor = self.cursor(agent)
             attempts = self.dead_letter_attempts(agent)["messages"]
+            # A scoped run moves the thread's seen pointer, never the global cursor (#857): a record for a request
+            # whose pointer is at or past its message is a finished request, not a park.
+            seen_by_thread: dict[str, str] = {}
+
+            def finished_scoped(rec: dict, mid: str) -> bool:
+                rid = rec.get("request_id")
+                if not isinstance(rid, str) or not rid:
+                    return False
+                if rid not in seen_by_thread:
+                    seen_by_thread[rid] = self.thread_seen(agent, rid)
+                return bool(seen_by_thread[rid]) and mid <= seen_by_thread[rid]
+
             parked_ids = sorted(
                 mid for mid, rec in attempts.items()
                 if isinstance(rec, dict) and rec.get("park_state") in usage_park.PARK_STATES
                 and (not cursor or mid > cursor)
+                and not finished_scoped(rec, mid)
             )
             if not parked_ids:
                 return None

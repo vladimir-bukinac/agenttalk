@@ -1772,6 +1772,19 @@ read, never the model's output, a tool's output or an inbound message.
   continuous loop. Switching retries off later does not release a message that is already held (starting
   the seat, `agenttalk request-restart --for <agent>` or `agenttalk ack` do).
 - Holding the message at the front of the queue holds the messages behind it too, as for a usage limit.
+- A turn that sent a message and was then refused is treated like any refused turn: it waits on the same
+  schedule, or is held at once when stopping retries is switched off. The message it sent stays sent,
+  nothing is replayed, and the next try is a whole new turn, so a seat can send a similar message again.
+- A scoped request that has finished keeps no hold: its reply landed, or it was rescinded or closed. The
+  scoped run removes the refusal record when it sees that, and `status` does not show a finished request
+  as held.
+- **A held request sees a rescission only at the next gate check.** While a request waits or is held the
+  reply check is not asked anything, so if the sender rescinds the question meanwhile, the seat learns of it
+  only at its next try, its next start or `agenttalk ack`. Until then `status` still shows the request as
+  held.
+- **A crash between releasing a refused turn and writing the first refusal record loses that first
+  refusal's count.** The request is not lost or disposed of; it is tried again, and its count starts from
+  that try.
 
 **Technical detail.** New fields in the message's attempt record (added only): `park_kind`
 `provider_refusal`, `refusal_total`, `refusal_first_at`, `refusal_last_at`, and `refusal_hold` (present when

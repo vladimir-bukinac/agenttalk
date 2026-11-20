@@ -313,10 +313,14 @@ def test_a_refused_resume_turn_is_not_blamed_on_the_session(tmp_path):
     store = make_store(tmp_path)
     state = session.SessionState(cli="codex")
     state.resume_available = True
-    state.thread_id = "t-1"
-    drive = run.make_drive(
-        store, AGENT, "codex", state, ["codex"], spawn=lambda a, i: lines(refused()), clock=lambda: 0.0, render=False
-    )
+    state.codex_thread_id = "t-1"
+    modes = []
+
+    def spawn(argv, stdin):
+        modes.append("resume" in [str(a) for a in argv])
+        return lines(refused())
+
+    drive = run.make_drive(store, AGENT, "codex", state, ["codex"], spawn=spawn, clock=lambda: 0.0, render=False)
     record = {
         "id": head(store).id,
         "body": "one",
@@ -331,6 +335,7 @@ def test_a_refused_resume_turn_is_not_blamed_on_the_session(tmp_path):
     for _ in range(3):
         outcome = drive(record)
         assert outcome.failure_class == "provider_refusal" and outcome.limit_fact == "provider_refusal"
+    assert modes == [True, True, True], "the test must really be driving resume turns"
     assert state.resume_available is True
 
 
@@ -1246,3 +1251,231 @@ def test_a_hold_made_at_once_reads_as_one_turn_in_every_reader(tmp_path):
     assert "refused 1 turn on it" in body and "1 turns" not in body
     item = attention._usage_limit_park_item(view(held=True, tries=1, next_try_epoch=None, state="parked"))
     assert "refused 1 turn on it" in json.dumps(item) and "1 turns" not in json.dumps(item)
+
+
+# ---- round 3 (the maintainers' final delta): three more cases a refusal must get right ----
+
+
+def sent_then_refused():
+    """A turn that ran one bus command (a send) and was then refused by the provider."""
+    return [
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {
+            "type": "item.completed",
+            "item": {
+                "type": "command_execution",
+                "command": "agenttalk send --from beta --to alpha -m progress",
+                "aggregated_output": "sent",
+                "exit_code": 0,
+                "status": "completed",
+            },
+        },
+        failed("cyber_policy")[-1],
+    ]
+
+
+def plain_record(store):
+    return {
+        "id": head(store).id,
+        "body": "one",
+        "from": "alpha",
+        "to": AGENT,
+        "kind": "message",
+        "subject": None,
+        "request_id": None,
+        "broadcast_id": None,
+        "correlation_id": None,
+    }
+
+
+@pytest.mark.parametrize("resumed", [False, True], ids=["fresh", "resumed"])
+def test_a_refused_turn_that_sent_a_message_says_so_in_fresh_and_in_resume_mode(tmp_path, resumed):
+    """zteam round 3, P1: the failed-resume return kept the refusal class but dropped the bus-action fields, so a turn
+    that had sent a message was read as an unused try. A real drive, with the mode asserted."""
+    store = make_store(tmp_path)
+    state = session.SessionState(cli="codex")
+    if resumed:
+        state.codex_thread_id = "t-1"
+        state.resume_available = True
+    argvs = []
+
+    def spawn(argv, stdin):
+        argvs.append([str(a) for a in argv])
+        return lines(sent_then_refused())
+
+    drive = run.make_drive(store, AGENT, "codex", state, ["codex"], spawn=spawn, clock=lambda: 0.0, render=False)
+    outcome = drive(plain_record(store))
+    assert ("resume" in argvs[0]) is resumed, argvs  # the mode the test claims is the mode that ran
+    assert outcome.failure_class == "provider_refusal" and outcome.limit_fact == "provider_refusal"
+    assert outcome.bus_action_attempted is True, outcome
+    assert state.resume_available is True  # still not blamed on the session
+
+
+def test_a_resumed_refused_turn_without_a_send_still_says_no_send(tmp_path):
+    store = make_store(tmp_path)
+    state = session.SessionState(cli="codex")
+    state.codex_thread_id = "t-1"
+    drive = run.make_drive(
+        store, AGENT, "codex", state, ["codex"], spawn=lambda a, i: lines(refused()), clock=lambda: 0.0, render=False
+    )
+    outcome = drive(plain_record(store))
+    assert outcome.failure_class == "provider_refusal" and outcome.bus_action_attempted is False
+
+
+def sent_refusal_outcome():
+    return loop.DriveOutcome(
+        ok=False,
+        failure_class="provider_refusal",
+        summary="provider safety refusal (x)",
+        limit_fact="provider_refusal",
+        limit_detail="provider_safety_refusal",
+        bus_action_attempted=True,
+    )
+
+
+def sent_then_refused_drive(calls):
+    def drive(record):
+        calls.append(record["owed_action"]["purpose"])
+        return sent_refusal_outcome()
+
+    return drive
+
+
+@pytest.mark.parametrize("park_on", [True, False], ids=["retries-on", "retries-off"])
+def test_a_send_then_a_refusal_in_a_fresh_continuous_session_waits_or_holds_and_replays_nothing(tmp_path, park_on):
+    """zteam round 3, P2: the loop tried to replay a saved operation that does not exist and the worker crashed.
+    Outcome chosen: no replay. The dispatch stays counted as used (a message WAS sent, as the gate has always read it),
+    the refusal is counted in its own record, and the request waits on the refusal schedule (retries on) or is held
+    visibly at once (retries off), exactly as for a refusal without a send. Nothing is disposed, so the ruling that a
+    refusal alone never disposes of a request holds; the next try is a whole new turn, never a replayed operation."""
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate, clock, calls, seen = real_gate(store), Clock(T0), [], Seen()
+    mid = store.messages_for(AGENT)[0].id
+    drive = sent_then_refused_drive(calls)
+    for _ in range(3):  # no crash, however often it is polled
+        loop.run_loop(
+            store,
+            AGENT,
+            drive,
+            commit_gate=gate,
+            clock=clock.now,
+            now_iso=clock.iso,
+            sleep=clock.sleep,
+            max_polls=6,
+            wrapper_generation="wrapper-1",
+            usage_limit_park=park_on,
+            on_escalate=lambda info: seen.notices.append(info) or True,
+        )
+    rec = store.attempt_record(AGENT, mid)
+    assert calls == ["initial"], calls  # one turn, and nothing replayed or tried again early
+    assert rec["last_failure_class"] == "provider_refusal" and rec["refusal_total"] == 1, rec
+    assert park.is_held(rec) is (not park_on)
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed", status
+    assert store.cursor(AGENT) == "" and store.dead_lettered_count(AGENT) == 0
+    shown = store.usage_limit_park_view(AGENT, now_epoch=clock.t)
+    assert shown is not None and shown["held"] is (not park_on)
+
+
+def test_a_send_then_a_refusal_is_tried_again_later_as_a_whole_new_turn_and_can_still_deliver(tmp_path):
+    from pathlib import Path
+
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock, calls = real_gate(store), Clock(T0), []
+
+    def drive(record):
+        calls.append(record["owed_action"]["purpose"])
+        if len(calls) == 1:
+            return sent_refusal_outcome()
+        Path(record["owed_action"]["draft_path"]).write_text("399", encoding="utf-8")
+        assert cli.main(["--root", str(tmp_path), *record["owed_action"]["argv"][3:], "--quiet"]) == 0
+        return loop.DriveOutcome(ok=True, bus_action_attempted=True)
+
+    turns = loop.run_loop(
+        store,
+        AGENT,
+        drive,
+        commit_gate=gate,
+        clock=clock.now,
+        now_iso=clock.iso,
+        sleep=lambda delay: clock.sleep(delay * 400),
+        max_turns=1,
+        max_polls=40,
+        wrapper_generation="wrapper-1",
+        on_escalate=lambda info: True,
+    )
+    assert turns == 1 and len(calls) == 2, calls
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed"
+    assert store.cursor(AGENT) == inbound.id
+
+
+def test_a_scoped_request_whose_reply_landed_before_the_refusal_has_no_hold_left(tmp_path):
+    """zteam round 3, P3: a terminal reply and then a refusal, through the real gate. The request is finished (its seen
+    pointer moves), so the hold is retired and every reader of the park agrees (the reader used to look only at the
+    global cursor, which a scoped run never moves)."""
+    from pathlib import Path
+
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock = real_gate(store), Clock(T0)
+
+    def drive(record):
+        Path(record["owed_action"]["draft_path"]).write_text("399", encoding="utf-8")
+        assert cli.main(["--root", str(tmp_path), *record["owed_action"]["argv"][3:], "--quiet"]) == 0
+        return refusal_outcome()  # the reply landed, and then the provider refused the rest of the turn
+
+    gated_scoped = {"commit_gate": gate, "max_polls": 10, "max_wall": 30.0, "usage_limit_park": True}
+    run_scoped(store, drive, clock, generation="wrapper-1", **gated_scoped)
+    assert store.thread_seen(AGENT, "rq-1") == inbound.id, "the request finished: its seen pointer moved"
+    assert store.attempt_record(AGENT, inbound.id) is None, "the hold of a finished request is retired"
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t) is None
+
+
+def test_a_held_scoped_request_that_was_rescinded_before_a_fresh_start_is_retired_by_that_start(tmp_path):
+    store = make_store(tmp_path, bodies=())
+    store.send(sender="alpha", recipient=AGENT, kind="question", body="the task", meta={"request_id": "rq-1"})
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t)["held"] is True
+    assert cli.main(["--root", str(tmp_path), "rescind", "--from", "alpha", "--to-request", "rq-1", "--quiet"]) == 0
+    # until a start looks, the hold stays and says so (a held request sees a rescission only at the next gate check)
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t)["held"] is True
+    calls = []
+    run_scoped(
+        store,
+        lambda record: calls.append(1) or refusal_outcome(),
+        clock,
+        generation="fresh",
+        max_polls=3,
+        max_wall=30.0,
+    )
+    assert calls == [], "a rescinded request is not driven"
+    assert store.attempt_record(AGENT, message_id) is None
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t) is None
+
+
+def test_the_park_reader_does_not_show_a_hold_whose_scoped_request_already_finished(tmp_path):
+    """The reader agrees on its own: a finished request (its thread pointer at or past the held message) is no park,
+    even if a crash left the record behind."""
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t) is not None
+    store.mark_thread_seen(AGENT, "rq-1", message_id)
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t) is None
+
+
+def test_an_unfinished_scoped_hold_is_still_shown_and_kept(tmp_path):
+    store = scoped_store(tmp_path)
+    clock = Clock(T0)
+    message_id = store.messages_for(AGENT)[0].id
+    scoped_hold(store, clock, message_id)
+    run_scoped(store, lambda record: refusal_outcome(), clock, generation="h5", max_polls=3, max_wall=30.0)
+    assert park.is_held(store.attempt_record(AGENT, message_id))
+    assert store.usage_limit_park_view(AGENT, now_epoch=clock.t)["held"] is True

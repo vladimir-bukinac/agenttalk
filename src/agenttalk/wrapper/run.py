@@ -3483,6 +3483,11 @@ def make_drive(store, agent: str, cli: str, session_state, base_argv: list[str],
                 summary=("resume attempt failed; retrying resume once before fresh session"
                          if attributable else resume_summary),
                 child_output_tail=sig.get("child_output_tail"),
+                # #857: a resumed turn that sent a message and was then refused must still say it sent one, or the
+                # loop reads the dispatch as an unused try (as the fresh-session return below has always said).
+                bus_action_attempted=bool(sig.get("bus_action_attempted")),
+                bus_action_infra=bool(sig.get("bus_action_infra")),
+                bus_action_rejected=bool(sig.get("bus_action_rejected")),
                 interrupted=bool(sig.get("watchdog")),
                 interruption_kind="turn_watchdog" if sig.get("watchdog") else None,
                 **_limit_fields(sig, shown_class),

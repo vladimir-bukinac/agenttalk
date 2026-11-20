@@ -804,6 +804,30 @@ def _disposal_report(
     return ("completed" if counted else "outcome_unknown"), facts
 
 
+def _retire_finished_scoped_hold(store, agent: str, rid: str) -> None:
+    """#857: a scoped request that has finished keeps no refusal hold.
+
+    A scoped run never moves the global cursor, so a refusal record written for a request that then finished (a reply
+    landed and the run consumed it, or the thread was rescinded or closed before this start) would be read as a hold
+    for good. When the request is finished here (its seen pointer is at or past the held message, or its thread is
+    closed or superseded) the refusal entry is removed. A request that is still open keeps it. Best effort: it can
+    never fail a run."""
+    try:
+        rows = store.dead_letter_attempts(agent)["messages"]
+        mine = [mid for mid, rec in rows.items()
+                if isinstance(rec, dict) and rec.get("request_id") == rid and usage_park.is_refusal_park(rec)]
+        if not mine:
+            return
+        scoped = recv_api.poll(store, agent, scoped_request_id=rid).get("scoped") or {}
+        seen = scoped.get("seen") or ""
+        over = bool(scoped.get("closed") or scoped.get("superseded"))
+        for mid in mine:
+            if over or (seen and mid <= seen):
+                store.clear_attempt(agent, mid)
+    except Exception:  # noqa: BLE001, S110 - housekeeping only  # nosec B110
+        pass
+
+
 def run_loop(store, agent: str, drive: Callable[[dict], object], *,
              idle_interval: float = 0.3, max_idle_interval: float = 2.0,
              heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
@@ -922,16 +946,19 @@ def run_loop(store, agent: str, drive: Callable[[dict], object], *,
         if on_runtime_idle is not None:
             on_runtime_idle()
         if only_request_id is not None:
-            return _run_one_shot(
-                store, agent, drive, rid=only_request_id,
-                idle_interval=idle_interval, max_idle_interval=max_idle_interval,
-                heartbeat_interval=heartbeat_interval, clock=clock, sleep=sleep,
-                max_turns=max_turns, max_polls=max_polls, max_wall=max_wall,
-                stamp=stamp, on_health_idle=on_health_idle,
-                on_runtime_idle=on_runtime_idle,
-                commit_gate=commit_gate, now_iso=now_iso, wrapper_generation=wait_token,
-                usage_limit_park=(usage_park.enabled() if usage_limit_park is None
-                                  else bool(usage_limit_park)))
+            try:
+                return _run_one_shot(
+                    store, agent, drive, rid=only_request_id,
+                    idle_interval=idle_interval, max_idle_interval=max_idle_interval,
+                    heartbeat_interval=heartbeat_interval, clock=clock, sleep=sleep,
+                    max_turns=max_turns, max_polls=max_polls, max_wall=max_wall,
+                    stamp=stamp, on_health_idle=on_health_idle,
+                    on_runtime_idle=on_runtime_idle,
+                    commit_gate=commit_gate, now_iso=now_iso, wrapper_generation=wait_token,
+                    usage_limit_park=(usage_park.enabled() if usage_limit_park is None
+                                      else bool(usage_limit_park)))
+            finally:
+                _retire_finished_scoped_hold(store, agent, only_request_id)  # #857: a finished request keeps no hold
         return _run_continuous(
             store, agent, drive, idle_interval=idle_interval,
             max_idle_interval=max_idle_interval, heartbeat_interval=heartbeat_interval,
@@ -2043,6 +2070,15 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                         )
                     sleep(fail_sleep)
                     fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
+                    continue
+                if action_infra and _is_refusal(outcome) and settled_gate.captured_operation(key) is None:
+                    # #857: the provider refused a turn that had sent a message, and the send saved no operation to
+                    # replay. There is nothing to retry without another model call, so nothing is replayed: the
+                    # dispatch stays counted (a message was sent), and the refusal is recorded in its own count, wait
+                    # and hold exactly as for a refusal without a send. Nothing is classified, advanced or disposed;
+                    # the next try, on the refusal schedule or after a start, is a whole new turn.
+                    _record_refusal(record, outcome)
+                    _park_usage_limit(record, store.attempt_record(agent, record.get("id")) or {}, idle=True)
                     continue
                 if action_infra:
                     may_retry = settled_gate.record_retry_barrier(
