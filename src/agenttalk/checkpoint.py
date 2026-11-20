@@ -636,7 +636,7 @@ def _read_json_object(path: Path, *, expected_agent: str) -> dict | None:
         return None
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError):
+    except (UnicodeError, ValueError, RecursionError):  # a damaged file may be nested too deeply
         return None
     if not isinstance(payload, dict) or payload.get("agent") != expected_agent:
         return None

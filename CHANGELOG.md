@@ -106,8 +106,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   marker, health marker, thread state, lead-loop lease, exit and cadence files, stand-down record, wrapper
   session file, composing marker, gateway-held marker, work-heartbeat record, config-blocked hold, dead-letter
   attempt ledger, wait-supersede and await records, prepared-operation records, the wrapper's runtime
-  record, the supervisor's restart-barrier and availability observations, lead routine record and reply
-  refusals. A restart or
+  record, the supervisor's restart-barrier and availability observations, lead routine record, reply
+  refusals, and each seat's saved checkpoint (`checkpoints/<seat>.json`, read by `agenttalk checkpoint save`,
+  `resume` and `show`). A restart or
   start-fresh request that is too deep reads as the unusable marker, never as absent. Nothing new is shown
   and no message changes; what a damaged file means for each is unchanged (for example, a damaged lease
   still means no lease).

@@ -89,6 +89,7 @@ FILES = {
     "restart-barrier": lambda s: supervisor._coordination_barrier_path(s, "alpha"),
     "wrapper-runtime-record": lambda s: wrapper_runtime.runtime_path(s.state_dir, "alpha"),
     "availability": lambda s: supervisor._coordination_availability_path(s),
+    "checkpoint": lambda s: checkpoint.checkpoint_path(s, "alpha"),
 }
 
 
@@ -164,6 +165,7 @@ READERS = {
         "health",
         lambda s: cli._recipients_behind_kind(s, ["alpha"], kind="task", exclude="beta"),
     ),
+    "checkpoint read_checkpoint": ("checkpoint", lambda s: checkpoint.read_checkpoint(s, "alpha")),
 }
 
 
@@ -212,6 +214,25 @@ def test_a_nested_restart_or_fresh_request_reads_as_the_unusable_marker_never_as
         assert read("alpha") is None  # nothing there yet
         _write(store, kind, too_deep)
         assert read("alpha") == unusable_restart_request_marker()
+
+
+@pytest.mark.parametrize("command", ["save", "resume", "show"])
+def test_checkpoint_commands_treat_a_nested_checkpoint_like_a_malformed_one(tmp_path, capsys, too_deep, command):
+    results = []
+    for label, text in (("malformed", MALFORMED), ("deep", too_deep)):  # a fresh store each: save writes
+        root = tmp_path / label
+        store = _store(root)
+        _write(store, "checkpoint", text)
+        capsys.readouterr()
+        try:
+            code = cli.main(["--root", str(root), "checkpoint", command, "--for", "alpha"])
+        except RecursionError:
+            code = "crashed with RecursionError"
+        out = capsys.readouterr()
+        folder = checkpoint.checkpoint_path(store, "alpha").parent
+        kept = sorted(p.relative_to(folder).as_posix() for p in folder.rglob("*") if p.is_file())
+        results.append((code, (out.out + out.err).replace(str(root), "<root>"), kept))
+    assert results[0] == results[1]
 
 
 def test_a_nested_stand_down_file_still_lets_the_strict_retry_loop_run(tmp_path, too_deep):
@@ -373,6 +394,12 @@ COVERED = {
     "work-heartbeat/*.json": "work-heartbeat",
     "folder self.awaiting_dir": "awaiting",
     "folder reply_refusal_dir(store)": "reply-refusal",
+    "checkpoints/*.json": "checkpoint",
+}
+# label -> why the search cannot find it: covered above, but the path is built outside the state folder and is not a
+# seat-named folder, the two places the search reads. Found by hand.
+OUTSIDE_THE_SEARCH = {
+    "checkpoints/*.json": "<store>/checkpoints/<seat>.json (checkpoint.checkpoint_path), found by hand in #872",
 }
 # label -> why it is not a per-seat JSON read that needs this test
 NOT_COVERED = {
@@ -397,7 +424,7 @@ NOT_COVERED = {
 def _assert_every_path_accounted_for(named):
     unaccounted = sorted(named - set(COVERED) - set(NOT_COVERED))
     assert not unaccounted, f"per-seat paths named in the code but not accounted for in this test: {unaccounted}"
-    stale = sorted((set(COVERED) | set(NOT_COVERED)) - named)
+    stale = sorted((set(COVERED) | set(NOT_COVERED)) - named - set(OUTSIDE_THE_SEARCH))
     assert not stale, f"entries here that the code no longer names: {stale}"
 
 
@@ -405,6 +432,17 @@ def test_every_per_seat_path_named_in_the_code_is_covered_or_explained():
     named = _per_seat_paths_named_in_the_code()
     assert len(named) > 20, "the search found too few per-seat paths: the patterns are out of date"
     _assert_every_path_accounted_for(named)
+
+
+def test_a_path_outside_the_search_is_covered_and_still_where_the_label_says(tmp_path):
+    named = _per_seat_paths_named_in_the_code()
+    store = _store(tmp_path)
+    for label in OUTSIDE_THE_SEARCH:
+        assert label in COVERED, label
+        assert label not in named, f"{label}: the search finds it now, so it no longer needs this exemption"
+        folder, pattern = label.split("/")
+        path = FILES[COVERED[label]](store)
+        assert path.relative_to(store.dir).as_posix() == f"{folder}/{pattern.replace('*', 'alpha')}"
 
 
 # One planted line (or two) per way of building the path: each names a file no table knows, so the guard must fail.
