@@ -375,7 +375,7 @@ def _validate_supervisor_state(value: object, *, source: str) -> dict:
 def _read_supervisor_json(path: Path, *, source: str) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8-sig"))
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, RecursionError) as exc:  # #871: RecursionError = nested too deeply
         raise SupervisorPersistenceError(
             f"{source} is unreadable or invalid: {type(exc).__name__}"
         ) from exc
@@ -612,7 +612,7 @@ def load_supervisor_config(
             _validate_powershell_config_transport(powershell_transport_store, raw)
         try:
             value = json.loads(raw.decode("utf-8-sig"))
-        except (UnicodeDecodeError, ValueError) as exc:
+        except (UnicodeDecodeError, ValueError, RecursionError) as exc:  # #871: nested too deeply
             raise SupervisorPersistenceError(
                 f"supervisor config is unreadable or invalid: {type(exc).__name__}"
             ) from exc

@@ -8454,15 +8454,16 @@ class Store:
     def _read_capacity_file(self, agent: str) -> tuple[dict | None, bool]:
         """(snapshot, unreadable): ``unreadable`` is True when the file is there with
         content but cannot be used (damaged, not text, nested too deeply, not an object).
-        An absent or empty file is just "no reading", not unreadable. Never raises."""
+        An absent or empty file is just "no reading", not unreadable; a file that is there but
+        cannot be opened (no access, a folder in its place) is unreadable. Never raises."""
         p = self.state_dir / f"{agent}.capacity.json"
         if not p.exists():
             return None, False
         try:
             raw = p.read_text(encoding="utf-8").strip()
-        except OSError:
+        except FileNotFoundError:  # gone since the check above: just no reading
             return None, False
-        except ValueError:  # UnicodeDecodeError: the bytes are not text
+        except (OSError, ValueError):  # cannot be read (no access...) or the bytes are not text
             return None, True
         if not raw:
             return None, False

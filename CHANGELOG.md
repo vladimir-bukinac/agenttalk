@@ -84,9 +84,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capacity reading file holding JSON nested so deeply that Python cannot read it made `agenttalk
   status`, `status --json` and `agenttalk capacity` stop with an error, and made the dashboard fail the
   same way. That file is now skipped like any other damaged one, and the other seats' readings still
-  show. `status` (in its `warnings`) and `capacity` now also say in one line which seat's reading could
-  not be read and how it can publish a new one; before this, a damaged reading was skipped without a
-  word. A capacity file that is not valid text is skipped the same way.
+  show. A damaged capacity file, one that cannot be opened or one that is not valid text is now
+  reported instead of skipped silently: `status` (as one more string in its `warnings`) and `capacity`
+  say in one line which seat's reading could not be read and how it can publish a new one. A missing
+  or empty file stays silent. Two other files on the same commands no longer crash either: a seat's
+  wrapper session file nested too deeply is treated as damaged (the seat starts a fresh session, as
+  for any damaged one), and a `supervisor.json` nested too deeply makes `status` print the same one
+  line as for a damaged one (`supervisor config is unreadable or invalid`) and stop.
 
 - **A wrapped Claude seat in a strict permission mode can now send its replies by command (#828).** In a Claude
   Code mode other than `bypassPermissions` (`dontAsk` was measured), a command that starts with a

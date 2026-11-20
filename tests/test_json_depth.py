@@ -1,11 +1,15 @@
 """Deeply nested damaged files must follow the normal parse-error paths."""
 
+import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
-from agenttalk import cli, doctor, scratch, supervisor_lifecycle
+from agenttalk import cli, doctor, scratch, supervisor, supervisor_lifecycle
 from agenttalk.store import Store
+from agenttalk.wrapper.session import _session_path as session_path
+from agenttalk.wrapper.session import load_session
 
 
 DEPTH = 30000
@@ -224,3 +228,67 @@ def test_attention_and_dashboard_skip_a_nested_capacity_reading(tmp_path, bad_ca
     assert cli._tripped_capacity_signals(store) == []
     entries = {e["name"]: e for e in web._agent_entries(store, store.load_config(), [], None)}
     assert "capacity" not in entries["alpha"] and "capacity" in entries["beta"]
+
+
+def _deny_reading(monkeypatch, path, error):
+    original = Path.read_text
+
+    def read_text(self, *args, **kwargs):
+        if self == path:
+            raise error
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+
+
+@pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
+def test_an_existing_capacity_file_that_cannot_be_read_is_named(tmp_path, monkeypatch, capsys, as_json):
+    store = _store_with_bad_capacity(tmp_path, "{}")
+    _deny_reading(monkeypatch, store.state_dir / "alpha.capacity.json", PermissionError("injected denial"))
+    assert store.read_capacity("alpha") is None
+    assert store.read_capacities_checked() == ({"beta": GOOD_READING}, ["alpha"])
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "status"] + (["--json"] if as_json else [])) == 0
+    output = capsys.readouterr().out
+    if as_json:
+        output = "\n".join(json.loads(output)["warnings"])
+    assert "capacity reading for alpha could not be read" in output
+
+
+def test_a_capacity_file_that_vanishes_while_reading_is_just_absent(tmp_path, monkeypatch):
+    store = _store_with_bad_capacity(tmp_path, "{}")
+    _deny_reading(monkeypatch, store.state_dir / "alpha.capacity.json", FileNotFoundError("gone"))
+    assert store.read_capacities_checked() == ({"beta": GOOD_READING}, [])
+
+
+def test_capacity_show_survives_a_nested_wrapper_session_file(tmp_path, capsys, bad_capacity_json):
+    store = Store(tmp_path)
+    store.init(["alpha"])
+    store.write_capacity("alpha", {"source_agent": "alpha", "source": "codex_rollout"})
+    session_path(store, "alpha").write_text(bad_capacity_json, encoding="utf-8")
+    assert load_session(store, "alpha", "codex").cli == "codex"  # a damaged file starts a fresh session
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "capacity"]) == 0
+    assert "alpha" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
+def test_status_reports_a_nested_supervisor_config(tmp_path, capsys, bad_capacity_json, as_json):
+    store = Store(tmp_path)
+    store.init(["alpha"])
+    (store.dir / "supervisor.json").write_text(bad_capacity_json, encoding="utf-8")
+    capsys.readouterr()
+    assert cli.main(["--root", str(tmp_path), "status"] + (["--json"] if as_json else [])) == 2
+    err = capsys.readouterr().err
+    assert "supervisor config is unreadable or invalid" in err
+    assert "Traceback" not in err
+
+
+def test_supervisor_config_loader_reports_nested_json_both_ways(tmp_path, bad_capacity_json):
+    path = tmp_path / "supervisor.json"
+    path.write_text(bad_capacity_json, encoding="utf-8")
+    with pytest.raises(supervisor.SupervisorPersistenceError, match="unreadable or invalid"):
+        supervisor.load_supervisor_config(path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    with pytest.raises(supervisor.SupervisorPersistenceError, match="unreadable or invalid"):
+        supervisor.load_supervisor_config(path, expected_sha256=digest)

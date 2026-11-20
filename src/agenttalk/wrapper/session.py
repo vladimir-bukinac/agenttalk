@@ -545,7 +545,7 @@ def load_session(store, agent: str, cli: str) -> SessionState:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return _state_from_record(data)
-        except (ValueError, OSError, TypeError):
+        except (ValueError, OSError, TypeError, RecursionError):  # #871: too deeply nested is corrupt too
             pass  # corrupt / unreadable -> start fresh
     state = SessionState(cli=cli)
     if cli == "claude" and not state.claude_session_id:
