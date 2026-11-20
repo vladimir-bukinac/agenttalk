@@ -1479,3 +1479,161 @@ def test_an_unfinished_scoped_hold_is_still_shown_and_kept(tmp_path):
     run_scoped(store, lambda record: refusal_outcome(), clock, generation="h5", max_polls=3, max_wall=30.0)
     assert park.is_held(store.attempt_record(AGENT, message_id))
     assert store.usage_limit_park_view(AGENT, now_epoch=clock.t)["held"] is True
+
+
+# ---- round 4: no number of send-then-refusal turns can use up the gate's paid budget ----
+
+
+def run_gated(store, gate, drive, clock, *, scoped, park_on=True, generation="wrapper-1", max_turns=3, max_polls=100):
+    """The loop, through the real gate, with a poll of waiting that spans every saved time."""
+    extra = {"only_request_id": "rq-1"} if scoped else {}
+    return loop.run_loop(
+        store,
+        AGENT,
+        drive,
+        commit_gate=gate,
+        clock=clock.now,
+        now_iso=clock.iso,
+        sleep=lambda delay: clock.sleep(delay * 400),
+        max_turns=max_turns,
+        max_polls=max_polls,
+        wrapper_generation=generation,
+        usage_limit_park=park_on,
+        on_escalate=lambda info: True,
+        **extra,
+    )
+
+
+def assert_delivery_never_ended(store, gate, inbound):
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed", status
+    assert store.cursor(AGENT) == "" and store.dead_lettered_count(AGENT) == 0
+    assert store.thread_seen(AGENT, "rq-1") in ("", None)
+    assert only_admission(gate)["state"] == "open"
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+@pytest.mark.parametrize("park_on", [True, False], ids=["retries-on", "retries-off"])
+def test_no_number_of_send_then_refusal_turns_ends_delivery(tmp_path, scoped, park_on):
+    """codex-rev round 4, P1 (their reproducer, made a repository test and taken to the schedule's end): each turn
+    sends a message and is then refused. The gate allows an agent two paid tries to answer; a refused turn never
+    uses one, even when it sent a message, so the refusal schedule alone decides: five tries then a hold (retries
+    on), or a hold at once (retries off). Never delivery_failed, never the cursor."""
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock, calls = real_gate(store), Clock(T0), []
+    run_gated(store, gate, sent_then_refused_drive(calls), clock, scoped=scoped, park_on=park_on)
+    expected = 5 if park_on else 1
+    rec = store.attempt_record(AGENT, inbound.id)
+    assert calls == ["initial"] * expected, calls  # the same permit every time: nothing ever moves to "recovery"
+    assert rec["refusal_total"] == expected and park.is_held(rec), rec
+    assert only_admission(gate)["paid_dispatches_total"] == 1
+    assert_delivery_never_ended(store, gate, inbound)
+    run_gated(store, gate, sent_then_refused_drive(calls), clock, scoped=scoped, park_on=park_on, max_polls=20)
+    assert len(calls) == expected, "held for good without a start"
+    assert_delivery_never_ended(store, gate, inbound)
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+def test_a_real_reply_after_four_send_then_refusal_turns_is_delivered(tmp_path, scoped):
+    from pathlib import Path
+
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock, calls = real_gate(store), Clock(T0), []
+
+    def drive(record):
+        calls.append(record["owed_action"]["purpose"])
+        if len(calls) <= 4:
+            return sent_refusal_outcome()
+        Path(record["owed_action"]["draft_path"]).write_text("399", encoding="utf-8")
+        assert cli.main(["--root", str(tmp_path), *record["owed_action"]["argv"][3:], "--quiet"]) == 0
+        return loop.DriveOutcome(ok=True, bus_action_attempted=True)
+
+    turns = run_gated(store, gate, drive, clock, scoped=scoped, max_turns=1)
+    assert turns == 1 and calls == ["initial"] * 5, calls
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed", status
+    assert only_admission(gate)["paid_dispatches_total"] == 1
+    assert store.cursor(AGENT) == inbound.id or store.thread_seen(AGENT, "rq-1") == inbound.id
+
+
+@pytest.mark.parametrize("scoped", [False, True], ids=["continuous", "scoped"])
+def test_a_held_send_then_refusal_request_gets_its_reply_through_on_a_fresh_start(tmp_path, monkeypatch, scoped):
+    from pathlib import Path
+
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock, calls = real_gate(store), Clock(T0), []
+    run_gated(store, gate, sent_then_refused_drive(calls), clock, scoped=scoped, park_on=False)
+    assert len(calls) == 1 and park.is_held(store.attempt_record(AGENT, inbound.id))
+    monkeypatch.setattr("agenttalk.wrapper.obligations._process_liveness", lambda _pid: "dead")
+
+    def drive(record):
+        calls.append(record["owed_action"]["purpose"])
+        Path(record["owed_action"]["draft_path"]).write_text("399", encoding="utf-8")
+        assert cli.main(["--root", str(tmp_path), *record["owed_action"]["argv"][3:], "--quiet"]) == 0
+        return loop.DriveOutcome(ok=True, bus_action_attempted=True)
+
+    restarted = real_gate(store, "wrapper-2")
+    turns = run_gated(store, restarted, drive, clock, scoped=scoped, park_on=False, generation="wrapper-2", max_turns=1)
+    assert turns == 1 and len(calls) == 2, calls
+    status = restarted.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed", status
+    assert store.cursor(AGENT) == inbound.id or store.thread_seen(AGENT, "rq-1") == inbound.id
+
+
+def test_the_gate_says_an_operation_is_captured_only_for_a_marked_draft(tmp_path):
+    from pathlib import Path
+    from test_owed_action_detection import _record, _record_captured_intent
+
+    store = gate_store(tmp_path)
+    owed_question(store)
+    gate = real_gate(store)
+    record = _record(store, agent=AGENT)
+    admitted = gate.admit_or_finalize(record)
+    permit = gate.reserve_dispatch(admitted, purpose="initial")
+    gate.dispatch_record(record, permit)
+    assert gate.operation_captured(permit) is False  # nothing was written
+    Path(permit.draft_path).write_text("399", encoding="utf-8")
+    assert gate.operation_captured(permit) is False  # a draft nobody ran the reply command on is no operation
+    _record_captured_intent(store, gate, permit)
+    assert gate.operation_captured(permit) is True
+
+
+def test_a_refusal_that_left_a_captured_operation_is_still_replayed_and_not_released(tmp_path, monkeypatch):
+    """Round 3's rule stays: a captured operation can be retried without another model call, so a refusal that left
+    one takes that path (the gate's own bounded retry counter), not the release."""
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from test_owed_action_detection import _record_captured_intent
+
+    store = gate_store(tmp_path)
+    inbound = owed_question(store)
+    gate, clock = real_gate(store), Clock(T0)
+    replays, releases = [], []
+
+    def drive(record):
+        ledger = gate_ledger(gate)
+        digest, admission = next(iter(ledger["obligations"].items()))
+        nonce = next(n for n, row in admission["reservations"].items() if row["state"] == "dispatching")
+        draft = Path(record["owed_action"]["draft_path"])
+        draft.write_text("399", encoding="utf-8")
+        _record_captured_intent(store, gate, SimpleNamespace(key_digest=digest, nonce=nonce, draft_path=draft))
+        return sent_refusal_outcome()
+
+    monkeypatch.setattr(
+        DetectionCommitGate, "retry_captured_operation", lambda self, permit, record: replays.append(1) or False
+    )
+    real_release = DetectionCommitGate.release_refused_dispatch
+    monkeypatch.setattr(
+        DetectionCommitGate,
+        "release_refused_dispatch",
+        lambda self, permit: releases.append(1) or real_release(self, permit),
+    )
+    run_gated(store, gate, drive, clock, scoped=False, max_turns=1, max_polls=4)
+    assert replays and not releases, (replays, releases)
+    status = gate.delivery_status("rq-1", "alpha")
+    assert status is None or status.get("state") != "delivery_failed", status
+    assert store.cursor(AGENT) in ("", inbound.id)

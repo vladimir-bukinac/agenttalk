@@ -4889,6 +4889,22 @@ class DetectionCommitGate:
             )
             self._write(ledger)
 
+    def operation_captured(self, permit: DispatchPermit) -> bool:
+        """Whether the turn this permit armed left a fixed reply operation that can be retried without another model
+        call: a draft the reply command was run on (its intent is recorded and matches the draft). Read-only, and
+        False for anything that cannot be read. A refused turn with no such operation has nothing to replay, so its
+        reservation is handed back (``release_refused_dispatch``); one with it is retried by the gate's own bounded
+        counter."""
+        try:
+            ledger = self._load(create=False)
+        except LedgerUnreadable:
+            return False
+        admission = ledger["obligations"].get(permit.key_digest)
+        if not isinstance(admission, dict):
+            return False
+        row = admission.get("reservations", {}).get(permit.nonce)
+        return isinstance(row, dict) and self._captured_payload_digest(row, permit.nonce) is not None
+
     def captured_operation(self, key: ObligationKey) -> DispatchPermit | None:
         try:
             ledger = self._load(create=False)

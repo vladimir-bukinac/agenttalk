@@ -1988,12 +1988,13 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                     store.record_attempt_start(agent, record, attempt_id=uuid.uuid4().hex[:12], at=now_iso(),
                                                usage_probe=gate_probe)
                 outcome = _as_outcome(drive(dispatch_record))
-                if (_is_refusal(outcome) and not outcome.bus_action_attempted
-                        and not outcome.bus_action_rejected and not outcome.bus_action_infra):
-                    # #857: the provider refused the turn and no bus action was taken. Unless the reply landed all
-                    # the same, the reservation goes back to the gate (a refusal never uses a paid dispatch and can
-                    # never reach the exhaustion rule that ends delivery) and the refusal's own count, wait and hold
-                    # take over. Nothing is classified, advanced or disposed.
+                if _is_refusal(outcome) and not settled_gate.operation_captured(permit):
+                    # #857: the provider refused the turn. Unless the reply landed all the same, or the turn left a
+                    # captured operation (which the gate retries by its own bounded counter, below), the reservation
+                    # goes back to the gate, whether or not the turn had sent a message: a refusal never uses a paid
+                    # dispatch and can never reach the exhaustion rule that ends delivery, and the refusal's own
+                    # count, wait and hold take over. Nothing is classified, advanced or disposed. The next try is a
+                    # whole new turn, never a replayed operation (a send saved none).
                     if not settled_gate.resolve(record).terminal:
                         settled_gate.release_refused_dispatch(permit)
                         _record_refusal(record, outcome)
@@ -2070,15 +2071,6 @@ def _run_continuous(store, agent: str, drive: Callable[[dict], object], *,
                         )
                     sleep(fail_sleep)
                     fail_sleep = min(max_idle_interval, fail_sleep * 2.0)
-                    continue
-                if action_infra and _is_refusal(outcome) and settled_gate.captured_operation(key) is None:
-                    # #857: the provider refused a turn that had sent a message, and the send saved no operation to
-                    # replay. There is nothing to retry without another model call, so nothing is replayed: the
-                    # dispatch stays counted (a message was sent), and the refusal is recorded in its own count, wait
-                    # and hold exactly as for a refusal without a send. Nothing is classified, advanced or disposed;
-                    # the next try, on the refusal schedule or after a start, is a whole new turn.
-                    _record_refusal(record, outcome)
-                    _park_usage_limit(record, store.attempt_record(agent, record.get("id")) or {}, idle=True)
                     continue
                 if action_infra:
                     may_retry = settled_gate.record_retry_barrier(
@@ -3232,13 +3224,13 @@ def _run_one_shot(store, agent: str, drive: Callable[[dict], bool], *, rid: str,
                 _refusal_admit(record)
                 outcome = _as_outcome(drive(_with_interruption_context(dispatch_record)))
                 _note_interruption(outcome)
-                if (_is_refusal(outcome) and not outcome.bus_action_attempted
-                        and not outcome.bus_action_rejected and not outcome.bus_action_infra
+                if (_is_refusal(outcome) and not commit_gate.operation_captured(permit)
                         and not commit_gate.resolve(record).terminal):
-                    # #857: the provider refused the turn and no bus action was taken (unless the reply landed all
-                    # the same). A refusal is the provider's, not an agent that failed to reply: the reservation goes
-                    # back to the gate, so it never uses a paid dispatch and can never reach the exhaustion rule that
-                    # ends delivery, and the refusal's own count, wait and hold take over.
+                    # #857: the provider refused the turn (unless the reply landed all the same, or it left a
+                    # captured operation, which is kept apart below). A refusal is the provider's, not an agent that
+                    # failed to reply: the reservation goes back to the gate, whether or not the turn had sent a
+                    # message, so it never uses a paid dispatch and can never reach the exhaustion rule that ends
+                    # delivery, and the refusal's own count, wait and hold take over.
                     commit_gate.release_refused_dispatch(permit)
                     _refusal_settle(record, outcome)
                     _stamp()

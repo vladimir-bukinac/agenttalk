@@ -1773,8 +1773,11 @@ read, never the model's output, a tool's output or an inbound message.
   the seat, `agenttalk request-restart --for <agent>` or `agenttalk ack` do).
 - Holding the message at the front of the queue holds the messages behind it too, as for a usage limit.
 - A turn that sent a message and was then refused is treated like any refused turn: it waits on the same
-  schedule, or is held at once when stopping retries is switched off. The message it sent stays sent,
-  nothing is replayed, and the next try is a whole new turn, so a seat can send a similar message again.
+  schedule, or is held at once when stopping retries is switched off, and it does not use one of the reply
+  check's two paid tries either, so no number of such turns can end the delivery. The message it sent stays
+  sent, nothing is replayed, and the next try is a whole new turn, so a seat can send a similar message
+  again. (If the refused turn left a fixed reply that the reply check can send again without asking the
+  model, that is still sent again, by the check's own bounded retry.)
 - A scoped request that has finished keeps no hold: its reply landed, or it was rescinded or closed. The
   scoped run removes the refusal record when it sees that, and `status` does not show a finished request
   as held.
