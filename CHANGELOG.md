@@ -80,6 +80,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A per-seat state file nested too deeply no longer crashes agenttalk (#872).** Before this, one of a
+  seat's small state files holding JSON nested so deeply that Python cannot read it made `agenttalk status`,
+  `status --json`, `doctor`, `threads`, `send`, the dashboard, the supervisor report, checkpoints, and the
+  lead loop's wait and lease steps stop with an error, so one damaged file for one seat hid the whole team.
+  Every reader of a per-seat state file now treats such a file exactly like a damaged one: the waiting
+  marker, health marker, thread state, lead-loop lease, exit and cadence files, stand-down record, wrapper
+  session file, composing marker, gateway-held marker, work-heartbeat record, config-blocked hold, dead-letter
+  attempt ledger, wait-supersede and await records, lead routine record and reply refusals. A restart or
+  start-fresh request that is too deep reads as the unusable marker, never as absent. Nothing new is shown
+  and no message changes; what a damaged file means for each is unchanged (for example, a damaged lease
+  still means no lease).
+
 - **A wrapped Claude seat in a strict permission mode can now send its replies by command (#828).** In a Claude
   Code mode other than `bypassPermissions` (`dontAsk` was measured), a command that starts with a
   variable is refused even when an allow rule matches it, and the wrapper told every Claude seat to run

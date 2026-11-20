@@ -331,7 +331,7 @@ def _closed_request_ids(store: Store, agent: str) -> tuple[set[str], bool]:
         return set(), True
     try:
         payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, ValueError):
+    except (UnicodeError, ValueError, RecursionError):
         return set(), True
     if not isinstance(payload, dict):
         return set(), True

@@ -9567,7 +9567,7 @@ def _recipients_behind_kind(store: Store, recipients: list[str], *,
                            if _never_started(store, agent) else "no health record")
                 raw = None
                 break
-            except (OSError, ValueError) as exc:
+            except (OSError, ValueError, RecursionError) as exc:
                 problem = f"could not read its health record: {type(exc).__name__}; try again"
                 if attempt < 2:
                     time.sleep(0.05)

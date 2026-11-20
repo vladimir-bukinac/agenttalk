@@ -4751,7 +4751,7 @@ class Store:
             return empty
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return empty
         if not isinstance(data, dict) or not isinstance(data.get("messages"), dict):
             return empty
@@ -5943,7 +5943,7 @@ class Store:
             return None
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return None
         if not isinstance(data, dict):
             return None
@@ -6041,7 +6041,7 @@ class Store:
         try:
             raw = path.read_text(encoding="utf-8").strip()
             data = json.loads(raw)
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError, ValueError, RecursionError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -6210,7 +6210,7 @@ class Store:
                         or path.stem != clean.get("wait_token")
                     ):
                         raise ValueError("invalid")
-                except (OSError, ValueError, json.JSONDecodeError):
+                except (OSError, ValueError, json.JSONDecodeError, RecursionError):
                     if len(problems) < _AWAIT_MAX_DIAGNOSTICS:
                         problems.append({"code": "await_record_invalid", "path": rel})
                     continue
@@ -6276,7 +6276,7 @@ class Store:
         try:
             data = json.loads(p.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
 
     # ------------------------------------------------------ wrapper health
@@ -6310,7 +6310,7 @@ class Store:
             return None
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -6365,7 +6365,7 @@ class Store:
             return None
         try:
             data = json.loads(p.read_text(encoding="utf-8").strip() or "null")
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError, ValueError, RecursionError):
             return None
         if not isinstance(data, dict):
             return None
@@ -6721,7 +6721,7 @@ class Store:
             return None
         try:
             data = json.loads(p.read_text(encoding="utf-8").strip() or "null")
-        except (OSError, json.JSONDecodeError, ValueError):
+        except (OSError, json.JSONDecodeError, ValueError, RecursionError):
             return None
         return data if isinstance(data, dict) else None
 
@@ -6765,7 +6765,7 @@ class Store:
             return d
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return d
         if not isinstance(data, dict):
             return d
@@ -6830,7 +6830,7 @@ class Store:
             return None
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return None
         if not isinstance(data, dict):
             return None
@@ -7376,7 +7376,7 @@ class Store:
             return unusable_restart_request_marker()
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return unusable_restart_request_marker()
         if not isinstance(data, dict):
             return unusable_restart_request_marker()
@@ -7438,7 +7438,7 @@ class Store:
             return unusable_restart_request_marker()
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return unusable_restart_request_marker()
         from agenttalk import ephemeral as _eph
         if not isinstance(data, dict) or not _eph.is_safe_id(data.get("request_id")):
@@ -7479,6 +7479,10 @@ class Store:
         try:
             data = json.loads(self._stand_down_path(agent).read_text(encoding="utf-8"))
         except FileNotFoundError:
+            return []
+        except RecursionError as exc:  # nested too deeply: damaged, like any other bad file
+            if strict:
+                raise ValueError("stand-down file is nested too deeply") from exc
             return []
         except (OSError, ValueError):
             if strict:
@@ -7538,7 +7542,7 @@ class Store:
     def read_gateway_held(self, agent: str) -> str | None:
         try:
             data = json.loads(self._gateway_held_path(agent).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
         head = data.get("head_id") if isinstance(data, dict) else None
         return head if isinstance(head, str) and head else None
@@ -7571,7 +7575,7 @@ class Store:
         try:
             data = json.loads((self.state_dir / f"{agent}.wrapper-session.json")
                               .read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
         if not isinstance(data, dict) or data.get("fresh_request_outcome") != "applied":
             return None
@@ -7596,7 +7600,7 @@ class Store:
         try:
             data = json.loads((self.state_dir / f"{agent}.wrapper-session.json")
                               .read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             return None
         if not isinstance(data, dict) or not data.get("fresh_request_id"):
             return None
@@ -8401,7 +8405,7 @@ class Store:
             return {}
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return {}
         return data if isinstance(data, dict) else {}
 
@@ -8523,7 +8527,7 @@ class Store:
             return None
         try:
             d = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return None
         if not isinstance(d, dict):
             return None
@@ -8610,7 +8614,7 @@ class Store:
             return {}
         try:
             data = json.loads(raw)
-        except (json.JSONDecodeError, ValueError):
+        except (json.JSONDecodeError, ValueError, RecursionError):
             return {}
         return data if isinstance(data, dict) else {}
 

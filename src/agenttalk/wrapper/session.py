@@ -306,7 +306,7 @@ def _saved_record(store, agent: str) -> dict | None:
     """The record ON DISK, or None when it cannot be read: unknown, which is not the same as "not saved"."""
     try:
         data = json.loads(_session_path(store, agent).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return data if isinstance(data, dict) else None
 
@@ -358,7 +358,7 @@ def _session_backup_valid(path) -> bool | None:
         return isinstance(json.loads(path.read_text(encoding="utf-8")), dict)
     except FileNotFoundError:
         return None
-    except ValueError:
+    except (ValueError, RecursionError):
         return False
 
 
@@ -545,7 +545,7 @@ def load_session(store, agent: str, cli: str) -> SessionState:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             return _state_from_record(data)
-        except (ValueError, OSError, TypeError):
+        except (ValueError, OSError, TypeError, RecursionError):  # #871: too deeply nested is corrupt too
             pass  # corrupt / unreadable -> start fresh
     state = SessionState(cli=cli)
     if cli == "claude" and not state.claude_session_id:

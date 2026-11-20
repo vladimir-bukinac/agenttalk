@@ -59,7 +59,7 @@ def read(store: Store, agent: str) -> dict:
     path = record_path(store, agent)
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return _blank()
     if not isinstance(data, dict):
         return _blank()

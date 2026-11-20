@@ -113,7 +113,7 @@ def list_reply_refusals(store: "Store", agent: str | None = None) -> list[dict[s
     for ag, path in _iter_records(store, agent):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             continue
         if not isinstance(data, dict):
             continue
@@ -134,7 +134,7 @@ def read_reply_refusal(store: "Store", agent: str, original_message_id: str) -> 
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return data if isinstance(data, dict) else None
 
