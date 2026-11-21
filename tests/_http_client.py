@@ -15,7 +15,7 @@ import http.client
 
 import pytest
 
-SMALL_BODY_LIMIT = 8192  # bytes: ample for the existing payloads; anything larger is sent the ordinary way
+SMALL_BODY_LIMIT = 70_000  # bytes: above the 65,537-byte body of the oversize-body test; larger goes the ordinary way
 _STANDARD_SEND_OUTPUT = http.client.HTTPConnection._send_output
 
 

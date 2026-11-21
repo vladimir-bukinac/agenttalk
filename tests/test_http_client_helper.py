@@ -78,6 +78,14 @@ def test_a_body_at_the_cap_is_still_sent_with_its_headers(monkeypatch):
     assert len(_sends(monkeypatch, body=b"x" * SMALL_BODY_LIMIT)) == 1
 
 
+def test_the_oversize_action_body_of_the_server_limit_test_goes_out_with_its_headers(monkeypatch):
+    """#226: the server refuses a body over 64 KiB from the declared length alone and closes; the test that sends one
+    (65,537 bytes) needs the same single send, so the cap must stay above it."""
+    body = b"x" * (64 * 1024 + 1)
+
+    assert len(_sends(monkeypatch, body=body)) == 1
+
+
 def test_a_connection_that_fails_still_raises_through_the_helper():
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))

@@ -654,6 +654,7 @@ def test_api_message_by_id(tmp_path: Path) -> None:
 # --------------------------------------------------------------- security
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_post_returns_405(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     srv, _t, base = _serve(s)
@@ -878,6 +879,7 @@ def test_serve_in_thread_ipv6_produces_valid_url(tmp_path: Path) -> None:
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_non_loopback_peer_gets_403_for_every_method(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1540,6 +1542,7 @@ def test_multi_root_session_and_post_mutate_only_selected_project(
     ],
 )
 @pytest.mark.parametrize("selector", ["omitted", "label", "blank", "repeated"])
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_multi_root_posts_require_one_full_project_id_without_mutation(
     tmp_path: Path, endpoint: str, payload: dict, selector: str,
 ) -> None:
@@ -1633,6 +1636,7 @@ def test_single_root_omitted_posts_remain_compatible(
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_multi_root_bad_csrf_is_rejected_for_each_selected_project(
     tmp_path: Path,
 ) -> None:
@@ -1758,6 +1762,7 @@ def test_repeated_root_query_fails_closed_for_console_get(tmp_path: Path) -> Non
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_explicit_unknown_root_post_fails_without_mutation(tmp_path: Path) -> None:
     a, b = _make_same_named_stores(tmp_path)
     srv, _t, base = web.serve_in_thread(
@@ -2172,6 +2177,7 @@ def test_csp_split_per_route(tmp_path: Path) -> None:
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_new_routes_reject_write_methods(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     s.send(sender="alpha", recipient="beta", body="x",
@@ -2193,6 +2199,7 @@ def test_new_routes_reject_write_methods(tmp_path: Path) -> None:
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_actions_off_has_no_session_and_post_stays_405(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     srv, _t, base = _serve(s)
@@ -2265,6 +2272,7 @@ def test_valid_answer_escalation_post_appends_payload_only(tmp_path: Path) -> No
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_rejected_action_post_mutates_nothing(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     before = _tree_hashes(s.root)
@@ -2285,6 +2293,7 @@ def test_rejected_action_post_mutates_nothing(tmp_path: Path) -> None:
     assert _tree_hashes(s.root) == before
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_wrong_present_csrf_token_returns_403_without_file(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     before = _tree_hashes(s.root)
@@ -2306,6 +2315,7 @@ def test_wrong_present_csrf_token_returns_403_without_file(tmp_path: Path) -> No
     assert _tree_hashes(s.root) == before
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_non_ascii_csrf_returns_403_without_rate_or_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2379,6 +2389,7 @@ def test_concurrent_valid_posts_respect_rate_burst(
     assert len(s.list_intents()) == 2
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_origin_mismatch_returns_403_without_file(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     before = _tree_hashes(s.root)
@@ -2425,6 +2436,7 @@ def test_action_post_rate_limited_without_file(
     assert _tree_hashes(s.root) == before
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_action_post_body_too_large_without_file(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     before = _tree_hashes(s.root)
@@ -2523,6 +2535,7 @@ def test_reserved_action_payload_returns_400_without_file(tmp_path: Path) -> Non
     assert _tree_hashes(s.root) == before
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_kill_switch_blocks_valid_action_post_423(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     (s.dir / "supervisor.kill").write_text("stop", encoding="utf-8")
@@ -2541,6 +2554,7 @@ def test_kill_switch_blocks_valid_action_post_423(tmp_path: Path) -> None:
         srv.server_close()
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_kill_switch_unreadable_fails_closed_423(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2648,6 +2662,7 @@ def test_api_intents_and_preflight_are_read_only_body_free(tmp_path: Path) -> No
     assert _tree_hashes(s.root) == before
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_actions_on_intent_route_allows_only_post(tmp_path: Path) -> None:
     s = _make_store(tmp_path)
     srv, _t, base = _serve(s, enable_actions=True)
@@ -2673,6 +2688,7 @@ def _tree_hashes(root: Path) -> dict[str, str]:
     return out
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_no_mutation_full_tree_hash(tmp_path: Path) -> None:
     """NFR-001 / research D9: the dashboard is read-only BY REGRESSION,
     not just by code review. Content hashes, never mtimes (Windows)."""
