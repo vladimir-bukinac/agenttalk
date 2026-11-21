@@ -376,7 +376,8 @@ Key differences for a wrapped agent:
 > parser will reject it.** Where CPython exposes an environment-variable
 > equivalent (`PYTHONUTF8`, `PYTHONHASHSEED`, `PYTHONDONTWRITEBYTECODE`,
 > etc.), set that in the agent's `env` block instead — it has the same
-> effect without occupying an argv position at all. Omit
+> effect without occupying an argv position at all; isolated Python (`-I`) ignores
+> `PYTHON*` environment variables. Omit
 > `module_args_from` entirely for the common case (no interpreter
 > prefix, the default).
 

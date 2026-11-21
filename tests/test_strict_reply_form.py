@@ -176,7 +176,10 @@ def test_wrap_names_the_allow_rule_and_hands_the_form_to_the_loop(tmp_path, monk
     invocation = _written(py)
     assert seen["reply_invocation"] == invocation
     err = capsys.readouterr().err
-    assert f"replace the old allow rule in its settings with: Bash({invocation} *)\n" in err
+    assert (
+        f"replace every agenttalk allow and deny rule in its settings to use {invocation}; "
+        f"allow rule: Bash({invocation} *)\n"
+    ) in err
     assert err.count("allow rule") == 1
 
 

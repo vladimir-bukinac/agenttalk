@@ -15238,7 +15238,8 @@ def _cmd_wrap_with_logging(args: argparse.Namespace) -> int:
             sys.stderr.write(
                 f"agenttalk wrap: {agent} runs in a Claude permission mode other than bypassPermissions, so its "
                 f"instructions write agenttalk commands as {reply_invocation} <subcommand>. To let the seat run "
-                f"them, replace the old allow rule in its settings with: Bash({reply_invocation} *)\n")
+                f"them, replace every agenttalk allow and deny rule in its settings to use {reply_invocation}; "
+                f"allow rule: Bash({reply_invocation} *)\n")
         return _wrap_loop_mode(
             store,
             agent,

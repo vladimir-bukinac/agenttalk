@@ -124,6 +124,24 @@ def test_both_lead_skills_send_a_lead_to_the_installed_pages_the_same_way() -> N
         assert set(DOCS_PATH.findall(skill)) - set(SHIPPED_PAGES) == {"docs/SECURE-CODING.md"}
 
 
+def test_strict_brief_agenttalk_rules_match_the_wrappers_installed_invocation() -> None:
+    from agenttalk.wrapper.prompt import strict_reply_invocation
+
+    brief = (REPO / "docs/LEAD-SETUP-BRIEF.md").read_text(encoding="utf-8")
+    section = brief.split("### 10a. A strict mode for Claude seats", 1)[1].split("## Step 11.", 1)[0]
+    invocation = strict_reply_invocation("claude", ["claude", "--permission-mode", "dontAsk"], sys.executable)
+    assert invocation is not None
+    expected = invocation.replace(sys.executable.replace("\\", "/"), "<py>")
+    assert f'`{expected}`' in section
+    example = section.split("```json\n", 1)[1].split("\n```", 1)[0]
+    rules = json.loads(example)["permissions"]
+    allow = [rule for rule in rules["allow"] if "agenttalk" in rule]
+    deny = [rule for rule in rules["deny"] if "agenttalk" in rule]
+    assert len(allow) == 1 and len(deny) == 2
+    assert all(rule.startswith(f"Bash({expected} ") for rule in allow + deny)
+    assert f"`{expected}`, or `agenttalk`" in section
+
+
 def _require_build_tools() -> None:
     """Fail where a dev-gate leg promises build and hatchling (AGENTTALK_TEST_BUILD_TOOLS=1); skip elsewhere."""
     import agenttalk

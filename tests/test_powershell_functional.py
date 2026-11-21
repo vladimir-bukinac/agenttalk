@@ -128,7 +128,8 @@ def test_real_core_override_claim_uses_baked_fallback_for_validation(
         pytest.skip("PowerShell Core is not installed")
     store = Store(tmp_path)
     store.init(["lead", "worker"])
-    sup.init(store, python_exe=r"C:\BakedFallback\python.exe")
+    sup.init(store, python_exe=r"C:\BakedFallback\python.exe", source_checkout=True)
+    assert sup.recorded_source_mode(store)
     lifecycle.select_powershell_host(store, explicit_path=pwsh)
 
     result = subprocess.run(  # noqa: S603  # nosec B603

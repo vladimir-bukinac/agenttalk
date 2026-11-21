@@ -8135,13 +8135,14 @@ def test_manual_restart_marker_clears_only_after_readiness(tmp_path: Path) -> No
     assert s.read_restart_request("worker") is None
 
 
-def _exec_helpers(tmp_path: Path) -> str:
+def _exec_helpers(tmp_path: Path, *, source_checkout: bool = False) -> str:
     """Extract the verbatim exec-helpers (Proc-Start/Get-ProcSnapshot/Stop-Tree/
     Seed-CodexHome) from a freshly generated supervisor.ps1, so the runtime tests
     drive the EXACT shipped PowerShell."""
     s = _team(tmp_path)
     (s.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
-    assert _run(["supervise", "--init"], tmp_path) == 0
+    args = ["supervise", "--init"] + (["--source-checkout"] if source_checkout else [])
+    assert _run(args, tmp_path) == 0
     text = (s.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
     block = text[text.index("# region exec-helpers"):text.index("# endregion exec-helpers")]
     admission = text[
@@ -10873,6 +10874,7 @@ def test_stop_tree_kills_real_two_level_tree_start_guarded(tmp_path: Path) -> No
             pass
 
 
+@pytest.mark.source_layout
 def test_seed_codex_home_provisions_and_fails_closed(tmp_path: Path) -> None:
     """liveness redesign (RUNTIME): Seed-CodexHome provisions a per-agent isolated
     CODEX_HOME (auth.json + config.toml + skills/agenttalk-listen), NEVER shares
@@ -10880,7 +10882,7 @@ def test_seed_codex_home_provisions_and_fails_closed(tmp_path: Path) -> None:
     shell = _pick_powershell()
     if not shell:
         return
-    helpers = _exec_helpers(tmp_path)
+    helpers = _exec_helpers(tmp_path, source_checkout=True)
     # a fake source CODEX_HOME with the required bits + a sessions/ that must NOT leak
     src = tmp_path / "src-codex"
     (src / "skills" / "agenttalk-listen").mkdir(parents=True)
@@ -10911,7 +10913,7 @@ def test_seed_codex_home_provisions_and_fails_closed(tmp_path: Path) -> None:
     hp = tmp_path / "seed_harness.ps1"
     hp.write_text(harness, encoding="utf-8-sig")
     res = subprocess.run([shell, "-NoProfile", "-File", str(hp)],
-                         capture_output=True, text=True, timeout=120)
+                         capture_output=True, text=True, timeout=120, env=_checkout_runtime_env())
     assert res.returncode == 0, f"{res.stdout}{res.stderr}"
     data = json.loads(out.read_text(encoding="utf-8-sig"))
     assert data["home"], "seeding returned no home"
@@ -10931,7 +10933,7 @@ def test_seed_codex_home_provisions_and_fails_closed(tmp_path: Path) -> None:
     hp2 = tmp_path / "seed_harness2.ps1"
     hp2.write_text(harness2, encoding="utf-8-sig")
     r2 = subprocess.run([shell, "-NoProfile", "-File", str(hp2)],
-                        capture_output=True, text=True, timeout=120)
+                        capture_output=True, text=True, timeout=120, env=_checkout_runtime_env())
     assert r2.returncode == 0, f"{r2.stdout}{r2.stderr}"
     d2 = json.loads(out2.read_text(encoding="utf-8-sig"))
     assert not d2["home"], "missing auth must FAIL CLOSED (no home)"
