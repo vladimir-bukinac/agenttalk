@@ -137,6 +137,16 @@ def inherit(store, record, plan, *, capture=False, bundle=None, snapshot=None):
         retained = []
         for prior, _old_route, old_plan in audit.project_attempts(store, record):
             if audit.same_change(record, plan, prior, old_plan):
+                if not close._stored_lenses_valid(prior):
+                    from agenttalk import printed_commands as pc
+                    A._fail(close._damaged_lenses_text(prior) +
+                            f" The new close {pc.shown(record.get('close_id'))} was created but not frozen; "
+                            "it cannot be used. Before the next attempt, move its file out of .agenttalk/closes too. "
+                            "It was never frozen and no other close records its hash, so this drops nothing. "
+                            "While it stays, every later acceptance open in this store is refused. A fresh attempt "
+                            f"is refused the same way until {pc.shown(prior.get('close_id'))} is restored "
+                            "or moved aside.",
+                            close.HOLD_MALFORMED)
                 retained.append(A._retain(store, coverage.canonical(prior)))
         route["obligations_hash"] = A._retain(store, coverage.canonical(sorted(set(retained))))
     entries = sources(store, route)
@@ -158,6 +168,8 @@ def inherit(store, record, plan, *, capture=False, bundle=None, snapshot=None):
         if old_route.get("bundle_hash"):
             old_bundle = A.decode(A._retained(store, old_route["bundle_hash"]))
             derived.update("acceptance-repro-" + rep["id"] for rep in old_bundle.get("reproductions", []))
+        if not close._stored_lenses_valid(prior):
+            A._fail(close._damaged_lenses_text(prior), close.HOLD_MALFORMED)
         for lens in prior["required_lenses"]:
             if lens["id"] not in derived and lens.get("required", True):
                 if lens["id"] in requirements and requirements[lens["id"]] != lens:

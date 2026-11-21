@@ -91,6 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Damaged review requirements in a stored acceptance close no longer crash successor, attach, or a new cold attempt.
+  These commands refuse with `malformed_state` and name the damaged close and entry. Restore from a trusted backup
+  first; moving a damaged close aside is a fallback that drops its open findings and requirements from later attempts.
+  Successor and attach change nothing. A refused new attempt leaves an unfrozen close to move aside before retrying.
+  (#888)
+
 - **Close checks no longer report hidden submodule work as clean (#796).**
   Ordinary closes hold and acceptance closes are refused when submodule work cannot be checked; close now explains the hold.
 

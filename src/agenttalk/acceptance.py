@@ -612,6 +612,10 @@ def attach(store, close_id, bundle_file, *, by, at):
             _fail("attempt already has an immutable bundle")
         _, artifacts = _bundle(bundle, record, route, plan)
         if schema(route["schema_version"]).cold:
+            if not close._stored_lenses_valid(record):
+                _fail(close._damaged_lenses_text(record) +
+                      " The bundle was not attached, and nothing was changed. After restoring it, attach again.",
+                      close.HOLD_MALFORMED)
             from agenttalk.acceptance_cold import reproduction_lenses
             reproduction_lenses(record, bundle)
         captured = []
