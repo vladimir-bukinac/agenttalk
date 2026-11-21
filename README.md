@@ -454,8 +454,13 @@ in the technical reference.
     nor that nobody else uses the name. In GC JSON, `branch_delete_safe` is
     always false because branch ownership is not proven;
     `branch_delete_checks_passed` reports the existing eligibility checks.
+    When those checks pass, `branch_delete_command` holds a command that is
+    ready to copy, or is null when none can be printed safely, with
+    `branch_delete_command_reason` saying which part needs quoting by hand.
     `lane abandon --json` reports `lane_id`, `branch_deleted`, and optional
-    `branch_delete_command`, `branch_delete_command_reason`, `branch_delete_guidance`, or `branch_kept_reason`.
+    `branch_delete_command` (a ready command, or null with
+    `branch_delete_command_reason` saying why), `branch_delete_guidance`, or
+    `branch_kept_reason`.
     Older clients still delete branches.
   - **The cleanup tool's apply mode** (`agenttalk janitor --apply`). It can
     stage every change in a worktree, new files included, and save it as a
