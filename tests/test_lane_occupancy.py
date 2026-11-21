@@ -214,7 +214,7 @@ def test_gc_delete_keeps_the_worktree_and_the_branch_of_a_lane_a_wrapper_still_r
     capsys.readouterr()
     assert _run_raw(["lane", "gc", "--delete", "--json"], root) == 0
     item = next(i for i in json.loads(capsys.readouterr().out)["items"] if i["lane_id"] == "gcbusy")
-    assert item["branch_deleted"] is True  # free: today's behaviour
+    assert item["branch_deleted"] is False and item["branch_delete_command"]
 
 
 def test_deliver_leaves_the_cleanup_pending_while_a_wrapper_runs_on_the_lane(tmp_path, running, capsys):
@@ -1059,10 +1059,8 @@ def _force_assign(root: Path, base: str, lane_id: str) -> int:
     )
 
 
-def test_a_force_assign_at_abandons_last_decision_waits_until_the_branch_is_deleted(tmp_path, monkeypatch, capsys):
-    """Obligation 6 for abandon. The reassignment starts the moment abandon has decided the branch may go. Master let
-    go of the config lock before that decision, so the new generation was saved and abandon then deleted the branch of
-    an active lane. The record abandon judged must still be the current one when the branch goes."""
+def test_a_force_assign_at_abandons_last_decision_waits_for_the_decision(tmp_path, monkeypatch, capsys):
+    """A reassignment at the branch decision waits until abandon has finished with the lane record."""
     import threading
 
     from agenttalk import cli
@@ -1092,9 +1090,9 @@ def test_a_force_assign_at_abandons_last_decision_waits_until_the_branch_is_dele
     assert _run_raw(["lane", "abandon", "--id", "again", "--delete-branch", "--target", _branch(root)], root) == 0
     thread.join(timeout=30)
 
-    assert "branch deleted" in capsys.readouterr().out
-    assert current == [lanes.STATUS_ABANDONED]
-    assert codes == [0]  # it was only held back: the reassignment itself goes through afterwards
+    assert "branch deleted" not in capsys.readouterr().out
+    assert current == []
+    assert codes == [0]  # advisory reassignment creates no branch
     assert lanes.load_lanes(store)["lanes"]["again"]["status"] == lanes.STATUS_ACTIVE
 
 
@@ -1302,14 +1300,14 @@ def test_a_gc_that_fails_lets_go_of_its_claim_and_the_config_lock_even_if_its_ex
     root, base = _repo(tmp_path)
     _assign_worktree(root, base, "kept")
     _set_lane(root, "kept", status=lanes.STATUS_ABANDONED, worktree_state=lanes.STATUS_CLEANUP_PENDING)
-    real_write = cli._git_write
+    real_command = cli.pc.cmd
 
-    def write(root_arg, argv, **kwargs):
-        if argv[:2] == ["branch", "-D"]:
-            raise cli.GitWriteError("injected: git could not be started for the branch deletion")
-        return real_write(root_arg, argv, **kwargs)
+    def command(template, **kwargs):
+        if template.startswith("git -C "):
+            raise cli.GitWriteError("injected while formatting the manual branch command")
+        return real_command(template, **kwargs)
 
-    monkeypatch.setattr(cli, "_git_write", write)
+    monkeypatch.setattr(cli.pc, "cmd", command)
     store, caught = Store(root), None
     try:
         _run_raw(["lane", "gc", "--delete", "--json"], root)
@@ -1418,7 +1416,8 @@ def test_the_listing_agrees_with_gc_delete_and_creates_nothing(tmp_path, running
 
     assert items["listed"]["worktree_remove_safe"] is False and items["listed"]["branch_delete_safe"] is False
     assert "in use" in items["listed"]["reason"]
-    assert items["unlisted"]["branch_delete_safe"] is True  # the same lane without a session
+    assert items["unlisted"]["branch_delete_safe"] is False
+    assert items["unlisted"]["branch_delete_checks_passed"] is True  # no session; ownership still unproven
     assert not (tokens / "lane-unlisted.token").exists()  # looking made no token
     wrapper.finish()
 

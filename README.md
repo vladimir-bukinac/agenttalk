@@ -446,10 +446,15 @@ in the technical reference.
     folder (a git worktree) for one piece of work; an advisory lane assigned
     with `--advisory --no-worktree --worktree-waiver-reason <reason>` creates
     neither. `lane abandon` ordinarily removes that
-    folder if it is clean and idle, and keeps the branch unless you add
-    `--delete-branch` and git confirms the branch's work is already in the
-    target. Even then, it keeps the branch while any other checkout still has
-    it checked out. `lane gc --delete` is a separate cleanup with its own checks.
+    folder if it is clean and idle. Both `lane abandon --delete-branch` and
+    `lane gc --delete` keep branches. When their existing checks pass, they
+    suggest a `git branch -d` command; first check who else uses that name.
+    Git checks its upstream if set, otherwise the current checkout, not
+    `--target`, and can refuse. Success proves neither a merge into the target
+    nor that nobody else uses the name. In GC JSON, `branch_delete_safe` is
+    always false because branch ownership is not proven;
+    `branch_delete_checks_passed` reports the existing eligibility checks.
+    Older clients still delete branches.
   - **The cleanup tool's apply mode** (`agenttalk janitor --apply`). It can
     stage every change in a worktree, new files included, and save it as a
     commit on that worktree's branch, to preserve the work before cleaning up.

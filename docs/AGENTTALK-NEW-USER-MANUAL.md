@@ -871,6 +871,13 @@ Retry the same `lane deliver` after a publication or teardown failure. It
 resumes the bound transaction, and a committed artifact remains valid while
 cleanup is pending. Lane verdicts are advisory HOLD/GO evidence, not file locks.
 
+`lane gc --delete` and `lane abandon --delete-branch` keep lane branches.
+When their checks pass they suggest a manual `git branch -d` command; check
+who uses the name before running it. Git checks the upstream if set, otherwise
+the current checkout, not `--target`, and can refuse. Success does not prove
+that the branch was merged into the target or that nobody else uses the name.
+Older clients still delete branches.
+
 Before upgrading, stop every supervisor, wrapper, scheduled job and shell using
 this store. Upgrade every entry point, then restart. Never run an older client
 against an upgraded store. Clients older than the release with #654 do not know

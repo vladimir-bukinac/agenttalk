@@ -171,10 +171,12 @@ def test_gc_delete_in_store_a_leaves_store_b_checkout(two_stores, monkeypatch, c
     store_a = Store(root_a)
     monkeypatch.chdir(root_a)
     if route.startswith("own-retired"):
-        # A's own lane x, made and retired through the CLI; its checkout and branch are gone, so B may reuse the id.
+        # A retires its checkout, then a person removes its retained branch before B reuses the id.
         a_row = _assign(root_a, base, target)
         assert cli.main(["--root", str(root_a), "lane", "abandon", "--id", LANE, "--delete-branch"]) == 0
         assert not Path(a_row["worktree_path"]).exists()
+        assert _git(root_a, "branch", "--list", f"lane/{LANE}").strip()
+        _git(root_a, "branch", "-d", "--", f"lane/{LANE}")
         assert not _git(root_a, "branch", "--list", f"lane/{LANE}").strip()
         b_row = _assign(root_b, base, target)
         if route == "own-retired-no-canonical":  # an older row: no canonical path was saved then

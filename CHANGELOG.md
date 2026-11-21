@@ -10,6 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Lane cleanup keeps branches (#841).** `lane gc --delete` and
+  `lane abandon --delete-branch` no longer delete lane branches. Where the
+  previous checks pass, they suggest a manual `git branch -d` command. Check
+  who uses the name before running it. Git checks the upstream if set, or the
+  current checkout otherwise, not `--target`, and may refuse. Success proves
+  neither a merge into the target nor that nobody else uses the name. Older
+  clients still delete branches; stop them before upgrading.
+
 ### Added
 
 - **The lead setup brief explains how to run a Claude seat in a strict permission mode (#826).**
