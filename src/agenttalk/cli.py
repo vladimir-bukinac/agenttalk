@@ -5601,6 +5601,44 @@ def _lane_entry_present(path: Path) -> bool:
         raise OSError(str(exc)) from None
 
 
+_LANE_LEFTOVER_PREFIX = "Git reported the checkout removed, but "
+
+
+def _lane_removal_leftover(folder: str) -> str | None:
+    """After Git reported that it removed `folder`: None when the folder is really gone, else why the cleanup is not
+    done. The one look every cleanup makes at the exact folder it gave Git (`lstat`: a link is looked at, never
+    followed, and one that points at nothing is still there). Only "not found" is gone: a look that fails is unknown,
+    which keeps the cleanup pending as well. The prefix marks the saved reason, so a retry can tell it from any
+    other."""
+    try:
+        present = _lane_entry_present(Path(folder))
+    except OSError:
+        return (f"{_LANE_LEFTOVER_PREFIX}whether its folder is gone could not be established "
+                f"(it cannot be looked at): {folder}")
+    if present:
+        return f"{_LANE_LEFTOVER_PREFIX}its folder is still there: {folder}"
+    return None
+
+
+def _lane_saved_leftover(lane: dict) -> str | None:
+    """The reason a cleanup saved when Git reported a removal and the folder was still there, or None."""
+    saved = lane.get("worktree_cleanup_error")
+    return saved if isinstance(saved, str) and saved.startswith(_LANE_LEFTOVER_PREFIX) else None
+
+
+def _lane_leftover_still_held(lane: dict) -> str | None:
+    """On a retry: the saved leftover reason while the lane's folder is still there (or cannot be looked at, which is
+    said), else None (nothing saved, or the folder is gone and the ordinary retry goes on)."""
+    saved = _lane_saved_leftover(lane)
+    if saved is None:
+        return None
+    try:
+        present = _lane_entry_present(Path(_lane_checkout_folder(str(lane.get("worktree_path")))))
+    except (OSError, lane_mod.LaneError):
+        return f"{saved} (the folder could not be looked at again just now)"
+    return saved if present else None
+
+
 def _lane_is_plain_file(path: Path) -> bool:
     """True for a regular file (a link to one counts), and for an entry that is gone by now; False for anything else
     (a directory, a link to one, a device or pipe). Raises on a failure other than "not found", and on a link that
@@ -5985,6 +6023,11 @@ def _lane_unlisted_checkout_evidence(store, lane_id: str, lane: dict | None) -> 
     stored = lane.get("worktree_path") if isinstance(lane, dict) else None
     if not isinstance(stored, str) or not stored:
         return None
+    if not lane_mod.path_is_absolute(stored):
+        return (f"the lane's stored worktree path {stored!r} is not a full path, so it is not known whether a checkout "
+                "of this branch is still there (it is never looked up from the folder this command runs in); replace "
+                f"worktree_path in lanes.json lane {lane_id!r} with the checkout's real absolute folder, or check by "
+                "hand")
     try:
         if _lane_entry_present(Path(stored)):
             return (f"the lane's stored worktree folder {stored!r} still exists, but Git does not list it as a "
@@ -7053,6 +7096,15 @@ def _lane_deliver_cleanup(store, lane_id: str, pending: dict, cleanup_lane: dict
     if not wt_there:
         _lane_checkpoint_cleanup(store, lane_id, pending, success=True)
         return artifact, False, delivered_head
+    saved_leftover = _lane_saved_leftover(cleanup_lane)
+    if saved_leftover is not None:
+        # Git already said it removed this folder and it is still there: neither the check of a checkout (which would
+        # fail on it and overwrite the saved reason) nor Git is run again. The person removes the folder.
+        sys.stderr.write(
+            f"agenttalk lane deliver: the lane is delivered, but its worktree cleanup is pending: {saved_leftover}. "
+            f"Nothing was removed. Inspect the folder, remove it yourself, then run `lane deliver --id {lane_id}` "
+            "again.\n")
+        return artifact, True, delivered_head
     in_use = _lane_worktree_launch_use(store, cleanup_lane)
     if in_use is not None:
         sys.stderr.write(
@@ -7076,6 +7128,10 @@ def _lane_deliver_cleanup(store, lane_id: str, pending: dict, cleanup_lane: dict
             return artifact, True, delivered_head
     except (lane_mod.LaneError, GitWriteError) as exc:
         _lane_checkpoint_cleanup(store, lane_id, pending, success=False, error=str(exc))
+        return artifact, True, delivered_head
+    leftover = _lane_removal_leftover(wt_raw)  # Git's word is not enough: the folder it removed is looked at
+    if leftover is not None:
+        _lane_checkpoint_cleanup(store, lane_id, pending, success=False, error=leftover)
         return artifact, True, delivered_head
     _lane_checkpoint_cleanup(store, lane_id, pending, success=True)
     return artifact, False, delivered_head
@@ -7874,6 +7930,18 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         "before abandon.\n"
                     )
                     return 2
+                if (lane.get("status") == lane_mod.STATUS_DELIVERED and lane.get("cleanup_pending") is True
+                        and not damaged_path and _lane_saved_leftover(lane) is not None):
+                    # A delivered lane whose cleanup stopped at a leftover folder: either form would turn it into an
+                    # abandoned one, and `lane deliver` finishes it once the folder is gone. Not for a damaged checkout
+                    # field (`lane deliver` refuses there, and the damage message names the abandon step that works)
+                    # nor for other pending cleanups, whose existing advice (#771) names plain `lane abandon`.
+                    sys.stderr.write(
+                        f"agenttalk lane abandon: lane {lane_id!r} is delivered and only its worktree cleanup is "
+                        "pending; abandoning it would relabel a delivered lane. If its folder is still there, "
+                        f"inspect it and remove it yourself, then run `lane deliver --id {lane_id}` to finish the "
+                        "cleanup. Nothing was changed.\n")
+                    return 2
                 if not acknowledge:
                     running = _lane_worktree_launch_use(store, lane, queued_ok=True)
                     if running is not None:
@@ -7954,20 +8022,29 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         "proven unused")
                 elif lane.get("worktree_path"):
                     branch_delete_block_reason = "worktree cleanup did not complete"
-                    in_use = _lane_worktree_launch_use(store, lane)
-                    if in_use is None:
+                    held = _lane_leftover_still_held(lane)
+                    in_use = None if held else _lane_worktree_launch_use(store, lane)
+                    if held:
+                        # A retry of a cleanup that ended with Git's success and the folder still there: the saved
+                        # reason stays as it is, and neither the check of a checkout nor Git is run again.
+                        branch_delete_block_reason = held
+                    elif in_use is None:
                         try:
                             _verify_lane_worktree(store, lane, lane_id=lane_id, store_owned=True, for_removal=True)
+                            folder = _lane_checkout_folder(lane["worktree_path"])
                             rc, _out, err = _git_write(  # the folder the check above read: one absolute target
-                                store.root,
-                                ["worktree", "remove", "--", _lane_checkout_folder(lane["worktree_path"])])
+                                store.root, ["worktree", "remove", "--", folder])
+                            leftover = _lane_removal_leftover(folder) if rc == 0 else None
                             lane["worktree_state"] = (
-                                lane_mod.STATUS_ABANDONED if rc == 0
+                                lane_mod.STATUS_ABANDONED if rc == 0 and leftover is None
                                 else lane_mod.STATUS_CLEANUP_FAILED)
                             if rc != 0:
                                 lane["worktree_cleanup_error"] = err.strip()[:500]
                                 branch_delete_block_reason = (
                                     lane["worktree_cleanup_error"] or "worktree removal failed")
+                            elif leftover is not None:
+                                lane["worktree_cleanup_error"] = leftover[:500]
+                                branch_delete_block_reason = lane["worktree_cleanup_error"]
                             else:
                                 branch_delete_block_reason = None
                         except lane_mod.LaneError as e:
@@ -8132,6 +8209,14 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 "lane, so gc will keep it still. Check the checkout by hand; once it is finished with, remove it "
                 "yourself (`git worktree remove <folder>`, or `git worktree prune` if the folder is really gone), and "
                 "`lane gc --delete` may then suggest a command to delete the branch")
+            if registered is not None and wt_path and wt_rec is None and not others:
+                # The folder was found by its name and Git lists no worktree there (a leftover after Git removed the
+                # checkout, or a record Git pruned): "a registered worktree" would be false.
+                kept_reason = (
+                    f"the folder {wt_path} still exists, but Git does not list it as a worktree of this branch (it "
+                    "was left behind when Git removed the checkout, or its Git record was pruned or the folder was "
+                    "moved). Check the folder by hand; once it is finished with, remove it yourself. Then `lane gc "
+                    "--delete` may suggest a command to delete the branch")
             if safe and wt_path and not wt_safe:
                 safe, reason = False, kept_reason
             if safe and registered is None:
@@ -8170,15 +8255,17 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 if wt_path and wt_safe:
                     try:
                         rc1, _out1, err1 = _git_write(store.root, ["worktree", "remove", "--", wt_path])
-                        item["worktree_removed"] = rc1 == 0
+                        leftover = _lane_removal_leftover(wt_path) if rc1 == 0 else None
+                        item["worktree_removed"] = rc1 == 0 and leftover is None
                         if rc1 != 0:
                             item["remove_error"] = err1.strip()
                     except GitWriteError as e:
+                        leftover = None
                         item["worktree_removed"] = False
                         item["remove_error"] = str(e)
                     if not item["worktree_removed"]:
                         safe = item["branch_delete_checks_passed"] = False
-                        item["reason"] = kept_reason
+                        item["reason"] = leftover or kept_reason
                 if safe:
                     # Suggest a command only if no registered worktree still has the branch checked out.
                     # A failed look keeps it without a suggestion.
@@ -8347,8 +8434,14 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                     )
                 else:
                     step = "run `lane deliver` to retry the cleanup"
+                detail = lane['recovery_detail']
+                saved = _lane_saved_leftover(lane) if lane.get("cleanup_pending") is True and step is not None else None
+                if saved is not None:
+                    detail = f"{detail}: {saved}"
+                    step = (f"Inspect the folder and save anything you need, including ignored files and links. "
+                            f"After you remove the folder, run `lane deliver --id {key}`")
                 shown_step = f" ({step})" if step is not None else ""
-                print(f"  {lane.get('lane_id', '?')}: {lane['recovery_state']} - {lane['recovery_detail']}{shown_step}")
+                print(f"  {lane.get('lane_id', '?')}: {lane['recovery_state']} - {detail}{shown_step}")
         if unfinished:
             print(f"abandoned lanes with the worktree cleanup still pending ({len(unfinished)}):")
             for lane_id, lane in unfinished:

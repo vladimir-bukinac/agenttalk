@@ -951,7 +951,19 @@ rebound before publication. If preparation, the first state save, publication,
 or cleanup fails, run the same `lane deliver` again. It resumes the bound
 transaction; it does not expose an uncommitted GO or mint a second delivery.
 A committed artifact stays valid while cleanup is pending. Force, abandon, and
-reassign refuse to bypass `publish_pending`.
+reassign refuse to bypass `publish_pending`. `lane abandon` (plain or with
+`--acknowledge-missing-worktree`) also refuses a delivered lane whose cleanup
+stopped at a leftover folder (see below), and names `lane deliver --id <lane>`.
+
+If Git reports that it removed the lane's checkout but the folder is still there
+(a folder, a file or a link), no command calls the cleanup finished: `lane deliver`
+and `lane abandon` keep it pending and save that reason, `lane gc --delete` reports
+`worktree_removed: false`, and none of them suggests deleting the branch (the
+command field is left out and `branch_kept_reason` or `reason` says why). `lane
+status` shows the folder. Inspect it, save what you need (including ignored files),
+remove it yourself, then run `lane deliver --id <lane>` (a delivered lane) or
+`lane abandon --id <lane> --acknowledge-missing-worktree` (an abandoned lane). A
+retry while the folder is still there repeats the saved reason and does not call Git.
 
 Shared path approval:
 
