@@ -35,6 +35,7 @@ from agenttalk.ovh_gateway_front import (
     GatewayFront,
     StreamUsage,
 )
+from _http_client import small_body_with_headers  # noqa: F401 -- used by name (see _http_client)
 from _socket_harness import (
     CANCELLATION_JOIN_SECONDS,
     CompletionBudget,
@@ -1045,6 +1046,7 @@ def test_port_zero_in_the_config_is_still_refused(tmp_path) -> None:
         ("POST", PUBLIC_ROUTE, {"Authorization": "Bearer wrong"}, 401),
     ],
 )
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_front_is_exact_default_deny(tmp_path, method, path, headers, expected) -> None:
     with FakeUpstream() as upstream, RunningFront(tmp_path, upstream) as front:
         status, response = front.request(method, path, headers=headers)
@@ -1205,6 +1207,7 @@ def test_front_forwards_capped_claude_beta_query_and_rich_body_intact(
         }
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_beta_rich_body_and_child_cap_exhaustion_survive_front_restart(
     tmp_path, monkeypatch
 ) -> None:
@@ -1297,6 +1300,7 @@ def test_success_reserves_before_one_internal_attempt_then_settles(tmp_path) -> 
         assert ledger["current_committed_micro_eur"] == settlement_cost_micro_eur(100, 10)
 
 
+@pytest.mark.usefixtures("small_body_with_headers")
 def test_static_front_token_is_not_a_paid_transport_bypass(tmp_path) -> None:
     with FakeUpstream() as upstream, RunningFront(tmp_path, upstream) as front:
         status, body = front.request(
