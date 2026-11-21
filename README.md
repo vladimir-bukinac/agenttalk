@@ -1465,8 +1465,7 @@ stays alive and says so. This is on by default.
   and `wrapper_not_responding` when the wrapper stopped refreshing its status.
 - `agenttalk attention`, `agenttalk doctor` and both web consoles show it too, as **PARKED**
   ("parked on a usage limit until ..."). A parked seat needs a look, but it is never shown as
-  down, never as "config blocked", and never as "not for you". Until the console follow-up,
-  the web consoles can describe a Codex re-check as waiting for a restart; use `status` for its time.
+  down, never as "config blocked", and never as "not for you".
 - When several facts disagree, the order is: the supervisor's verdict that the seat is stuck or dead,
   then current working evidence, then a fresh park, then old working history, then an old park.
   `agenttalk status`, `agenttalk supervisor` and both web consoles (the seat's row and its
