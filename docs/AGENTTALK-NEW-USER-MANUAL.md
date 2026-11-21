@@ -872,6 +872,7 @@ resumes the bound transaction, and a committed artifact remains valid while
 cleanup is pending. Lane verdicts are advisory HOLD/GO evidence, not file locks.
 
 `lane gc --delete` and `lane abandon --delete-branch` keep lane branches.
+`lane abandon --json` reports `lane_id`, `branch_deleted`, and optional `branch_delete_command`, `branch_delete_command_reason`, `branch_delete_guidance`, or `branch_kept_reason`.
 When their checks pass they suggest a manual `git branch -d` command; check
 who uses the name before running it. Git checks the upstream if set, otherwise
 the current checkout, not `--target`, and can refuse. Success does not prove

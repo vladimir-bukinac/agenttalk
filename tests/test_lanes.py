@@ -9824,6 +9824,21 @@ def test_gc_keeps_eligible_branch_and_prints_manual_command(tmp_path, capsys):
     assert item["branch_deleted"] is False and item["branch_delete_safe"] is False
     assert item["branch_delete_checks_passed"] is True
     assert "branch -d -- lane/manualgc" in item["branch_delete_command"]
+    assert item.get("branch_delete_command_reason") is None
+    assert set(item) == {
+        "lane_id",
+        "branch",
+        "status",
+        "worktree",
+        "worktree_remove_safe",
+        "worktree_reason",
+        "branch_delete_safe",
+        "branch_delete_checks_passed",
+        "reason",
+        "branch_deleted",
+        "branch_delete_command",
+        "branch_delete_guidance",
+    }
     assert "upstream if set" in item["branch_delete_guidance"] and "not --target" in item["branch_delete_guidance"]
     assert _lane_branch_present(root, "manualgc")
     assert not Path(lane["worktree_path"]).exists()
@@ -9871,6 +9886,8 @@ def test_abandon_json_keeps_eligible_branch_and_prints_manual_command(tmp_path, 
     result = json.loads(capsys.readouterr().out)
     assert result["branch_deleted"] is False
     assert "branch -d -- lane/manualjson" in result["branch_delete_command"]
+    assert result.get("branch_delete_command_reason") is None
+    assert set(result) == {"lane_id", "branch_deleted", "branch_delete_command", "branch_delete_guidance"}
     assert "upstream if set" in result["branch_delete_guidance"] and "not --target" in result["branch_delete_guidance"]
     assert _lane_branch_present(root, "manualjson")
 
@@ -9941,12 +9958,102 @@ def test_suggested_branch_command_runs_for_a_normal_lane(tmp_path, capsys, actio
     assert not _lane_branch_present(root, "copyable")
 
 
-@pytest.mark.parametrize("repo,branch", [
-    ("repo & other", "lane/normal"),
-    ("repo", "lane/bad;command"),
-    ("repo", "lane/bad..ref"),
-])
+@pytest.mark.parametrize(
+    "repo,branch",
+    [
+        ("repo & other", "lane/normal"),
+        ("repo", "lane/bad;command"),
+        ("repo", "lane/bad..ref"),
+    ],
+)
 def test_manual_branch_command_marks_unsafe_values_as_placeholders(repo, branch):
-    command = cli._lane_manual_branch_command(Path(repo), branch)
-    assert "not a ready command" in command
-    assert "<repo>" in command or "<branch>" in command
+    command, reason = cli._lane_manual_branch_command(Path(repo), branch)
+    assert command is None
+    assert reason and "manual quoting" in reason
+
+
+def test_gc_delete_keeps_registered_checkout_without_lane_record(tmp_path, capsys):
+    root, base = _repo(tmp_path)
+    lane = _assign_worktree(root, base, "missingrecord")
+    checkout = Path(lane["worktree_path"])
+    store = Store(root)
+    data = lanes.load_lanes(store)
+    del data["lanes"]["missingrecord"]
+    lanes.save_lanes(store, data)
+    capsys.readouterr()
+    assert _run_raw(["lane", "gc", "--delete", "--json"], root) == 0
+    item = next(item for item in json.loads(capsys.readouterr().out)["items"] if item["lane_id"] == "missingrecord")
+    assert item["worktree_remove_safe"] is False
+    assert item["worktree_reason"] == "no lane record; checkout ownership is not verified"
+    assert checkout.exists() and _lane_branch_present(root, "missingrecord")
+
+
+@pytest.mark.parametrize("action", ["abandon", "gc"])
+def test_cleanup_json_separates_unready_command_reason(tmp_path, capsys, action):
+    folder = tmp_path / "unsafe & repository"
+    folder.mkdir()
+    root, base = _repo(folder)
+    _assign_worktree(root, base, "safe-name")
+    capsys.readouterr()
+    if action == "gc":
+        assert _run_raw(["lane", "abandon", "--id", "safe-name"], root) == 0
+        capsys.readouterr()
+        assert _run_raw(["lane", "gc", "--delete", "--json"], root) == 0
+        item = next(item for item in json.loads(capsys.readouterr().out)["items"] if item["lane_id"] == "safe-name")
+    else:
+        assert _run_raw(["lane", "abandon", "--id", "safe-name", "--delete-branch", "--json"], root) == 0
+        item = json.loads(capsys.readouterr().out)
+    assert item["branch_delete_command"] is None
+    assert item["branch_delete_command_reason"]
+    assert "not a plain token" not in item["branch_delete_command_reason"]
+    assert "branch name needs" not in item["branch_delete_command_reason"]
+    if action == "abandon":
+        assert set(item) == {
+            "lane_id",
+            "branch_deleted",
+            "branch_delete_command",
+            "branch_delete_command_reason",
+            "branch_delete_guidance",
+        }
+    else:
+        assert set(item) == {
+            "lane_id",
+            "branch",
+            "status",
+            "worktree",
+            "worktree_remove_safe",
+            "worktree_reason",
+            "branch_delete_safe",
+            "branch_delete_checks_passed",
+            "reason",
+            "branch_deleted",
+            "branch_delete_command",
+            "branch_delete_command_reason",
+            "branch_delete_guidance",
+        }
+
+
+@pytest.mark.parametrize("action", ["abandon", "gc"])
+def test_cleanup_text_explains_unready_command(tmp_path, capsys, action):
+    folder = tmp_path / "unsafe & repository"
+    folder.mkdir()
+    root, base = _repo(folder)
+    _assign_worktree(root, base, "text-name")
+    capsys.readouterr()
+    if action == "gc":
+        assert _run_raw(["lane", "abandon", "--id", "text-name"], root) == 0
+        capsys.readouterr()
+        assert _run_raw(["lane", "gc", "--delete"], root) == 0
+    else:
+        assert _run_raw(["lane", "abandon", "--id", "text-name", "--delete-branch"], root) == 0
+    output = capsys.readouterr().out
+    assert "branch kept; no ready command" in output
+    assert "repository path needs manual quoting" in output
+    assert "not a plain token" not in output
+    assert "dry run" not in output
+
+
+def test_unready_command_reason_names_source_of_truncated_path():
+    command, reason = cli._lane_manual_branch_command(Path("a" * 270 + "&"), "lane/normal")
+    assert command is None
+    assert "the whole value is the store project folder" in reason

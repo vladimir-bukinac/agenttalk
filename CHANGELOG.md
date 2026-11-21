@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   current checkout otherwise, not `--target`, and may refuse. Success proves
   neither a merge into the target nor that nobody else uses the name. Older
   clients still delete branches; stop them before upgrading. A checkout without a lane record is now always kept.
-  `lane abandon` also accepts `--json` for machine-readable output.
+  `lane abandon` also accepts `--json` for machine-readable output. The `branch_absent` and `delete_error` fields are no longer emitted.
 
 ### Added
 

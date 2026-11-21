@@ -6001,7 +6001,7 @@ def _lane_unlisted_checkout_evidence(store, lane_id: str, lane: dict | None) -> 
     return None
 
 
-def _lane_manual_branch_command(repo: Path, branch: str) -> str:
+def _lane_manual_branch_command(repo: Path, branch: str) -> tuple[str | None, str | None]:
     """Print a copyable command for conservative PowerShell/POSIX-safe values."""
     template = "git -C {repo} branch -d -- {branch}"
     path = str(repo)
@@ -6010,12 +6010,22 @@ def _lane_manual_branch_command(repo: Path, branch: str) -> str:
         branch.startswith("lane/")
         and re.fullmatch(r"[A-Za-z0-9._/-]+", branch) is not None
         and ".." not in branch
-        and all(part and not part.startswith(".") and not part.endswith((".", ".lock"))
-                for part in components)
+        and all(part and not part.startswith(".") and not part.endswith((".", ".lock")) for part in components)
     )
-    if re.fullmatch(r"[A-Za-z0-9_./:\\ -]+", path) and safe_branch:
-        return pc.cmd(template.format(repo=shlex.quote(path), branch=branch))
-    return pc.cmd(template, repo=path, branch=branch, shown_limit=pc.PATH_SHOWN_MAX_CHARACTERS)
+    safe_path = re.fullmatch(r"[A-Za-z0-9_./:\\ -]+", path) is not None
+    if safe_path and safe_branch:
+        return pc.cmd(template.format(repo=shlex.quote(path), branch=branch)), None
+    reasons = []
+    if not safe_path:
+        reasons.append(
+            "repository path needs manual quoting: "
+            + pc.shown(path, pc.PATH_SHOWN_MAX_CHARACTERS, source="is the store project folder")
+        )
+    if not safe_branch:
+        reasons.append(
+            "branch name needs manual quoting: " + pc.shown(branch, source="is the lane branch name for this cleanup")
+        )
+    return None, "; ".join(reasons)
 
 
 _LANE_BRANCH_DELETE_GUIDANCE = (
@@ -7984,6 +7994,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 )
                 return 2
             manual_command = None
+            manual_reason = None
             branch_kept_reason = None
             if getattr(args, "delete_branch", False):
                 ok, reason = (
@@ -8013,15 +8024,19 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         f"agenttalk lane abandon: branch kept: {reason} "
                         f"({lane_mod.lane_branch(lane_id)!r}).\n")
                 else:
-                    manual_command = _lane_manual_branch_command(store.root, lane_mod.lane_branch(lane_id))
+                    manual_command, manual_reason = _lane_manual_branch_command(
+                        store.root, lane_mod.lane_branch(lane_id)
+                    )
         if kept_reason is not None:
             sys.stderr.write(
                 f"agenttalk lane abandon: lane {lane_id} is abandoned, but its worktree cleanup is not finished: "
                 f"{_lane_kept_text(kept_reason)}.\n")
         if getattr(args, "json", False):
             result = {"lane_id": lane_id, "branch_deleted": False}
-            if manual_command:
+            if manual_command or manual_reason:
                 result["branch_delete_command"] = manual_command
+                if manual_reason:
+                    result["branch_delete_command_reason"] = manual_reason
                 result["branch_delete_guidance"] = _LANE_BRANCH_DELETE_GUIDANCE
             if branch_kept_reason:
                 result["branch_kept_reason"] = branch_kept_reason
@@ -8030,6 +8045,9 @@ def _cmd_lane(args: argparse.Namespace) -> int:
             print(f"abandoned lane {lane_id}")
             if manual_command:
                 print(f"branch kept; after checking who uses the name, you may run: {manual_command}")
+                print(_LANE_BRANCH_DELETE_GUIDANCE)
+            elif manual_reason:
+                print(f"branch kept; no ready command: {manual_reason}")
                 print(_LANE_BRANCH_DELETE_GUIDANCE)
         return 0
 
@@ -8176,7 +8194,10 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                             item["reason"] = _other_checkouts_text(left)
                 if safe:
                     item["branch_deleted"] = False
-                    item["branch_delete_command"] = _lane_manual_branch_command(store.root, branch)
+                    command, command_reason = _lane_manual_branch_command(store.root, branch)
+                    item["branch_delete_command"] = command
+                    if command_reason:
+                        item["branch_delete_command_reason"] = command_reason
                     item["branch_delete_guidance"] = _LANE_BRANCH_DELETE_GUIDANCE
             items.append(item)
         claims.close()
@@ -8190,6 +8211,9 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 if item.get("branch_delete_command"):
                     print(f"    branch kept; after checking who uses the name, you may run: "
                           f"{item['branch_delete_command']}")
+                    print(f"    {item['branch_delete_guidance']}")
+                elif item.get("branch_delete_command_reason"):
+                    print(f"    branch kept; no ready command: {item['branch_delete_command_reason']}")
                     print(f"    {item['branch_delete_guidance']}")
                 elif item["branch_delete_checks_passed"]:
                     print("    branch kept: dry run; use lane gc --delete to recheck cleanup")
