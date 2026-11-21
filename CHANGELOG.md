@@ -118,7 +118,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   progress or send by command. Now the wrapper writes the Python interpreter's full path into that
   seat's instructions (`"<path with forward slashes>" -m agenttalk ...`), tells it to use the Bash tool,
   and prints at start the allow rule the team can add, for example
-  `Bash("<env>/Scripts/python.exe" -m agenttalk *)`. The wrapper never adds the rule itself: in a
+  `Bash("<env>/Scripts/python.exe" -m agenttalk *)` (from #832 on, installed seats use
+  `"<path>" -I -m agenttalk ...` and the printed rule has `-I` too; see Changed). The wrapper never
+  adds the rule itself: in a
   strict profile the team decides what a seat may run. Seats in the default `bypassPermissions` mode,
   and Codex seats, see no change. A strict seat keeps the old form when the interpreter's path is not
   an existing full path, is not safe inside double quotes, or holds a character that has a meaning in
