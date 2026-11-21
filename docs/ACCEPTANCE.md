@@ -12,6 +12,15 @@ retained evidence and each participant's acknowledgment. They are not cryptograp
 identity or proof of execution. Keep the reviewer's workspace and initial brief
 free of the acceptance plan, expected counts, baselines and author claims.
 
+## Project Git facts
+
+Acceptance reads the commit tree and history roots with Git replacement refs ignored.
+A shallow clone can verify, but its history boundary can give it a different project
+identity from a full clone. Prepare and verify using the same history depth; a
+full-history checkout avoids that difference. Some later ancestry checks require
+complete history. If a project identity mismatch happens in a shallow checkout,
+the refusal points out the shallow history.
+
 ## Prepare the assignment
 
 Use a verified, clean project checkout, with runtime `.agenttalk/` files ignored

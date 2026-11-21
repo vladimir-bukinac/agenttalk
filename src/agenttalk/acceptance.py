@@ -280,6 +280,32 @@ def validate_registry(registry):
     return registry
 
 
+def _project_git(repo, *args, env=None):
+    if env is None:
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
+    try:
+        result = subprocess.run(  # noqa: S603,S607  # nosec B603 B607
+            ["git", "--no-replace-objects", "-C", str(repo), *args], capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=10, env=env)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AcceptanceError("acceptance_project_unverified", "project Git unavailable") from exc
+    if result.returncode:
+        _fail("project Git verification failed", "acceptance_project_unverified")
+    return result.stdout.strip()
+
+
+def _project_mismatch(repo, message):
+    try:
+        shallow = _project_git(Path(repo).resolve(), "rev-parse", "--is-shallow-repository")
+    except AcceptanceError:
+        shallow = ""
+    if shallow == "true":
+        message += (" This checkout is a shallow clone; its history starts at the clone boundary, "
+                    "so its project_id may differ from a full clone; fetch the full history "
+                    "(git fetch --unshallow) or prepare and verify on the same kind of checkout.")
+    _fail(message, "acceptance_project_unverified")
+
+
 def verify_project(repo, revision, *, live=True):
     """No fallback to a caller's unverifiable SHA; git must verify this checkout."""
     repo = Path(repo).resolve()
@@ -287,14 +313,7 @@ def verify_project(repo, revision, *, live=True):
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
 
     def git(*args):
-        try:
-            result = subprocess.run(["git", "-C", str(repo), *args], capture_output=True,  # noqa: S603,S607  # nosec B603 B607
-                                    text=True, encoding="utf-8", errors="replace", timeout=10, env=env)
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise AcceptanceError("acceptance_project_unverified", "project Git unavailable") from exc
-        if result.returncode:
-            _fail("project Git verification failed", "acceptance_project_unverified")
-        return result.stdout.strip()
+        return _project_git(repo, *args, env=env)
 
     _text(revision, "revision")
     head = None
@@ -370,7 +389,7 @@ def prepare(store, plan_file, project_repo, revision, scope, lenses=(), *, cache
             )
     project = verify_project(project_repo, revision)
     if schema(plan["schema_version"]).modern and plan["project_id"] != project_id(project):
-        _fail(f"project_id must be {project_id(project)} for this Git root set", "acceptance_project_unverified")
+        _project_mismatch(project_repo, f"project_id must be {project_id(project)} for this Git root set")
     if schema(plan["schema_version"]).cold:
         from agenttalk.acceptance_audit import change_identity
         change_identity(project, plan)
@@ -415,7 +434,7 @@ def freeze(store, close_id, prepared, at):
         if record["revision"] != prepared["project"]["revision"]:
             _fail("project revision changed", "acceptance_project_unverified")
         if verify_project(prepared["project"]["locator"], record["revision"]) != prepared["project"]:
-            _fail("project changed before freeze", "acceptance_project_unverified")
+            _project_mismatch(prepared["project"]["locator"], "project changed before freeze")
         plan = prepared["plan"]
         route = {"schema_version": 1, "attempt_id": uuid.uuid4().hex,
                  "instance_id": record["instance_id"], "project_id": plan["project_id"],
@@ -597,7 +616,7 @@ def attach(store, close_id, bundle_file, *, by, at):
         if schema(route["schema_version"]).cold and route["cold_commit_hash"] is None:
             _fail("commit initial cold observations before attachment", "acceptance_cold_missing")
         if verify_project(route["project"]["locator"], record["revision"]) != route["project"]:
-            _fail("project changed before attachment", "acceptance_project_unverified")
+            _project_mismatch(route["project"]["locator"], "project changed before attachment")
         if route["bundle_hash"] is not None:
             _fail("attempt already has an immutable bundle")
         _, artifacts = _bundle(bundle, record, route, plan)
@@ -679,9 +698,9 @@ def resolve(store, record, *, live=False, preflight_scan=None, decision_at=None)
         project = verify_project(route["project"]["locator"], record["revision"],
                                  live=live or not schema(route["schema_version"]).modern)
         if project != route["project"]:
-            _fail("project identity changed", "acceptance_project_unverified")
+            _project_mismatch(route["project"]["locator"], "project identity changed")
         if schema(route["schema_version"]).modern and route["project_id"] != project_id(project):
-            _fail("project ID differs from verified root identity", "acceptance_project_unverified")
+            _project_mismatch(route["project"]["locator"], "project ID differs from verified root identity")
         if route["bundle_hash"] is None:
             _fail("acceptance bundle missing", "acceptance_record_missing")
         bundle = decode(_retained(store, route["bundle_hash"]))

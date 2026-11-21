@@ -93,8 +93,8 @@ def test_command_reads_project_metadata_once_but_rechecks_live_state(case, monke
     original = subprocess.run
 
     def counted(args, *a, **kw):
-        if args[:3] == ["git", "-C", str(case["project"])]:
-            calls.append(args[3:])
+        if args[:4] == ["git", "--no-replace-objects", "-C", str(case["project"])]:
+            calls.append(args[4:])
         return original(args, *a, **kw)
 
     monkeypatch.setattr(subprocess, "run", counted)
@@ -195,3 +195,57 @@ def test_project_query_failure_remains_unverified(case, monkeypatch, fault):
     with pytest.raises(acceptance.AcceptanceError) as error:
         acceptance.verify_project(case["project"], case["sha"])
     assert error.value.code == "acceptance_project_unverified"
+
+
+def test_project_git_reads_disable_replace_objects_on_fresh_and_cached_verify(case, monkeypatch):
+    from agenttalk.acceptance_git import command_scope
+
+    calls = []
+    original = subprocess.run
+
+    def observed(args, *a, **kw):
+        if args and args[0] == "git":
+            calls.append(list(args))
+        return original(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", observed)
+    with command_scope():
+        acceptance.verify_project(case["project"], case["sha"])
+        first = len(calls)
+        acceptance.verify_project(case["project"], case["sha"])
+    assert first == 4 and len(calls) - first == 2
+    assert all(call[1:3] == ["--no-replace-objects", "-C"] for call in calls)
+    assert all("--is-shallow-repository" not in call for call in calls)
+
+
+@pytest.mark.parametrize("shallow", [True, False])
+def test_project_mismatch_adds_shallow_advice_only_when_applicable(case, monkeypatch, shallow):
+    original = subprocess.run
+    calls = []
+
+    def observed(args, *a, **kw):
+        if "--is-shallow-repository" in args:
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0, "true\n" if shallow else "false\n", "")
+        return original(args, *a, **kw)
+
+    monkeypatch.setattr(subprocess, "run", observed)
+    with pytest.raises(acceptance.AcceptanceError) as error:
+        acceptance._project_mismatch(case["project"], "project changed")
+    assert error.value.code == "acceptance_project_unverified"
+    assert str(error.value).count("shallow clone") == int(shallow)
+    assert len(calls) == 1
+
+
+def test_shallow_clone_still_verifies_and_explains_mismatch(case, tmp_path):
+    shallow = tmp_path / "shallow clone"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--depth=1", case["project"].as_uri(), str(shallow)],
+        check=True, capture_output=True,
+    )
+    project = acceptance.verify_project(shallow, case["sha"])
+    assert project["revision"] == case["sha"]
+    with pytest.raises(acceptance.AcceptanceError) as error:
+        acceptance._project_mismatch(shallow, "project changed")
+    assert error.value.code == "acceptance_project_unverified"
+    assert str(error.value).count("shallow clone") == 1

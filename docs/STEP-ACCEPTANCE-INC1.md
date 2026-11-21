@@ -299,7 +299,7 @@ Inherited scope summaries likewise store only that digest, avoiding recursive
 snapshot embedding. Existing parent blobs remain readable without rewriting.
 Ancestry still caps at 32 links and retained JSON at 1 MiB. Do not deepen a shallow
 checkout or replace it during an attempt: root-set identity is frozen; changes
-HOLD. A full-history checkout avoids the shallow-boundary ambiguity.
+HOLD. A full-history checkout avoids the shallow-boundary ambiguity. Acceptance reads Git facts with replacement refs ignored.
 
 ### Correction reader inventory
 

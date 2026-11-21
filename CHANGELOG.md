@@ -10,6 +10,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Acceptance reads original Git objects (#887).** Project verification now ignores
+  replacement refs when reading files and history. Shallow clones still work; a
+  project identity mismatch now says when the checkout is shallow. A plan prepared
+  with replacement refs must be prepared again because its tree or project identity
+  can change.
+
 ### Added
 
 - **The lead setup brief explains how to run a Claude seat in a strict permission mode (#826).**

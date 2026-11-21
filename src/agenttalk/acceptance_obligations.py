@@ -188,7 +188,7 @@ def inherit(store, record, plan, *, capture=False, bundle=None, snapshot=None):
         project = verified[revision]
         expected = dict(old_route["project"], locator=repo)
         if project != expected or A.project_id(project) != old_route["project_id"]:
-            A._fail("inherited source project identity changed", "acceptance_project_unverified")
+            A._project_mismatch(repo, "inherited source project identity changed")
     for prior in latest.values():
         if prior["status"] != close.PUBLISHED or not isinstance(prior.get("final"), dict):
             snapshot["holds"].append(("acceptance_plan_stale",
