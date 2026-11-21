@@ -1394,8 +1394,8 @@ top of such a boundary, not instead of it.
 **The profile.** It differs from the reporting team's in the places this page names: the command
 form from #828, the space before `*` in allow rules, the exact `branch` rules, the `transcript`
 deny, `--setting-sources` and `--append-system-prompt-file`. The #828 command form and
-`--setting-sources project` were used in the maintainers' measured runs; the profile as a whole,
-with these changes, was not run with Claude Code. Test it (the end of this part). The rules go in the settings file's two `permissions` lists. The shape, with only a
+`--setting-sources project` were used in the maintainers' measured runs; the `-I` form from #832
+was not run with Claude Code, and neither was the profile as a whole, with these changes. Test it (the end of this part). The rules go in the settings file's two `permissions` lists. The shape, with only a
 few of the rules (`<py>` as in thing 1):
 
 ```json
