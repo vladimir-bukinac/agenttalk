@@ -6001,9 +6001,27 @@ def _lane_unlisted_checkout_evidence(store, lane_id: str, lane: dict | None) -> 
     return None
 
 
+def _lane_manual_branch_command(repo: Path, branch: str) -> str:
+    """Print a copyable command for conservative PowerShell/POSIX-safe values."""
+    template = "git -C {repo} branch -d -- {branch}"
+    path = str(repo)
+    components = branch.split("/")
+    safe_branch = (
+        branch.startswith("lane/")
+        and re.fullmatch(r"[A-Za-z0-9._/-]+", branch) is not None
+        and ".." not in branch
+        and all(part and not part.startswith(".") and not part.endswith((".", ".lock"))
+                for part in components)
+    )
+    if re.fullmatch(r"[A-Za-z0-9_./:\\ -]+", path) and safe_branch:
+        return pc.cmd(template.format(repo=shlex.quote(path), branch=branch))
+    return pc.cmd(template, repo=path, branch=branch, shown_limit=pc.PATH_SHOWN_MAX_CHARACTERS)
+
+
 _LANE_BRANCH_DELETE_GUIDANCE = (
     "Git checks the upstream if set, otherwise the current checkout, not --target, and may refuse. "
-    "Success does not prove a merge into the target or that nobody else uses the branch name."
+    "Success does not prove a merge into the target or that nobody else uses the branch name. "
+    "Ready commands use PowerShell or POSIX shell quoting."
 )
 
 
@@ -7974,7 +7992,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                     _lane_branch_delete_safe(store.root, lane_id, args.target)
                 )
                 if ok:
-                    # List after our removal; Git's delete below also protects a checkout made after this snapshot.
+                    # Recheck registered worktrees after removal before suggesting a manual command.
                     registered = _worktree_records(store.root)
                     if registered is None:
                         ok, reason = (
@@ -7995,9 +8013,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         f"agenttalk lane abandon: branch kept: {reason} "
                         f"({lane_mod.lane_branch(lane_id)!r}).\n")
                 else:
-                    manual_command = pc.cmd(
-                        "git -C {repo} branch -d -- {branch}", repo=str(store.root),
-                        branch=lane_mod.lane_branch(lane_id), shown_limit=pc.PATH_SHOWN_MAX_CHARACTERS)
+                    manual_command = _lane_manual_branch_command(store.root, lane_mod.lane_branch(lane_id))
         if kept_reason is not None:
             sys.stderr.write(
                 f"agenttalk lane abandon: lane {lane_id} is abandoned, but its worktree cleanup is not finished: "
@@ -8160,9 +8176,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                             item["reason"] = _other_checkouts_text(left)
                 if safe:
                     item["branch_deleted"] = False
-                    item["branch_delete_command"] = pc.cmd(
-                        "git -C {repo} branch -d -- {branch}", repo=str(store.root), branch=branch,
-                        shown_limit=pc.PATH_SHOWN_MAX_CHARACTERS)
+                    item["branch_delete_command"] = _lane_manual_branch_command(store.root, branch)
                     item["branch_delete_guidance"] = _LANE_BRANCH_DELETE_GUIDANCE
             items.append(item)
         claims.close()

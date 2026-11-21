@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   who uses the name before running it. Git checks the upstream if set, or the
   current checkout otherwise, not `--target`, and may refuse. Success proves
   neither a merge into the target nor that nobody else uses the name. Older
-  clients still delete branches; stop them before upgrading.
+  clients still delete branches; stop them before upgrading. A checkout without a lane record is now always kept.
+  `lane abandon` also accepts `--json` for machine-readable output.
 
 ### Added
 

@@ -1067,7 +1067,7 @@ def test_a_force_assign_at_abandons_last_decision_waits_for_the_decision(tmp_pat
 
     root, base = _repo(tmp_path)
     _assign_worktree(root, base, "again")
-    store, real_safe, real_write = Store(root), cli._lane_branch_delete_safe, cli._git_write
+    store, real_safe, real_cmd = Store(root), cli._lane_branch_delete_safe, cli.pc.cmd
     codes: list[int] = []
     current: list[str] = []
     thread = threading.Thread(target=lambda: codes.append(_force_assign(root, base, "again")))
@@ -1078,20 +1078,20 @@ def test_a_force_assign_at_abandons_last_decision_waits_for_the_decision(tmp_pat
         thread.join(timeout=4.0)  # long enough for a writer that is not held back to finish
         return answer
 
-    def write(root_arg, argv, **kwargs):
-        if argv[:2] == ["branch", "-D"]:  # how abandon deletes the branch since #686
+    def command(template, **kwargs):
+        if template.startswith("git -C "):
             current.append(lanes.load_lanes(store)["lanes"]["again"]["status"])
-        return real_write(root_arg, argv, **kwargs)
+        return real_cmd(template, **kwargs)
 
     monkeypatch.setattr(cli, "_lane_branch_delete_safe", safe)
-    monkeypatch.setattr(cli, "_git_write", write)
+    monkeypatch.setattr(cli.pc, "cmd", command)
 
     capsys.readouterr()
     assert _run_raw(["lane", "abandon", "--id", "again", "--delete-branch", "--target", _branch(root)], root) == 0
     thread.join(timeout=30)
 
     assert "branch deleted" not in capsys.readouterr().out
-    assert current == []
+    assert current == [lanes.STATUS_ABANDONED]
     assert codes == [0]  # advisory reassignment creates no branch
     assert lanes.load_lanes(store)["lanes"]["again"]["status"] == lanes.STATUS_ACTIVE
 

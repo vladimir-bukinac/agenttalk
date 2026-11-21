@@ -1345,7 +1345,7 @@ def test_gc_reports_the_retained_branch_in_text_and_json(
         item = next(i for i in json.loads(captured.out)["items"] if i["lane_id"] == "gcrace")
         assert item["branch_deleted"] is False and item["branch_delete_command"]
     else:
-        assert "branch -d -- <branch>" in captured.out
+        assert "branch -d -- lane/gcrace" in captured.out
     assert _lane_branch_present(root, "gcrace")
 
 
@@ -1494,7 +1494,7 @@ def test_abandon_never_writes_a_branch_delete(
     assert _run_raw(["lane", "abandon", "--id", "ablate", "--delete-branch"], root) == 0
     assert not Path(lane["worktree_path"]).exists()
     assert _lane_branch_present(root, "ablate")
-    assert "branch -d -- <branch>" in capsys.readouterr().out
+    assert "branch -d -- lane/ablate" in capsys.readouterr().out
 
 
 
@@ -1531,7 +1531,7 @@ def test_abandon_keeps_the_branch_for_merged_and_unmerged_work(
     assert not Path(lane["worktree_path"]).exists()
     assert _lane_branch_present(root, "absingle")
     if merged:
-        assert "branch -d -- <branch>" in captured.out and not captured.err
+        assert "branch -d -- lane/absingle" in captured.out and not captured.err
     else:
         assert "branch deleted" not in captured.out
         assert "not proven ancestor of target" in captured.err
@@ -7598,7 +7598,7 @@ def test_719_restart_preserves_work_and_releases_branch(tmp_path, capsys, unmerg
     if unmerged:
         assert "not proven ancestor of target" in output.err
     else:
-        assert "branch -d -- <branch>" in output.out
+        assert "branch -d -- lane/stamp" in output.out
     assert _git(root, "rev-parse", "lane/stamp").strip() == head
     _git(root, "branch", "-D" if unmerged else "-d", "--", "lane/stamp")
     assert _git(root, "branch", "--list", "lane/stamp") == ""
@@ -9823,7 +9823,7 @@ def test_gc_keeps_eligible_branch_and_prints_manual_command(tmp_path, capsys):
     item = _gc_item(capsys, root, "manualgc")
     assert item["branch_deleted"] is False and item["branch_delete_safe"] is False
     assert item["branch_delete_checks_passed"] is True
-    assert "branch -d -- <branch>" in item["branch_delete_command"]
+    assert "branch -d -- lane/manualgc" in item["branch_delete_command"]
     assert "upstream if set" in item["branch_delete_guidance"] and "not --target" in item["branch_delete_guidance"]
     assert _lane_branch_present(root, "manualgc")
     assert not Path(lane["worktree_path"]).exists()
@@ -9835,7 +9835,7 @@ def test_abandon_keeps_eligible_branch_and_prints_manual_command(tmp_path, capsy
     assert _run_raw(["lane", "abandon", "--id", "manualabandon", "--delete-branch"], root) == 0
     captured = capsys.readouterr()
     assert _lane_branch_present(root, "manualabandon")
-    assert "branch -d -- <branch>" in captured.out
+    assert "branch -d -- lane/manualabandon" in captured.out
 
 
 def test_gc_text_suggests_manual_command_for_eligible_branch(tmp_path, capsys):
@@ -9845,7 +9845,7 @@ def test_gc_text_suggests_manual_command_for_eligible_branch(tmp_path, capsys):
     capsys.readouterr()
     assert _run_raw(["lane", "gc", "--delete"], root) == 0
     captured = capsys.readouterr()
-    assert "branch -d -- <branch>" in captured.out
+    assert "branch -d -- lane/manualtext" in captured.out
     assert "branch-delete=yes" not in captured.out
     assert _lane_branch_present(root, "manualtext")
 
@@ -9870,7 +9870,7 @@ def test_abandon_json_keeps_eligible_branch_and_prints_manual_command(tmp_path, 
     assert _run_raw(["lane", "abandon", "--id", "manualjson", "--delete-branch", "--json"], root) == 0
     result = json.loads(capsys.readouterr().out)
     assert result["branch_deleted"] is False
-    assert "branch -d -- <branch>" in result["branch_delete_command"]
+    assert "branch -d -- lane/manualjson" in result["branch_delete_command"]
     assert "upstream if set" in result["branch_delete_guidance"] and "not --target" in result["branch_delete_guidance"]
     assert _lane_branch_present(root, "manualjson")
 
@@ -9915,3 +9915,38 @@ def test_manual_branch_delete_checks_upstream_before_current_checkout(tmp_path):
     assert _git_rc(root, "branch", "-d", "--", "lane/manualgit").returncode != 0
     assert _git_rc(root, "branch", "--unset-upstream", "lane/manualgit").returncode == 0
     assert _git_rc(root, "branch", "-d", "--", "lane/manualgit").returncode == 0
+
+
+@pytest.mark.parametrize("action", ["abandon", "gc"])
+def test_suggested_branch_command_runs_for_a_normal_lane(tmp_path, capsys, action):
+    import shlex
+
+    folder = tmp_path / "repository with spaces"
+    folder.mkdir()
+    root, base = _repo(folder)
+    _assign_worktree(root, base, "copyable")
+    capsys.readouterr()
+    if action == "gc":
+        assert _run_raw(["lane", "abandon", "--id", "copyable"], root) == 0
+        capsys.readouterr()
+        assert _run_raw(["lane", "gc", "--delete", "--json"], root) == 0
+        result = json.loads(capsys.readouterr().out)
+        command = next(item["branch_delete_command"] for item in result["items"] if item["lane_id"] == "copyable")
+    else:
+        assert _run_raw(["lane", "abandon", "--id", "copyable", "--delete-branch", "--json"], root) == 0
+        command = json.loads(capsys.readouterr().out)["branch_delete_command"]
+    args = shlex.split(command)
+    assert args == ["git", "-C", str(root), "branch", "-d", "--", "lane/copyable"]
+    subprocess.run(args, check=True, capture_output=True)
+    assert not _lane_branch_present(root, "copyable")
+
+
+@pytest.mark.parametrize("repo,branch", [
+    ("repo & other", "lane/normal"),
+    ("repo", "lane/bad;command"),
+    ("repo", "lane/bad..ref"),
+])
+def test_manual_branch_command_marks_unsafe_values_as_placeholders(repo, branch):
+    command = cli._lane_manual_branch_command(Path(repo), branch)
+    assert "not a ready command" in command
+    assert "<repo>" in command or "<branch>" in command
