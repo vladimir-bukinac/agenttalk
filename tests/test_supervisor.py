@@ -6159,8 +6159,178 @@ def test_generated_ps1_runs_bus_calls_without_console_script_on_path(tmp_path: P
     assert "worker:" in res.stdout, f"no plan emitted; stdout={res.stdout!r} stderr={res.stderr!r}"
 
 
+_PY_NAME = r"(?:\w+:)?AgenttalkPython"
+# PowerShell names are not case sensitive, a variable can be braced or carry a scope (`$script:`), and the
+# operand of `&` can be the bare variable, the variable in quotes, or either in parentheses.
+_PY_VARIABLE = r"\$(?:\{" + _PY_NAME + r"\}|" + _PY_NAME + r"(?!\w))"
+_PY_OPERAND = r'(?:"' + _PY_VARIABLE + r'"|\(\s*(?:\[\w+\]\s*)?"?' + _PY_VARIABLE + r'"?\s*\)|' + _PY_VARIABLE + r")"
+_PY_RUNS_IT = r"(?:&\s*|(?:^|(?<=[\s;{(|]))\.\s+)" + _PY_OPERAND  # call operator or dot-source
+_PY_COMMAND = re.compile(_PY_RUNS_IT, re.IGNORECASE | re.MULTILINE)
+_PY_FLAGS_FOLLOW = re.compile(r"(?:\s|`)+@AgenttalkModuleFlags(?!\w)", re.IGNORECASE)
+_PY_ANY_USE = re.compile(r"(?<!\w)AgenttalkPython(?!\w)", re.IGNORECASE)
+_PY_COMMENT_LINE = re.compile(r"(?m)^[ \t]*#[^\r\n]*")
+_PY_DEFINITION_LINE = re.compile(r"(?m)^\$AgenttalkPython = '(?:''|[^'\r\n])*'[ \t]*$")
+# The two places the path is handed on as a value, not run: the environment the agents get, and the argument
+# of the launch-request command. A new use has to be added here on purpose.
+_PY_VALUE_USES = ("$applied['AGENTTALK_PY'] = $AgenttalkPython", "--launch-agenttalk-python $AgenttalkPython")
+
+
+def _python_variable_problems(script: str) -> list[str]:
+    """Every use of the team Python variable in a supervisor script that is not safe, as the lines they are on.
+
+    Safe is: the one line that sets it, a comment, handing the path on as a value (`_PY_VALUE_USES`), and running
+    it with the module flags (`& $AgenttalkPython @AgenttalkModuleFlags ...`, in any spelling of the name and the
+    call). Anything else is reported: a run without the flags, and every other way to use the variable
+    (Start-Process, Invoke-Expression, a copy in another variable, a hashtable of arguments), because there is no
+    other way PowerShell could run it that this scan can tell from a harmless value."""
+    safe: list[tuple[int, int]] = []
+    problems: list[int] = []
+    for pattern in (_PY_COMMENT_LINE, _PY_DEFINITION_LINE):
+        safe.extend(m.span() for m in pattern.finditer(script))
+    for use in _PY_VALUE_USES:
+        safe.extend((m.start(), m.end()) for m in re.finditer(re.escape(use), script))
+    for m in _PY_COMMAND.finditer(script):
+        if _PY_FLAGS_FOLLOW.match(script, m.end()):
+            safe.append(m.span())
+        else:
+            problems.append(m.start())
+    covered = bytearray(len(script))
+    for start, end in safe:
+        covered[start:end] = b"\x01" * (end - start)
+    for m in _PY_ANY_USE.finditer(script):
+        if not covered[m.start()]:
+            problems.append(m.start())
+    lines: list[str] = []
+    for position in sorted(problems):
+        line = script[script.rfind("\n", 0, position) + 1 :]
+        line = line.split("\n", 1)[0].strip()
+        if line not in lines:
+            lines.append(line)
+    return lines
+
+
+def _installed_supervisor_script(tmp_path: Path) -> str:
+    """The generated supervisor.ps1 of an installed (not source) team, read as text. Nothing is run."""
+    store = _team(tmp_path)
+    (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
+    sup.init(store, python_exe=str(tmp_path / "python.exe"), source_checkout=False)
+    return (store.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "$AgenttalkPython",
+        '"$AgenttalkPython"',
+        "${AgenttalkPython}",
+        '"${AgenttalkPython}"',
+        "$script:AgenttalkPython",
+        "${script:AgenttalkPython}",
+        '"$script:AgenttalkPython"',
+        "$global:AgenttalkPython",
+        "$SCRIPT:agenttalkpython",
+        "($AgenttalkPython)",
+        "([string]$AgenttalkPython)",
+    ],
+)
+@pytest.mark.parametrize("operator", ["& ", "&", ". "])
+def test_python_call_scan_flags_every_spelling_without_the_flags_and_accepts_it_with_them(operator, spelling) -> None:
+    """#880: the team Python is run with `-I` (the module flags) or not at all, however the call is spelled."""
+    call = f"{operator}{spelling}"
+    unflagged = f"  $out = {call} -m agenttalk --version\n"
+    flagged = f"  $out = {call} @AgenttalkModuleFlags -m agenttalk --version\n"
+    continued = f"  $out = {call} `\n    @AgenttalkModuleFlags -m agenttalk --version\n"
+
+    assert _python_variable_problems(unflagged), call
+    assert _python_variable_problems(flagged) == [], call
+    assert _python_variable_problems(continued) == [], call
+    assert _python_variable_problems(flagged.replace("@AgenttalkModuleFlags", "@agenttalkmoduleflags")) == [], call
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "Start-Process -FilePath $AgenttalkPython -ArgumentList $args",
+        "Start-Process $AgenttalkPython @AgenttalkModuleFlags",
+        '$startArgs = @{ FilePath = $AgenttalkPython; ArgumentList = @("-m", "agenttalk") }',
+        'Invoke-Expression "$AgenttalkPython -m agenttalk --version"',
+        'iex "${AgenttalkPython} -m agenttalk --version"',
+        "$py = $AgenttalkPython; & $py -m agenttalk --version",
+        "[System.Diagnostics.Process]::Start($AgenttalkPython, '-m agenttalk')",
+        "Invoke-Command -ScriptBlock { & $script:AgenttalkPython -m agenttalk }",
+        "& (Get-Command $AgenttalkPython) -m agenttalk",
+    ],
+)
+def test_python_call_scan_flags_the_other_ways_powershell_can_run_a_command_from_a_variable(line) -> None:
+    assert _python_variable_problems(f"  {line}\n"), line
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "$AgenttalkPython = 'C:\\Python\\python.exe'",
+        "  $applied['AGENTTALK_PY'] = $AgenttalkPython",
+        "          --launch-agenttalk-python $AgenttalkPython `",
+        "  # the $AgenttalkPython probes use the same flags",
+        "  & $AgenttalkCmd --root $Root supervise --status",
+        "  $AgenttalkPythonOther = 'x'; & $AgenttalkPythonOther -m agenttalk",
+    ],
+)
+def test_python_call_scan_leaves_alone_what_is_not_a_command(line) -> None:
+    assert _python_variable_problems(f"{line}\n") == [], line
+
+
+def test_the_generated_installed_script_has_no_unflagged_python_use(tmp_path: Path) -> None:
+    script = _installed_supervisor_script(tmp_path)
+
+    assert _python_variable_problems(script) == []
+    # not a vacuous pass: the scan sees the real flagged calls
+    assert len(re.findall(r"&\s+\$AgenttalkPython @AgenttalkModuleFlags", script)) >= 4
+
+
+@pytest.mark.parametrize("function", ["Launch", "Launch-Spec"])
+@pytest.mark.parametrize("spelling", ["$AgenttalkPython", '"$AgenttalkPython"', "${script:AgenttalkPython}"])
+def test_a_python_call_planted_inside_a_launch_function_of_the_real_script_is_found(
+    tmp_path: Path, function: str, spelling: str
+) -> None:
+    """A call in a function no test runs slips past a decoy that is only exercised at run time."""
+    script = _installed_supervisor_script(tmp_path)
+    head = re.search(rf"(?m)^function {re.escape(function)}\(.*\{{\r?\n", script)
+    assert head, function
+    planted = f"  $null = & {spelling} -m agenttalk --version\n"
+    with_call = script[: head.end()] + planted + script[head.end() :]
+
+    assert _python_variable_problems(script) == []
+    assert _python_variable_problems(with_call) == [planted.strip()]
+    flagged = with_call.replace(planted, planted.replace("-m agenttalk", "@AgenttalkModuleFlags -m agenttalk"))
+    assert _python_variable_problems(flagged) == []
+
+
+def test_a_machine_without_powershell_skips_before_the_runtime_is_built(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    built: list[object] = []
+
+    class _Builder:
+        def __init__(self, *args, **kwargs) -> None:
+            built.append((args, kwargs))
+
+        def create(self, *args, **kwargs) -> None:
+            built.append(("create", args))
+
+    monkeypatch.setattr(sys.modules[__name__], "_pick_powershell", lambda: None)
+    monkeypatch.setattr(venv, "EnvBuilder", _Builder)
+
+    with pytest.raises(pytest.skip.Exception, match="PowerShell"):
+        request.getfixturevalue("installed_runtime_with_decoy")
+
+    assert built == []
+
+
 @pytest.fixture
 def installed_runtime_with_decoy(tmp_path: Path):
+    if not _pick_powershell():  # the tests that use this need PowerShell: skip before paying for the venv
+        pytest.skip("PowerShell is unavailable")
     import agenttalk
 
     runtime = tmp_path / "runtime"
@@ -6194,7 +6364,6 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
     assert not sup.recorded_source_mode(store)
     assert sup.validate_artifact_bundle(store)["ok"]
     _select_test_powershell(tmp_path, shell)
-    # A same-named local package must not be imported by the installed shim.
     windir = os.environ.get("WINDIR", r"C:\Windows")
     # PATHEXT and ComSpec let PowerShell run the generated .cmd launcher as a program, not a document.
     keep = ("SystemRoot", "WINDIR", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP", "PATHEXT", "ComSpec")
@@ -6211,6 +6380,7 @@ def test_generated_ps1_installed_mode_runs_bus_calls_without_console_script_on_p
     assert result.returncode == 0, combined
     assert "is not recognized" not in combined and "CommandNotFound" not in combined
     assert "worker:" in result.stdout, combined
+    # A same-named local package must not be imported by the installed shim.
     assert not marker.exists()
 
 
@@ -6227,8 +6397,8 @@ def test_generated_ps1_installed_mode_direct_calls_ignore_local_package(
     (store.dir / "supervisor.json").write_text(json.dumps(_CONFIG), encoding="utf-8")
     sup.init(store, python_exe=str(python), source_checkout=False)
     script = (store.dir / "supervisor.ps1").read_text(encoding="utf-8-sig")
-    calls = re.findall(r"&\s+\$AgenttalkPython\b(?!\s+@AgenttalkModuleFlags\b)", script)
-    assert not calls, "a direct Python call is missing @AgenttalkModuleFlags"
+    problems = _python_variable_problems(script)
+    assert not problems, f"the team Python is used without @AgenttalkModuleFlags: {problems}"
     lines = []
     for name in ("AgenttalkPython", "SrcOnPyPath", "AgenttalkModuleFlags"):
         matches = re.findall(rf"(?m)^\${name} = [^\r\n]*", script)
