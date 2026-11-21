@@ -9,6 +9,7 @@ import hashlib
 import io
 import json
 import math
+import ntpath
 import os
 import re
 import secrets
@@ -4688,17 +4689,9 @@ def _prepare_worktrees_root(store, configured: str | None) -> Path:
             f"where the worktrees root {typed} is could not be established ({pc.line(str(exc))}); nothing was created."
         ) from exc
     folder, location = pc.line(str(Path(resolved))), pc.line(str(store.root))
-    if root_c == repo_c or root_c == git_c or root_c.startswith(git_c + "/"):
-        raise lane_mod.LaneError(
-            f"the worktrees root {typed} is the folder {folder}, which is the store folder itself "
-            "or inside its .git folder; nothing was created."
-        )
-    if not root_c.startswith(repo_c + "/"):
-        raise lane_mod.LaneError(
-            f"the worktrees root {typed} is the folder {folder}, which is outside the store folder "
-            f"{location} (the folder that holds .agenttalk); nothing was created. Give a folder inside it; "
-            "a relative path is read from the store folder."
-        )
+    refusal = _worktrees_root_refusal(root_c, repo_c, git_c, typed=typed, folder=folder, location=location)
+    if refusal is not None:
+        raise lane_mod.LaneError(refusal)
     marker = root / lane_mod.WORKTREE_MARKER_FILENAME
     try:
         if root.exists():
@@ -5136,6 +5129,100 @@ def _strict_real(path, *, missing_tail_ok: bool = False) -> str:
         return os.path.normcase(os.path.join(_strict_real(parent, missing_tail_ok=True), name))  # parent: already clean
 
 
+_DEVICE_OR_EXTENDED_RE = re.compile(r"^[\\/]{2}[?.][\\/]")
+
+
+def _lane_path_key(path, mod=os.path) -> tuple[str, tuple[str, ...]] | None:
+    """A full, resolved path as `(anchor, folder names)` for comparing it with another, or None when it cannot be read
+    that way: relative, drive-relative (`C:x`), rooted without a drive, holding a `.` or `..` part, or spelled as a
+    device or volume path. A comparison that cannot be made is a refusal, never a guess. Pure (no folder is looked
+    at); `mod` is `posixpath` or `ntpath` so every root shape can be tested on any machine.
+
+    The anchor is the root (`/`, `c:\\`, or a share `\\\\server\\share`) and the names are the folders below it, so a
+    store at a root has an empty list of names. Case is folded by `mod.normcase` (Windows only), separators are
+    ignored, and the Windows extended spelling of a drive or share is first written the ordinary way."""
+    text = os.fspath(path)
+    if mod is ntpath:
+        text = _without_extended_prefix(text, windows=True)
+    if _DEVICE_OR_EXTENDED_RE.match(text):
+        return None
+    if mod is ntpath:
+        drive, tail = mod.splitdrive(text)
+        if not drive:
+            return None
+        if drive[0] in "\\/":  # a share: it must name a server and a share
+            if len([part for part in re.split(r"[\\/]+", drive) if part]) < 2:
+                return None
+        elif not tail.startswith(("\\", "/")):
+            return None  # `C:x` is relative to where the process is, not a place
+        names = [part for part in re.split(r"[\\/]+", tail) if part]
+        anchor = mod.normcase(drive)
+    else:
+        if not text.startswith("/"):
+            return None
+        names = [part for part in text.split("/") if part]
+        anchor = "/"
+    if any(part in (".", "..") for part in names):
+        return None
+    return anchor, tuple(mod.normcase(part) for part in names)
+
+
+def _lane_path_inside(path, root, mod=os.path, *, equal_ok: bool = False) -> bool:
+    """True only when `path` is proven to lie below `root` (or to be `root` itself, with `equal_ok`), comparing whole
+    folder names. A sibling that shares the root's text (`/ab` and `/a`), another drive or share, and anything that
+    cannot be read as a full path are not inside. Replaces a text prefix test, `root + "/"`, which at a filesystem
+    root is `//` and matches nothing (#850)."""
+    below, above = _lane_path_key(path, mod), _lane_path_key(root, mod)
+    if below is None or above is None or below[0] != above[0]:
+        return False
+    if below[1][: len(above[1])] != above[1]:
+        return False
+    return len(below[1]) > len(above[1]) or (equal_ok and below[1] == above[1])
+
+
+def _lane_path_same(one, other, mod=os.path) -> bool:
+    """True when both are full paths naming the same folder (see `_lane_path_key`)."""
+    first, second = _lane_path_key(one, mod), _lane_path_key(other, mod)
+    return first is not None and first == second
+
+
+def _lane_ancestors_below(path, root, mod=os.path):
+    """The folders between `path` and `root`, nearest first, never `root` itself: the walk up from a checkout to its
+    store looks for another store in between, and the store's own folder holds the store it is looking for, which is
+    why it must stop before it. Pure (the caller looks at each folder). Raises ValueError when `path` is not proven
+    to be below `root`, when a parent leaves `root`, or when a parent stops changing before `root` is reached: the
+    walk then refuses and cannot go on for ever."""
+    if not _lane_path_inside(path, root, mod):
+        raise ValueError(f"{os.fspath(path)!r} is not proven to be inside {os.fspath(root)!r}")
+    current = mod.dirname(os.fspath(path))
+    while not _lane_path_same(current, root, mod):
+        if not _lane_path_inside(current, root, mod):
+            raise ValueError(f"the folder above {os.fspath(path)!r} leaves {os.fspath(root)!r} before reaching it")
+        yield current
+        above = mod.dirname(current)
+        if above == current:
+            raise ValueError(f"the folders above {os.fspath(path)!r} never reach {os.fspath(root)!r}")
+        current = above
+
+
+def _worktrees_root_refusal(root_c, repo_c, git_c, *, typed, folder, location, mod=os.path) -> str | None:
+    """Why the worktrees root, as a canonical token, may not be used: None when it is a folder inside the store's
+    folder and not the store folder itself or its `.git` folder. Whole folder names are compared (`_lane_path_inside`),
+    so a store at the root of a file system or drive can have a worktrees root (#850)."""
+    if _lane_path_same(root_c, repo_c, mod) or _lane_path_inside(root_c, git_c, mod, equal_ok=True):
+        return (
+            f"the worktrees root {typed} is the folder {folder}, which is the store folder itself "
+            "or inside its .git folder; nothing was created."
+        )
+    if not _lane_path_inside(root_c, repo_c, mod):
+        return (
+            f"the worktrees root {typed} is the folder {folder}, which is outside the store folder "
+            f"{location} (the folder that holds .agenttalk); nothing was created. Give a folder inside it; "
+            "a relative path is read from the store folder."
+        )
+    return None
+
+
 def _lane_checkout_place(store, *folders: str) -> tuple[str, str, str] | None:
     """Where `folders` are, against this store's folder, as `(kind, folder, detail)`, or None when every one lies inside
     this store's folder, where `lane assign` always makes a lane's checkout (a worktrees root outside the store folder
@@ -5156,13 +5243,13 @@ def _lane_checkout_place(store, *folders: str) -> tuple[str, str, str] | None:
         for folder in folders:
             looking = folder
             real = _strict_real(folder, missing_tail_ok=True)
-            if not real.startswith(root.rstrip(os.sep) + os.sep):
+            if not _lane_path_inside(real, root):
                 return "outside", folder, ""
-            parent = os.path.dirname(real)
-            while parent.startswith(root.rstrip(os.sep) + os.sep):  # a store of its own between the two is not ours
+            # a store of its own between the two is not ours; the walk stops before the store's own folder, which
+            # holds the store it belongs to (a store at the root of a drive would otherwise find itself, #850)
+            for parent in _lane_ancestors_below(real, root):
                 if _lane_dir_has_store_folder(parent):
                     return "outside", folder, ""
-                parent = os.path.dirname(parent)
     except (OSError, ValueError) as exc:
         return "unknown", looking if looking is not None else str(store.root), str(exc)
     return None

@@ -80,6 +80,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A team folder at the very top of a drive or file system can now have lanes (#850).** Before this, `lane assign` refused every worktrees folder there as "outside the store folder" and, if a lane was somehow registered, the cleanup check took the team's own `.agenttalk` folder for a second team in the way and refused to remove the lane's checkout. Both checks compared folders as text; a root's text, `/` or `C:\`, never matches that way. They now compare whole folder names (so `/proj2` is still not inside `/proj`), the walk up from a checkout stops before the team's own folder, and a real second team in between, another drive or share, a link that leads out, a folder that cannot be read, and the `.git` folder are still refused. Nothing else changes: the messages, the saved lane files and the output are the same. Technical: shared helpers `_lane_path_inside`, `_lane_ancestors_below` and `_worktrees_root_refusal` in `cli.py`, used by `_prepare_worktrees_root` and `_lane_checkout_place`.
+
 - **`agenttalk doctor` no longer calls the PowerShell host check "not needed" while a seat that left the
   team list may still run a continuous Codex wrapper.** Retiring, renaming or removing a seat leaves its
   health marker behind, and its wrapper may still be running. Doctor now reads those markers too: a
