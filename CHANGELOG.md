@@ -103,7 +103,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   pinned command is forbidden."), while "not forbidden" still supports the rule. A ban pointed back
   at the pinned command after a warning about another one ("do not use the plain command, or this
   one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`") is a ban
-  in any part of the sentence. "-never use it" is read as words, not as a command option. A web
+  in any part of the sentence. The check knows the same words for a command everywhere (command,
+  form, interpreter, runtime, executable, python, one), so "or the pinned runtime" is a ban too.
+  A later warning such as "avoid the plain command, and use the pinned one" is no longer flagged:
+  a "not" there counts as a ban of the pinned command only when it is about it. "-never use it" is read as words, not as a command option. A web
   address followed by `:`, `?` or `!` now ends before that mark. A warning about another command is
   no longer flagged when it names that command as "bare `agenttalk`", in double quotes, as "the one
   on PATH" or "the interpreter found on PATH", as "the shim", or as "never assume the plain command

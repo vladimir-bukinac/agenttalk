@@ -1271,3 +1271,82 @@ def test_885_a_warning_about_another_command_is_not_a_ban_and_a_ban_beside_it_st
 )
 def test_885_a_qualifier_before_the_pinned_command_itself_is_still_a_ban(shell, words) -> None:
     assert not _885_reads_as_the_rule(shell, words)
+
+
+# ------------------------------------------------------------ #885 fix round 1: every noun, what a negation governs
+#
+# One list of nouns names a command everywhere the check reads "the pinned ...", "the plain ..." or "the ... on PATH".
+_885_NOUNS = ["command", "executable", "form", "interpreter", "one", "python", "runtime"]
+
+
+def test_885_one_noun_list_names_a_command_everywhere() -> None:
+    assert sorted(sc._COMMAND_NOUNS) == _885_NOUNS
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("noun", _885_NOUNS)
+def test_885_every_noun_names_the_pinned_command_in_a_ban_and_another_command_in_a_warning(shell, noun) -> None:
+    for ban in (
+        f" and never use the plain command or the pinned {noun}",
+        f" and do not use the plain command, nor the pinned {noun}",
+        f"; the pinned {noun} must not be used",
+        f"; do not use the pinned {noun}",
+    ):
+        assert not _885_reads_as_the_rule(shell, ban), ban
+    for warning in (
+        f" and never use the plain command or the unpinned {noun}",
+        f"; the unpinned {noun} must not be used",
+        f", not the {noun} on PATH",
+    ):
+        assert _885_reads_as_the_rule(shell, warning), warning
+
+
+# A later clause: the negation must govern "the pinned ..." (at most six words between them, one aside in commas
+# right after the negation, otherwise no comma and no and / or / but / nor), not just come before it.
+# (a ban, a correct sentence of the same shape)
+_885_GOVERNED = {
+    "avoid-plain-then-use-pinned": (
+        "; avoid the plain command, and avoid the pinned one",
+        "; avoid the plain command, and use the pinned one",
+    ),
+    "never-bare-then-always-pinned": (
+        "; never use the bare form, and never the pinned one",
+        "; never use the bare form, always use the pinned one",
+    ),
+    "do-not-plain-but-pinned": (
+        "; do not use the plain command but do not use the pinned one either",
+        "; do not use the plain command but use the pinned one",
+    ),
+    "contracted-dont": (
+        "; don't use the pinned interpreter",
+        "; don't use the plain interpreter, use the pinned one",
+    ),
+    "contracted-mustnt-ever": (
+        "; you mustn't ever run the pinned command",
+        "; you mustn't run the plain command, run the pinned one",
+    ),
+    "aside-after-the-negation": (
+        "; do not, ever, use the pinned command",
+        "; do not, ever, use the plain command, use the pinned one",
+    ),
+    "long-aside-without-commas": (
+        "; do not under any circumstances use the pinned command",
+        "; do not under any circumstances use the plain command, use the pinned one",
+    ),
+    "comma-aside-of-several-words": (
+        "; do not, under any circumstances, use the pinned interpreter",
+        "; do not, under any circumstances, use the bare interpreter, but the pinned one",
+    ),
+    "cannot-rely-on": (
+        "; you cannot rely on the pinned runtime",
+        "; you cannot rely on the plain runtime, so rely on the pinned one",
+    ),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_GOVERNED))
+def test_885_a_later_negation_bans_the_pinned_command_only_when_it_governs_it(shell, name) -> None:
+    ban, correct = _885_GOVERNED[name]
+    assert not _885_reads_as_the_rule(shell, ban), ban
+    assert _885_reads_as_the_rule(shell, correct), correct

@@ -76,13 +76,21 @@ _REINFORCEMENT_RE = re.compile(
     r"replac(?:ed?)|bypass(?:ed)?|dropp?(?:ed)?|left\s+out|forbidden|prohibited|disallowed)\b",
     re.IGNORECASE,
 )
-# A negation counts as a prohibition when it points back at the pinned command:
-# "do not use it", "it must not be used", "do not use the pinned command" (but not "do not use the unpinned form").
+# The one list of nouns that name a command, used everywhere the check reads "the pinned ...", "the plain ...",
+# "the unpinned ...", "the bare ..." or "the ... on PATH" (#885): a noun missing from one place would let "or the pinned
+# runtime" pass as a warning about another command, or flag "not the runtime on PATH".
+_COMMAND_NOUNS = ("command", "executable", "form", "interpreter", "one", "python", "runtime")
+_COMMAND_NOUN = "(?:" + "|".join(_COMMAND_NOUNS) + ")"
+# A negation counts as a prohibition when it points back at the pinned command: "do not use it", "it must not be used",
+# "the pinned runtime must not be used", "do not use the pinned command" (but not "do not use the unpinned form"). In
+# the last shape the negation must govern "pinned": at most six words between them, none of them and / or / but /
+# nor, and no comma except around one aside right after the negation ("do not, under any circumstances, use the
+# pinned command"). So "avoid the plain command, and use the pinned one" is a warning, not a ban.
 _POINTS_BACK_RE = re.compile(
     rf"{_NEGATION}[^;.:!?]{{0,20}}?\b(?:use|used|run|call|invoke|follow|permit\w*|allow\w*)\b"
     r"\s+(?:it|this|that|them)\b"
-    rf"|\b(?:it|this|that|the\s+pinned\s+(?:command|form|interpreter))\s+(?:\w+\s+){{0,2}}?{_NEGATION}"
-    rf"|{_NEGATION}[^;.:!?]*\bpinned\b",
+    rf"|\b(?:it|this|that|the\s+pinned\s+{_COMMAND_NOUN})\s+(?:\w+\s+){{0,2}}?{_NEGATION}"
+    rf"|{_NEGATION}(?:\s*,[^,;.:!?]{{1,40}},)?(?:\s+(?!(?:and|or|but|nor)\b)[\w'’]+){{0,6}}?\s+(?:the\s+)?pinned\b",
     re.IGNORECASE,
 )
 # A clause ends at ; ! ? a blank line, any colon except the two below, or a period before whitespace or the end of the
@@ -120,18 +128,18 @@ _QUOTE_NOT_PINNED = r'"(?![^"\n]*AGENTTALK_PY)[^"\n]+"'
 _OTHER_TARGET_RE = re.compile(
     rf"{_NEGATION}\s+(?:(?:use|run|call|invoke|using|assume)\s+)?"
     r"(?:(?:the\s+)?(?:unpinned|plain|bare)\s+"
-    r"(?:(?:\w+\s+){0,2}?(?:form|command|interpreter|one|python)\b(?:\s+works?\b)?"
+    rf"(?:(?:\w+\s+){{0,2}}?{_COMMAND_NOUN}\b(?:\s+works?\b)?"
     rf"|{_SPAN_NOT_PINNED}|{_QUOTE_NOT_PINNED})"
     rf"|{_SPAN_NOT_PINNED}"
-    r"|the\s+(?:one|interpreter|python|command|form)\s+(?:found\s+)?on\s+(?:the\s+)?PATH\b"
+    rf"|the\s+{_COMMAND_NOUN}\s+(?:found\s+)?on\s+(?:the\s+)?PATH\b"
     r"|the\s+shim\b)",
     re.IGNORECASE,
 )
 # After a warning about another command, a ban pointed back at the pinned one in the same clause (#885 item 2):
 # "..., or this one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`".
 _POINTED_BACK_AFTER_RE = re.compile(
-    r"\s*,?\s+(?:(?:or|nor)\s+(?:it\b|`?(?:this|that)`?(?:\s+one)?|the\s+pinned\s+(?:one|command|form|interpreter))"
-    r"|and\s+(?:`?(?:this|that)`?(?:\s+one)?|the\s+pinned\s+(?:one|command|form|interpreter))\s+either)(?![\w-])",
+    rf"\s*,?\s+(?:(?:or|nor)\s+(?:it\b|`?(?:this|that)`?(?:\s+one)?|the\s+pinned\s+{_COMMAND_NOUN})"
+    rf"|and\s+(?:`?(?:this|that)`?(?:\s+one)?|the\s+pinned\s+{_COMMAND_NOUN})\s+either)(?![\w-])",
     re.IGNORECASE,
 )
 # A shell option is masked so `--no-sync` is not read as "no". A single dash before a whole negation word and a word
@@ -466,7 +474,10 @@ def _forbids_the_pinned_command(after: str) -> bool:
     clause ("and the plain command is forbidden") reads as a ban, as "must not be used" does, because the reader cannot
     tell which command it is about; "or it" right after a warning reads as a ban even when "it" starts a new thought;
     "without the <word>" is not read as another command except for the shim, because "without the pinned interpreter"
-    bans the rule; a warning in single or typographic quotes is not recognised."""
+    bans the rule; a warning in single or typographic quotes is not recognised. One limit is on the other side: in a
+    later clause a negation bans "the pinned ..." only when it governs it (``_POINTS_BACK_RE``), so a ban written
+    further away ("do not use the plain command and, frankly, the pinned one") is not seen; the broader reading flagged
+    correct warnings such as "avoid the plain command, and use the pinned one"."""
     for number, clause in enumerate(_CLAUSE_END_RE.split(after)):
         clause = _SHELL_QUOTED_ARGUMENT_RE.sub(lambda m: " " * len(m.group(0)), clause)
         clause = re.sub(r"(?<!\w)_{1,2}|_{1,2}(?!\w)", " ", clause)
