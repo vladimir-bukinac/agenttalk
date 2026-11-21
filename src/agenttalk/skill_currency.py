@@ -82,21 +82,19 @@ _REINFORCEMENT_RE = re.compile(
 _COMMAND_NOUNS = ("command", "executable", "form", "interpreter", "one", "python", "runtime")
 _COMMAND_NOUN = "(?:" + "|".join(_COMMAND_NOUNS) + ")"
 # A negation counts as a prohibition when it points back at the pinned command: "do not use it", "it must not be used",
-# "the pinned runtime must not be used", "do not use the pinned command" (but not "do not use the unpinned form"). In
-# the last shape the negation must govern "pinned": at most six words between them, none of them and / or / but /
-# nor, and no comma except around one aside right after the negation ("do not, under any circumstances, use the
-# pinned command"). So "avoid the plain command, and use the pinned one" is a warning, not a ban.
+# "the pinned runtime must not be used". A negation followed later by "pinned" ("do not, ever, use the pinned
+# command") is read by `_negation_bans_the_pinned_command`.
 _POINTS_BACK_RE = re.compile(
     rf"{_NEGATION}[^;.:!?]{{0,20}}?\b(?:use|used|run|call|invoke|follow|permit\w*|allow\w*)\b"
     r"\s+(?:it|this|that|them)\b"
-    rf"|\b(?:it|this|that|the\s+pinned\s+{_COMMAND_NOUN})\s+(?:\w+\s+){{0,2}}?{_NEGATION}"
-    rf"|{_NEGATION}(?:\s*,[^,;.:!?]{{1,40}},)?(?:\s+(?!(?:and|or|but|nor)\b)[\w'’]+){{0,6}}?\s+(?:the\s+)?pinned\b",
+    rf"|\b(?:it|this|that|the\s+pinned\s+{_COMMAND_NOUN})\s+(?:\w+\s+){{0,2}}?{_NEGATION}",
     re.IGNORECASE,
 )
 # A clause ends at ; ! ? a blank line, any colon except the two below, or a period before whitespace or the end of the
 # text, closing quotes, brackets and emphasis allowed before that whitespace ("... is required.** Do not ..."). URL
-# punctuation is masked before splitting; drive-letter colons and URL schemes are also exempt here. A period is exempt
-# inside a word (`agenttalk.assurance`, `reply.md`, 0.105.0), written without backticks. A drive is one letter that is
+# punctuation is masked before splitting; drive-letter colons, URL schemes and the colon of a PowerShell `$env:` name
+# are also exempt here. A period is exempt inside a word (`agenttalk.assurance`, `reply.md`, 0.105.0), written without
+# backticks. A drive is one letter that is
 # no part of a longer word, the colon, and a path character at once: `C:\temp`, `C:/temp`, and also `C:file`, a path
 # with no slash. Without a slash after the colon, the lone letter must also stand at the start or after whitespace, a
 # quote, = ( or [ , so a one-letter word before a colon ("Option A:do not ...", "x:y") reads as a drive: that choice
@@ -108,7 +106,7 @@ _CLAUSE_END_RE = re.compile(
     "[;!?]"
     f"|:(?!{_PATH_CHAR})"  # a colon followed by whitespace, the end, emphasis, a closer: no path
     "|(?<![A-Za-z]):"  # a colon after no letter (a digit, a mark, the start)
-    "|(?<=[A-Za-z]{2}):(?!//)"  # after two letters (not a drive letter), unless it is a URL scheme
+    "|(?<=[A-Za-z]{2})(?<!\\$env):(?!//)"  # after two letters (not a drive letter), unless a URL scheme or `$env:`
     f"|(?<=[^{_ALONE_BEFORE_A_DRIVE_LETTER}A-Za-z][A-Za-z]):(?![\\\\/])"  # one letter after a mark, no slash: no drive
     "|\\.[)*_\\]}\"'\u2019\u201d]*(?!\\S)"
     "|\\n\\s*\\n"
@@ -125,16 +123,32 @@ _SHELL_QUOTED_ARGUMENT_RE = re.compile(r"(?:^|\s)--?\w[\w-]*(?:=|\s+)([\"'])(.*?
 # command. Single and typographic quotes are not read: an apostrophe cannot be told from a quote (a stated limit).
 _SPAN_NOT_PINNED = r"`(?!\s*(?:this|that|it|them)\s*`)(?![^`]*AGENTTALK_PY)[^`\n]+`"
 _QUOTE_NOT_PINNED = r'"(?![^"\n]*AGENTTALK_PY)[^"\n]+"'
-_OTHER_TARGET_RE = re.compile(
-    rf"{_NEGATION}\s+(?:(?:use|run|call|invoke|using|assume)\s+)?"
+_ANOTHER_COMMAND = (
     r"(?:(?:the\s+)?(?:unpinned|plain|bare)\s+"
     rf"(?:(?:\w+\s+){{0,2}}?{_COMMAND_NOUN}\b(?:\s+works?\b)?"
     rf"|{_SPAN_NOT_PINNED}|{_QUOTE_NOT_PINNED})"
     rf"|{_SPAN_NOT_PINNED}"
     rf"|the\s+{_COMMAND_NOUN}\s+(?:found\s+)?on\s+(?:the\s+)?PATH\b"
-    r"|the\s+shim\b)",
+    r"|the\s+shim\b)"
+)
+_ANOTHER_COMMAND_RE = re.compile(_ANOTHER_COMMAND, re.IGNORECASE)
+_OTHER_TARGET_RE = re.compile(
+    rf"{_NEGATION}\s+(?:(?:use|run|call|invoke|using|assume)\s+)?{_ANOTHER_COMMAND}",
     re.IGNORECASE,
 )
+# A new part that tells the reader to use the pinned command, at the very end of the text before "pinned": a comma, a
+# bracket or and / but / then / so / instead / rather, any of those or always / just / only / simply / now, then a
+# positive verb, then "the" (", and use the", "but always use the", "and instead rely on the"). No negation fits in it.
+_POSITIVE_PART_RE = re.compile(
+    r"(?:,|\(|\b(?:and|but|then|so|instead|rather)\b)"
+    r"(?:[\s,]*\b(?:and|but|then|so|instead|rather|always|just|only|simply|now)\b)*"
+    r"[\s,]*\b(?:use|run|call|invoke|prefer|rely\s+on|switch\s+to)\s+(?:only\s+)?(?:the\s+)?"
+    r"(?:`?(?:&\s*)?\"?\$(?:env[:\s])?)?\Z",  # or where the pinned code starts: `"$AGENTTALK_PY", `& "$env:...
+    re.IGNORECASE,
+)
+# The pinned command named in a later clause: the word "pinned", or its code (the variable's name; a colon inside a
+# code span is masked to a space before this is read, so `$env AGENTTALK_PY` is matched too).
+_PINNED_WORD_RE = re.compile(r"\bpinned\b|(?<![\w])AGENTTALK_PY(?![\w])", re.IGNORECASE)
 # After a warning about another command, a ban pointed back at the pinned one in the same clause (#885 item 2):
 # "..., or this one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`".
 _POINTED_BACK_AFTER_RE = re.compile(
@@ -462,22 +476,40 @@ def _join_fenced_continuations(text: str) -> str:
     return "\n".join(joined_lines)
 
 
+def _negation_bans_the_pinned_command(clause: str) -> bool:
+    """True when a negation in ``clause`` is followed by "pinned", however far away ("never under any circumstances
+    whatsoever attempt to use the pinned interpreter"), unless that "pinned" is undone: the words since the last
+    negation before it name another command (``_ANOTHER_COMMAND_RE``) and then end in a new positive part
+    (``_POSITIVE_PART_RE``), so "pinned" is the object of a positive instruction ("avoid the plain command, and use the
+    pinned one"). A ban is the default; the exception needs both pieces, so it fails safe."""
+    negations = [match.end() for match in _NEGATION_RE.finditer(clause)]
+    for pinned in _PINNED_WORD_RE.finditer(clause):
+        ends = [end for end in negations if end <= pinned.start()]
+        if not ends:
+            continue
+        between = clause[ends[-1] : pinned.start()]
+        positive = _POSITIVE_PART_RE.search(between)
+        if positive is None or not _ANOTHER_COMMAND_RE.search(between, 0, positive.start()):
+            return True
+    return False
+
+
 def _forbids_the_pinned_command(after: str) -> bool:
     """Find prohibitions of the pinned command, not negation about other commands or shell arguments.
 
     In any clause, a warning about another command (``_OTHER_TARGET_RE``) followed by a ban pointed back at this one
     (``_POINTED_BACK_AFTER_RE``, "or this one") is a ban. Otherwise, in the command's own clause every negation is a
-    ban except such a warning; in a later clause only a ban that points back at the pinned command counts
-    (``_POINTS_BACK_RE``). Stated limits, all on the safe side (a correct
-    sentence is flagged and reworded; no ban passes): "without arguments" and "with no arguments" read as bans, because
-    an exception for them could hide "without it" (#885 item 5); a ban word after another command in the command's own
-    clause ("and the plain command is forbidden") reads as a ban, as "must not be used" does, because the reader cannot
-    tell which command it is about; "or it" right after a warning reads as a ban even when "it" starts a new thought;
-    "without the <word>" is not read as another command except for the shim, because "without the pinned interpreter"
-    bans the rule; a warning in single or typographic quotes is not recognised. One limit is on the other side: in a
-    later clause a negation bans "the pinned ..." only when it governs it (``_POINTS_BACK_RE``), so a ban written
-    further away ("do not use the plain command and, frankly, the pinned one") is not seen; the broader reading flagged
-    correct warnings such as "avoid the plain command, and use the pinned one"."""
+    ban except such a warning; in a later clause a ban that points back at the pinned command counts
+    (``_POINTS_BACK_RE``), and so does any negation followed by "pinned" unless a positive part undoes it
+    (``_negation_bans_the_pinned_command``). Stated limits, all on the safe side (a correct sentence is flagged and
+    reworded; no ban passes): "without arguments" and "with no arguments" read as bans, because an exception for them
+    could hide "without it" (#885 item 5); a ban word after another command in the command's own clause ("and the
+    plain command is forbidden") reads as a ban, as "must not be used" does, because the reader cannot tell which
+    command it is about; "or it" right after a warning reads as a ban even when "it" starts a new thought; "without the
+    <word>" is not read as another command except for the shim, because "without the pinned interpreter" bans the rule;
+    a warning in single or typographic quotes is not recognised; in a later clause the pinned command is accepted after
+    a negation only as the object of a positive verb (use, run, call, invoke, prefer, rely on, switch to), so "do not
+    use the bare interpreter, but the pinned one", with the verb left out, reads as a ban."""
     for number, clause in enumerate(_CLAUSE_END_RE.split(after)):
         clause = _SHELL_QUOTED_ARGUMENT_RE.sub(lambda m: " " * len(m.group(0)), clause)
         clause = re.sub(r"(?<!\w)_{1,2}|_{1,2}(?!\w)", " ", clause)
@@ -489,7 +521,7 @@ def _forbids_the_pinned_command(after: str) -> bool:
             clause = _OTHER_TARGET_RE.sub("", clause)
             if _NEGATION_RE.search(_SHELL_FLAG_RE.sub("", clause)):
                 return True
-        elif _POINTS_BACK_RE.search(clause):
+        elif _POINTS_BACK_RE.search(clause) or _negation_bans_the_pinned_command(clause):
             return True
     return False
 

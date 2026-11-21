@@ -105,8 +105,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`") is a ban
   in any part of the sentence. The check knows the same words for a command everywhere (command,
   form, interpreter, runtime, executable, python, one), so "or the pinned runtime" is a ban too.
-  A later warning such as "avoid the plain command, and use the pinned one" is no longer flagged:
-  a "not" there counts as a ban of the pinned command only when it is about it. "-never use it" is read as words, not as a command option. A web
+  In a later part of the sentence, a "not" followed by the pinned command is a ban however far
+  apart they are ("never under any circumstances whatsoever attempt to use the pinned
+  interpreter"), and so is a "not" followed by the pinned command's own code (`"$AGENTTALK_PY"`).
+  The one exception is a correct warning that names another command and then tells you to use the
+  pinned one ("avoid the plain command, and use the pinned one", "but always use the pinned one",
+  "and instead rely on the pinned runtime"), which is no longer flagged. A shortened "but the
+  pinned one", with no verb, is still flagged on purpose. "-never use it" is read as words, not as a command option. A web
   address followed by `:`, `?` or `!` now ends before that mark. A warning about another command is
   no longer flagged when it names that command as "bare `agenttalk`", in double quotes, as "the one
   on PATH" or "the interpreter found on PATH", as "the shim", or as "never assume the plain command

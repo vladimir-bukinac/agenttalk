@@ -1301,9 +1301,8 @@ def test_885_every_noun_names_the_pinned_command_in_a_ban_and_another_command_in
         assert _885_reads_as_the_rule(shell, warning), warning
 
 
-# A later clause: the negation must govern "the pinned ..." (at most six words between them, one aside in commas
-# right after the negation, otherwise no comma and no and / or / but / nor), not just come before it.
-# (a ban, a correct sentence of the same shape)
+# A later clause: a negation of "the pinned ..." is a ban; another command negated and then the pinned one
+# used in a new positive part is not. (a ban, a correct sentence of the same shape)
 _885_GOVERNED = {
     "avoid-plain-then-use-pinned": (
         "; avoid the plain command, and avoid the pinned one",
@@ -1335,7 +1334,7 @@ _885_GOVERNED = {
     ),
     "comma-aside-of-several-words": (
         "; do not, under any circumstances, use the pinned interpreter",
-        "; do not, under any circumstances, use the bare interpreter, but the pinned one",
+        "; do not, under any circumstances, use the bare interpreter, but use the pinned one",
     ),
     "cannot-rely-on": (
         "; you cannot rely on the pinned runtime",
@@ -1350,3 +1349,72 @@ def test_885_a_later_negation_bans_the_pinned_command_only_when_it_governs_it(sh
     ban, correct = _885_GOVERNED[name]
     assert not _885_reads_as_the_rule(shell, ban), ban
     assert _885_reads_as_the_rule(shell, correct), correct
+
+
+# ------------------------------------------ #885 fix round 2: a later "not ... the pinned X" is a ban unless undone
+#
+# In a later clause a negation followed by "pinned" is a ban, however many words lie between. It is not a ban only
+# when the negated part names another command and a positive instruction then starts a new part with "pinned" as
+# its object (", and use the pinned one", "but always use the pinned one", "and instead rely on the pinned runtime").
+_885_LATER_NEGATION = {
+    # bans: the default, whatever the distance or the asides
+    "probe-adverb-before-the-aside": ("; do not ever, under any circumstances, use the pinned interpreter", False),
+    "probe-more-than-six-words": (
+        "; never under any circumstances whatsoever attempt to use the pinned interpreter",
+        False,
+    ),
+    "try-to": ("; do not try to use the pinned command", False),
+    "ever-ever-in-any-situation": ("; never, ever, in any situation, call the pinned runtime", False),
+    "parenthesised-aside": ("; do not (under any circumstances) use the pinned interpreter", False),
+    "contracted-really-ever": ("; you shouldn't really ever be using the pinned one", False),
+    "contracted-cant": ("; you can't, at any point, rely on the pinned executable", False),
+    "comma-aside-kept": ("; do not, ever, use the pinned command", False),
+    "plain-and-pinned-too": ("; avoid the plain command and the pinned runtime too", False),
+    "restart-negated-again": ("; avoid the plain command, and do not use the pinned one", False),
+    "restart-with-a-ban-verb": ("; avoid the plain command, and stop using the pinned one", False),
+    "elliptical-but-the-pinned-one": ("; do not use the bare interpreter, but the pinned one", False),
+    # correct sentences: another command is negated, then the pinned one is the object of a positive instruction
+    "but-always-use": ("; never use the plain command but always use the pinned one", True),
+    "and-instead-rely-on": ("; avoid the plain command and instead rely on the pinned runtime", True),
+    "comma-and-use": ("; avoid the plain command, and use the pinned one", True),
+    "in-brackets": ("; avoid the plain command (use the pinned one)", True),
+    "contracted-just-use": ("; don't ever use the bare form, just use the pinned interpreter", True),
+    "then-switch-to": ("; avoid the plain command, then switch to the pinned one", True),
+    "contracted-prefer": ("; you mustn't run the plain command, prefer the pinned one", True),
+    "own-clause": ("; do not use the plain command; use the pinned interpreter", True),
+    "long-aside-then-restart": (
+        "; do not, under any circumstances whatsoever, use the plain command, and use the pinned one",
+        True,
+    ),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_LATER_NEGATION))
+def test_885_a_later_negation_of_the_pinned_command_is_a_ban_unless_a_positive_part_undoes_it(shell, name) -> None:
+    words, states_the_rule = _885_LATER_NEGATION[name]
+    assert _885_reads_as_the_rule(shell, words) is states_the_rule, words
+
+
+# A later ban may name the pinned command by its code, not by the word "pinned". (wording with {cmd}, states the rule)
+_885_PINNED_BY_ITS_CODE = {
+    "do-not-run-the-code": ("; do not run `{cmd}` at all", False),
+    "never-use-the-code": ("; never use `{cmd}`", False),
+    "never-ever-the-code-in-quotes": ('; never, ever, run "{cmd}"', False),
+    "plain-then-use-the-code": ("; avoid the plain command, and use `{cmd}`", True),
+    "span-then-use-the-code": ("; do not use `python -m agenttalk`, use `{cmd}`", True),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_PINNED_BY_ITS_CODE))
+def test_885_a_later_ban_of_the_pinned_command_written_as_code_is_a_ban(shell, name) -> None:
+    words, states_the_rule = _885_PINNED_BY_ITS_CODE[name]
+    words = words.format(cmd=PINNED_FORMS[shell])
+    assert _885_reads_as_the_rule(shell, words) is states_the_rule, words
+
+
+def test_885_the_colon_of_a_powershell_env_variable_does_not_end_a_clause() -> None:
+    assert len(sc._CLAUSE_END_RE.split('never run & "$env:AGENTTALK_PY" -m agenttalk')) == 1
+    assert len(sc._CLAUSE_END_RE.split("Note: never run it")) == 2
+    assert len(sc._CLAUSE_END_RE.split("the env: never run it")) == 2
