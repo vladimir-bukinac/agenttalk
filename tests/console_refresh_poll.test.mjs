@@ -18,6 +18,22 @@ source = source.replace(marker, `  globalThis.hooks = {
       fetchAttention = feeds.attention; fetchLeadChat = feeds.chat; fetchIntents = feeds.intents;
       fetchGates = feeds.gates; fetchRiskRegister = feeds.risk; state.view = view;
     },
+    startReal: function (view) {
+      renderActiveView = function () {};
+      renderChrome = function () {};
+      startEndpointPoll(view === 'gates' ? fetchGates : fetchRiskRegister);
+    },
+    go,
+    rootEntry: function () {
+      state.view = 'risk-register';
+      fetchSession = fetchIntents = fetchLeadChat = fetchLearning = fetchOnboarding = fetchGates = fetchOwnership = function () {};
+      fetchRootPayloads();
+    },
+    switchRoot: function () {
+      rootGeneration++;
+      state.selectedRootId = 'project-b';
+      this.rootEntry();
+    },
   };\n\n` + marker);
 
 let now = 0;
@@ -41,7 +57,7 @@ const hooks = ctx.hooks;
 const requests = [];
 let displayed = '';
 let inFlight = false;
-ctx.fetch = () => new Promise((resolve, reject) => requests.push({ resolve, reject }));
+ctx.fetch = (url) => new Promise((resolve, reject) => requests.push({ url, resolve, reject }));
 function fetcher() {
   if (inFlight) return;
   inFlight = true;
@@ -120,6 +136,34 @@ if (scenario === 'busy') {
   assert.equal(calls, 1);
   await advance(1);
   assert.equal(calls, 2, 'synchronous errors keep the normal cadence');
+} else if (scenario === 'switch-in-flight') {
+  await settle(0, 'state');
+  hooks.startReal('risk-register');
+  hooks.switchRoot();
+  assert.equal(requests.filter((r) => r.url && r.url.startsWith('/api/risk-register')).length, 2,
+    'new project starts without waiting for the old project');
+  assert.match(requests[2].url, /root=project-b/);
+  hooks.refreshNow();
+  await settle(1, { ok: false });
+  assert.equal(requests.filter((r) => r.url && r.url.startsWith('/api/risk-register')).length, 2,
+    'old completion must not start a follow-up');
+  await settle(2, { ok: false });
+  assert.equal(requests.filter((r) => r.url && r.url.startsWith('/api/risk-register')).length, 3,
+    'new project follows up the click');
+} else if (scenario.startsWith('outside-')) {
+  const view = scenario.slice('outside-'.length);
+  const path = view === 'gates' ? '/api/gates' : '/api/risk-register';
+  await settle(0, 'state');
+  hooks.startReal(view);
+  await settle(1, { ok: false });
+  if (view === 'gates') hooks.go(view); else hooks.rootEntry();
+  assert.equal(requests.filter((r) => r.url === path).length, 2, 'the caller starts a request');
+  hooks.refreshNow();
+  hooks.refreshNow();
+  await flush();
+  assert.equal(requests.filter((r) => r.url === path).length, 2, 'no overlapping request');
+  await settle(2, { ok: false });
+  assert.equal(requests.filter((r) => r.url === path).length, 3, 'clicks start one follow-up');
 } else if (scenario.startsWith('view-')) {
   const view = scenario.slice(5);
   const pending = {};

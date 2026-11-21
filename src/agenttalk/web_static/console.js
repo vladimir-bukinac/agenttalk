@@ -1589,12 +1589,12 @@
     if (opts && 'selectedAgent' in opts) state.selectedAgent = opts.selectedAgent;
     if (opts && 'sessionRid' in opts) state.sessionRid = opts.sessionRid;
     // Attention/thread data is view-scoped; refetch on entry.
-    if (view === 'attention') fetchAttention();
-    if (view === 'lead-chat') fetchLeadChat();
+    if (view === 'attention') refreshEndpoint(fetchAttention);
+    if (view === 'lead-chat') refreshEndpoint(fetchLeadChat);
     if (view === 'learning') fetchLearning();
     if (view === 'onboarding') fetchOnboarding();
-    if (view === 'gates') fetchGates();
-    if (view === 'risk-register') fetchRiskRegister();
+    if (view === 'gates') refreshEndpoint(fetchGates);
+    if (view === 'risk-register') refreshEndpoint(fetchRiskRegister);
     if (view === 'ownership') fetchOwnership();
     if (view === 'sessions' && state.sessionRid) fetchThread(state.sessionRid);
     renderActiveView();
@@ -2564,7 +2564,7 @@
         false, function () {
           queuedAnswers[toRequest] = true;
           delete answerComposerState[toRequest];
-          fetchAttention();
+          refreshEndpoint(fetchAttention);
         });
       send.disabled = true;
     });
@@ -3156,7 +3156,7 @@
       if (!body) return;
       postLeadChat({ body: body }, false, function () {
         leadChatComposerState.body = '';
-        fetchLeadChat();
+        refreshEndpoint(fetchLeadChat);
       });
       send.disabled = true;
     });
@@ -3293,8 +3293,8 @@
       postLeadChat({ to_request: toRequest, body: body }, false, function () {
         queuedAnswers[toRequest] = true;
         delete answerComposerState[toRequest];
-        fetchLeadChat();
-        fetchAttention();
+        refreshEndpoint(fetchLeadChat);
+        refreshEndpoint(fetchAttention);
       });
       send.disabled = true;
     });
@@ -4612,8 +4612,8 @@
         }
         actionSession.error = 'Queued ' + (res.data.intent_id || 'intent');
         if (onQueued) onQueued(res.data);
-        fetchIntents();
-        fetchAttention();
+        refreshEndpoint(fetchIntents);
+        refreshEndpoint(fetchAttention);
       }
       if (state.view === 'sessions' || state.view === 'attention'
         || state.view === 'lead-chat') renderActiveView();
@@ -4663,9 +4663,9 @@
           ? 'Sent ' + res.data.message_id
           : 'Queued ' + (res.data.intent_id || 'lead chat');
         if (onQueued) onQueued(res.data);
-        if (res.data && res.data.intent_id) fetchIntents();
-        fetchLeadChat();
-        fetchAttention();
+        if (res.data && res.data.intent_id) refreshEndpoint(fetchIntents);
+        refreshEndpoint(fetchLeadChat);
+        refreshEndpoint(fetchAttention);
       }
       if (state.view === 'lead-chat' || state.view === 'attention') renderActiveView();
     }).catch(function () {
@@ -5005,13 +5005,13 @@
 
   function fetchRootPayloads() {
     fetchSession();
-    fetchIntents();
-    fetchAttention();
-    fetchLeadChat();
+    refreshEndpoint(fetchIntents);
+    refreshEndpoint(fetchAttention);
+    refreshEndpoint(fetchLeadChat);
     fetchLearning();
     fetchOnboarding();
-    fetchGates();
-    fetchRiskRegister();
+    refreshEndpoint(fetchGates);
+    refreshEndpoint(fetchRiskRegister);
     fetchOwnership();
   }
 
@@ -5054,6 +5054,8 @@
     var timer = null;
     var running = false;
     var again = false;
+    var runningGeneration = rootGeneration;
+    var runId = 0;
     function scheduleNext() {
       running = false;
       if (again) { again = false; run(); }
@@ -5062,13 +5064,23 @@
     function run() {
       timer = null;
       running = true;
+      runningGeneration = rootGeneration;
+      var currentRun = ++runId;
+      function finished() {
+        if (currentRun === runId) scheduleNext();
+      }
       var request;
       try { request = fetcher(); }
-      catch (e) { scheduleNext(); return; }
-      Promise.resolve(request).then(scheduleNext, scheduleNext);
+      catch (e) { finished(); return; }
+      Promise.resolve(request).then(finished, finished);
     }
     endpointPolls.set(fetcher, function () {
-      if (running) { again = true; return; }
+      if (running && (fetcher === fetchState || runningGeneration === rootGeneration)) {
+        again = true;
+        return;
+      }
+      // A new project must not wait for an old project's in-flight request.
+      again = false;
       if (timer !== null) clearTimeout(timer);
       timer = null;
       run();
