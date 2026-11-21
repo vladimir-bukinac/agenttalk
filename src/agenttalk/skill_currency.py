@@ -56,8 +56,9 @@ _PLAIN_PYTHON_FORM = "python -m agenttalk"
 # HTML comments do not state the rule.
 _FALLBACK = r"\botherwise\b|\bis\s+not\s+set\b|\bfall(?:s)?\s*back\b"
 # "forbidden", "prohibited" and "disallowed" forbid as plainly as "must not" (#885): "The pinned command is forbidden."
+# So does "neither ... nor" ("use neither the plain command nor the pinned one").
 _NEGATION = (
-    r"\b(?:not|never|avoid|without|refrain|cannot|no|don['’]t|mustn['’]t|shouldn['’]t|can['’]t"
+    r"\b(?:not|never|neither|avoid|without|refrain|cannot|no|don['’]t|mustn['’]t|shouldn['’]t|can['’]t"
     r"|forbidden|prohibited|disallowed)\b"
 )
 _UP_TO_FALLBACK_WITHOUT_NEGATION = rf"(?:(?!{_FALLBACK}|{_NEGATION})[\s\S]){{0,600}}?"
@@ -106,7 +107,7 @@ _CLAUSE_END_RE = re.compile(
     "[;!?]"
     f"|:(?!{_PATH_CHAR})"  # a colon followed by whitespace, the end, emphasis, a closer: no path
     "|(?<![A-Za-z]):"  # a colon after no letter (a digit, a mark, the start)
-    "|(?<=[A-Za-z]{2})(?<!\\$env):(?!//)"  # after two letters (not a drive letter), unless a URL scheme or `$env:`
+    "|(?<=[A-Za-z]{2})(?<!\\$[eE][nN][vV]):(?!//)"  # after two letters (no drive), unless a URL scheme or `$env:`
     f"|(?<=[^{_ALONE_BEFORE_A_DRIVE_LETTER}A-Za-z][A-Za-z]):(?![\\\\/])"  # one letter after a mark, no slash: no drive
     "|\\.[)*_\\]}\"'\u2019\u201d]*(?!\\S)"
     "|\\n\\s*\\n"
@@ -149,6 +150,9 @@ _POSITIVE_PART_RE = re.compile(
 # The pinned command named in a later clause: the word "pinned", or its code (the variable's name; a colon inside a
 # code span is masked to a space before this is read, so `$env AGENTTALK_PY` is matched too).
 _PINNED_WORD_RE = re.compile(r"\bpinned\b|(?<![\w])AGENTTALK_PY(?![\w])", re.IGNORECASE)
+# A word after the pinned command that keeps it inside the prohibition: "and use the pinned one either", "... too",
+# "... as well", "... also", "... neither". Anywhere after it in the clause, so it fails safe ("... which works too").
+_STILL_FORBIDDEN_AFTER_RE = re.compile(r"\b(?:either|too|also|as\s+well|neither)\b", re.IGNORECASE)
 # After a warning about another command, a ban pointed back at the pinned one in the same clause (#885 item 2):
 # "..., or this one", "or it", "nor this one", "or the pinned one", "and this one either", "or `this`".
 _POINTED_BACK_AFTER_RE = re.compile(
@@ -491,6 +495,8 @@ def _negation_bans_the_pinned_command(clause: str) -> bool:
         positive = _POSITIVE_PART_RE.search(between)
         if positive is None or not _ANOTHER_COMMAND_RE.search(between, 0, positive.start()):
             return True
+        if _STILL_FORBIDDEN_AFTER_RE.search(clause, pinned.end()):
+            return True
     return False
 
 
@@ -509,7 +515,9 @@ def _forbids_the_pinned_command(after: str) -> bool:
     <word>" is not read as another command except for the shim, because "without the pinned interpreter" bans the rule;
     a warning in single or typographic quotes is not recognised; in a later clause the pinned command is accepted after
     a negation only as the object of a positive verb (use, run, call, invoke, prefer, rely on, switch to), so "do not
-    use the bare interpreter, but the pinned one", with the verb left out, reads as a ban."""
+    use the bare interpreter, but the pinned one", with the verb left out, reads as a ban; and any "either", "too",
+    "also", "as well" or "neither" after it in the same clause keeps it in the ban, even in "which also works" or
+    "either way"."""
     for number, clause in enumerate(_CLAUSE_END_RE.split(after)):
         clause = _SHELL_QUOTED_ARGUMENT_RE.sub(lambda m: " " * len(m.group(0)), clause)
         clause = re.sub(r"(?<!\w)_{1,2}|_{1,2}(?!\w)", " ", clause)

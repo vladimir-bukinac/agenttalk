@@ -111,7 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The one exception is a correct warning that names another command and then tells you to use the
   pinned one ("avoid the plain command, and use the pinned one", "but always use the pinned one",
   "and instead rely on the pinned runtime"), which is no longer flagged. A shortened "but the
-  pinned one", with no verb, is still flagged on purpose. "-never use it" is read as words, not as a command option. A web
+  pinned one", with no verb, is still flagged on purpose, and so is that warning when "either",
+  "too", "also" or "as well" follows the pinned command ("and use the pinned one either"). "Neither
+  ... nor the pinned one" is a ban, and the PowerShell form is recognised however `$env:` is
+  capitalised (`$ENV:`, `$Env:`). "-never use it" is read as words, not as a command option. A web
   address followed by `:`, `?` or `!` now ends before that mark. A warning about another command is
   no longer flagged when it names that command as "bare `agenttalk`", in double quotes, as "the one
   on PATH" or "the interpreter found on PATH", as "the shim", or as "never assume the plain command

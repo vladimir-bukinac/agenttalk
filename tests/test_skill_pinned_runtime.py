@@ -1418,3 +1418,76 @@ def test_885_the_colon_of_a_powershell_env_variable_does_not_end_a_clause() -> N
     assert len(sc._CLAUSE_END_RE.split('never run & "$env:AGENTTALK_PY" -m agenttalk')) == 1
     assert len(sc._CLAUSE_END_RE.split("Note: never run it")) == 2
     assert len(sc._CLAUSE_END_RE.split("the env: never run it")) == 2
+
+
+# ------------------------------------------- #885 fix round 3: $ENV: in any case, a trailing "either", "neither"
+#
+# PowerShell reads the scope name in any case ($env:, $ENV:, $Env:), so every pattern that knows the pinned PowerShell
+# command must too.
+_885_ENV_CASES = ["$env:", "$ENV:", "$Env:", "$eNv:"]
+
+
+@pytest.mark.parametrize("scope", _885_ENV_CASES)
+def test_885_the_env_colon_does_not_end_a_clause_in_any_case(scope) -> None:
+    assert len(sc._CLAUSE_END_RE.split(f'never run & "{scope}AGENTTALK_PY" -m agenttalk')) == 1
+    assert len(sc._CLAUSE_END_RE.split("Note: never run it")) == 2
+
+
+@pytest.mark.parametrize("scope", _885_ENV_CASES)
+def test_885_the_pinned_powershell_command_in_any_case_states_the_rule(scope) -> None:
+    rule = f'When AGENTTALK_PY is set, run `& "{scope}AGENTTALK_PY" -m agenttalk`; otherwise use your manual.'
+    assert sc._states_pinned_rule(rule + _885_TAIL)
+    assert not sc._states_pinned_rule(rule.replace("; otherwise", "; never use it; otherwise") + _885_TAIL)
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("scope", _885_ENV_CASES)
+def test_885_a_later_ban_of_the_pinned_powershell_command_in_any_case_is_a_ban(shell, scope) -> None:
+    code = f'& "{scope}AGENTTALK_PY" -m agenttalk'
+    # the code in prose, in a code span, and as the object of a warning's qualifier: bans
+    for ban in (f"; never use {code}", f"; never use `{code}`", f"; do not use the plain `{code}`"):
+        assert not _885_reads_as_the_rule(shell, ban), ban
+    # the same code in a new positive part, or in its own clause: the rule
+    for rule in (f"; avoid the plain command, and use {code}", f"; never use the plain command; use `{code}`"):
+        assert _885_reads_as_the_rule(shell, rule), rule
+
+
+# A positive part whose object is followed by a word that keeps it inside the prohibition ("either", "too", "as well",
+# "also", "neither") is a ban. (wording, states the rule)
+_885_TRAILING_POLARITY = {
+    "probe-and-use-either": ("; do not use the plain command and use the pinned interpreter either", False),
+    "comma-and-use-either": ("; avoid the plain command, and use the pinned one either", False),
+    "and-use-as-well": ("; do not use the plain command, and use the pinned one as well", False),
+    "and-use-too": ("; avoid the plain command, and use the pinned one too", False),
+    "and-use-also": ("; avoid the plain command, and use the pinned runtime also", False),
+    "nor-use-either": ("; do not use the plain command nor use the pinned one either", False),
+    "and-also-the-pinned-one": ("; avoid the plain command and also the pinned one", False),
+    "and-the-pinned-one-too": ("; avoid the plain command and the pinned one too", False),
+    "probe-use-instead-kept": ("; do not use the plain command, use the pinned interpreter instead", True),
+    "and-use-here": ("; avoid the plain command, and use the pinned one here", True),
+    "use-only": ("; do not use the plain command, use the pinned one only", True),
+    "every-time": ("; avoid the plain command, and use the pinned interpreter every time", True),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_TRAILING_POLARITY))
+def test_885_a_trailing_either_too_or_as_well_keeps_the_pinned_command_in_the_ban(shell, name) -> None:
+    words, states_the_rule = _885_TRAILING_POLARITY[name]
+    assert _885_reads_as_the_rule(shell, words) is states_the_rule, words
+
+
+# "neither ... nor" forbids both. (wording, states the rule)
+_885_NEITHER = {
+    "neither-use-nor-the-pinned-one": ("; neither use the plain command nor the pinned one", False),
+    "use-neither-nor-the-pinned-one": ("; use neither the plain command nor the pinned one", False),
+    "neither-plain-nor-bare": ("; use neither the plain command nor the bare one", True),
+    "neither-then-use-the-pinned-one": ("; use neither the plain command nor the bare one, use the pinned one", True),
+}
+
+
+@pytest.mark.parametrize("shell", sorted(PINNED_FORMS))
+@pytest.mark.parametrize("name", sorted(_885_NEITHER))
+def test_885_neither_nor_forbids_the_pinned_command_too(shell, name) -> None:
+    words, states_the_rule = _885_NEITHER[name]
+    assert _885_reads_as_the_rule(shell, words) is states_the_rule, words
