@@ -6170,36 +6170,126 @@ _PY_FLAGS_FOLLOW = re.compile(r"(?:\s|`)+@AgenttalkModuleFlags(?!\w)", re.IGNORE
 _PY_ANY_USE = re.compile(r"(?<!\w)AgenttalkPython(?!\w)", re.IGNORECASE)
 _PY_COMMENT_LINE = re.compile(r"(?m)^[ \t]*#[^\r\n]*")
 _PY_DEFINITION_LINE = re.compile(r"(?m)^\$AgenttalkPython = '(?:''|[^'\r\n])*'[ \t]*$")
-# The two places the path is handed on as a value, not run: the environment the agents get, and the argument
-# of the launch-request command. A new use has to be added here on purpose.
-_PY_VALUE_USES = ("$applied['AGENTTALK_PY'] = $AgenttalkPython", "--launch-agenttalk-python $AgenttalkPython")
+# The two places the path is handed on as a value, not run. Each counts only as a whole statement in exactly this
+# shape, never as part of a longer expression (`& ($applied['AGENTTALK_PY'] = $AgenttalkPython) ...` runs it):
+# the line that puts it in the environment the agents get, and the argument line of the launch-request command,
+# which must be an argument of a call of the team's command shim.
+_PY_ENV_ASSIGNMENT_LINE = re.compile(r"(?m)^[ \t]*\$applied\['AGENTTALK_PY'\] = (\$AgenttalkPython)[ \t]*\r?$")
+_PY_LAUNCH_ARGUMENT_LINE = re.compile(r"(?m)^[ \t]*--launch-agenttalk-python (\$AgenttalkPython) `[ \t]*\r?$")
+_PY_SHIM_CALL = re.compile(r"&\s+\$AgenttalkCmd\s")
+# The value can be reached again later without the variable's name: through the hash table it was put in, or through
+# the environment the table is applied to.
+_PY_OTHER_NAMES = re.compile(
+    r"\$applied\[\s*['\"]AGENTTALK_PY['\"]\s*\]|\$env:AGENTTALK_PY\b|\bEnv:AGENTTALK_PY\b", re.IGNORECASE
+)
+# What `&` (or a dot at the start of a statement) may run besides the team Python with its flags. A target that is a
+# plain word (`git`) or a quoted text without a variable in it is a fixed program and passes; every other target can
+# hold the Python path, so it is reported unless its exact text is listed here, each with the reason it is safe.
+_PY_OTHER_TARGETS = {
+    "$AgenttalkCmd": "the team's own command shim, bin/agenttalk.cmd, which bakes the Python and the flags itself",
+    "$file": "the executable of the CLI an agent is launched with, run for its version in the launch preflight",
+    "$chmod.Source": "the chmod program Get-Command found, on a POSIX host",
+}
+_PY_CALL = re.compile(r"(?<![\w$&>])&(?!&)[ \t]*|(?:^|(?<=[;{(|]))[ \t]*\.[ \t]+(?=[$(\[\"'{])", re.MULTILINE)
+
+
+def _call_target(script: str, start: int) -> str:
+    """The text of what a call operator runs, from `start`: a variable with its members and indexes, a parenthesised
+    expression, a script block, a type call, a quoted text, or a plain word."""
+    index = start
+    if index >= len(script):
+        return ""
+    first = script[index]
+    if first in "([{":
+        closing = {"(": ")", "[": "]", "{": "}"}[first]
+        depth = 0
+        while index < len(script):
+            depth += script[index] == first
+            depth -= script[index] == closing
+            index += 1
+            if depth == 0:
+                break
+    elif first == "$":
+        found = re.compile(r"\$(?:\{[^}\r\n]*\}|[\w:?]+)").match(script, index)
+        index = found.end() if found else index + 1
+    elif first in "\"'":
+        end = script.find(first, index + 1)
+        index = len(script) if end == -1 else end + 1
+        return script[start:index]
+    else:
+        found = re.compile(r"[^\s|;)]+").match(script, index)
+        return found.group(0) if found else ""
+    while index < len(script):  # members, indexes and calls hanging off it
+        step = re.compile(r"\.\w+|::\w+|\[[^\]\r\n]*\]|\([^)\r\n]*\)").match(script, index)
+        if not step:
+            break
+        index = step.end()
+    return script[start:index]
+
+
+def _fixed_program(target: str) -> bool:
+    if not target:
+        return False
+    if target[0] == "'":
+        return target.endswith("'") and len(target) > 1
+    if target[0] == '"':
+        return target.endswith('"') and "$" not in target and "`" not in target
+    return target[0] not in "$([{" and "$" not in target
+
+
+def _statement_start_line(script: str, position: int) -> str:
+    """The first line of the statement `position` is on: statements go on over lines that end in a backtick."""
+    start = script.rfind("\n", 0, position) + 1
+    while start > 0:
+        before = script.rfind("\n", 0, start - 1) + 1
+        if not script[before:start].rstrip().endswith("`"):
+            break
+        start = before
+    end = script.find("\n", start)
+    return script[start : len(script) if end == -1 else end]
 
 
 def _python_variable_problems(script: str) -> list[str]:
-    """Every use of the team Python variable in a supervisor script that is not safe, as the lines they are on.
+    """Every use of the team Python in a supervisor script that is not safe, as the lines they are on.
 
-    Safe is: the one line that sets it, a comment, handing the path on as a value (`_PY_VALUE_USES`), and running
-    it with the module flags (`& $AgenttalkPython @AgenttalkModuleFlags ...`, in any spelling of the name and the
-    call). Anything else is reported: a run without the flags, and every other way to use the variable
-    (Start-Process, Invoke-Expression, a copy in another variable, a hashtable of arguments), because there is no
-    other way PowerShell could run it that this scan can tell from a harmless value."""
+    Safe is: the one line that sets the variable, a comment, the two whole-statement value uses above, running the
+    variable with the module flags (`& $AgenttalkPython @AgenttalkModuleFlags ...`, in any spelling of the name and
+    the call), and a call whose target is a fixed program or one of `_PY_OTHER_TARGETS`. Reported: a run without the
+    flags; every other mention of the variable (Start-Process, Invoke-Expression, a copy in another variable, a table
+    of arguments, a value use inside a longer expression); a later use of the value through the hash table or the
+    environment; and a call whose target can hold the path (`& $applied['AGENTTALK_PY']`, `& (...)`, `& $anything`)."""
     safe: list[tuple[int, int]] = []
     problems: list[int] = []
     for pattern in (_PY_COMMENT_LINE, _PY_DEFINITION_LINE):
         safe.extend(m.span() for m in pattern.finditer(script))
-    for use in _PY_VALUE_USES:
-        safe.extend((m.start(), m.end()) for m in re.finditer(re.escape(use), script))
+    safe.extend(m.span() for m in _PY_ENV_ASSIGNMENT_LINE.finditer(script))  # the whole line, nothing around it
+    for m in _PY_LAUNCH_ARGUMENT_LINE.finditer(script):
+        if _PY_SHIM_CALL.search(_statement_start_line(script, m.start())):
+            safe.append((m.start(1), m.end(1)))
+    python_calls = set()
     for m in _PY_COMMAND.finditer(script):
+        python_calls.add(m.start())
         if _PY_FLAGS_FOLLOW.match(script, m.end()):
             safe.append(m.span())
         else:
             problems.append(m.start())
+    for m in _PY_CALL.finditer(script):
+        operator_start = m.start() + (len(m.group(0)) - len(m.group(0).lstrip(" \t")))
+        if m.start() in python_calls or operator_start in python_calls:
+            continue
+        if _comment_covers(safe, m.start()):
+            continue
+        target = _call_target(script, m.end())
+        if target in _PY_OTHER_TARGETS or _fixed_program(target):
+            continue
+        problems.append(m.start())
     covered = bytearray(len(script))
     for start, end in safe:
         covered[start:end] = b"\x01" * (end - start)
-    for m in _PY_ANY_USE.finditer(script):
-        if not covered[m.start()]:
-            problems.append(m.start())
+    for pattern in (_PY_ANY_USE, _PY_OTHER_NAMES):
+        for m in pattern.finditer(script):
+            if not covered[m.start()]:
+                problems.append(m.start())
     lines: list[str] = []
     for position in sorted(problems):
         line = script[script.rfind("\n", 0, position) + 1 :]
@@ -6207,6 +6297,11 @@ def _python_variable_problems(script: str) -> list[str]:
         if line not in lines:
             lines.append(line)
     return lines
+
+
+def _comment_covers(spans: list[tuple[int, int]], position: int) -> bool:
+    """True when `position` lies inside one of `spans` (used for whole-line comments)."""
+    return any(start <= position < end for start, end in spans)
 
 
 def _installed_supervisor_script(tmp_path: Path) -> str:
@@ -6270,14 +6365,82 @@ def test_python_call_scan_flags_the_other_ways_powershell_can_run_a_command_from
     [
         "$AgenttalkPython = 'C:\\Python\\python.exe'",
         "  $applied['AGENTTALK_PY'] = $AgenttalkPython",
-        "          --launch-agenttalk-python $AgenttalkPython `",
+        "  $prepText = & $AgenttalkCmd --root $Root supervise --prepare-launch-request `\n"
+        "    --request-id $rid --state-file $StatePath --now $now `\n"
+        "    --launch-agenttalk-python $AgenttalkPython `\n"
+        "    --launch-src-on-pythonpath ([string]$SrcOnPyPath).ToLowerInvariant()",
+        "  & $AgenttalkCmd @validateArgs | Out-Null",
+        "  & $file --version | Out-Null",
+        "  & $chmod.Source '700' $path",
+        "  & git status 2>&1 | Out-Null",
+        "  & 'C:\\tools\\x.exe' --version",
+        "  if ($a -and $b) { $c = 'x && y' }",
         "  # the $AgenttalkPython probes use the same flags",
         "  & $AgenttalkCmd --root $Root supervise --status",
-        "  $AgenttalkPythonOther = 'x'; & $AgenttalkPythonOther -m agenttalk",
+        "  $AgenttalkPythonOther = 'x'; Write-Host $AgenttalkPythonOther",
     ],
 )
 def test_python_call_scan_leaves_alone_what_is_not_a_command(line) -> None:
     assert _python_variable_problems(f"{line}\n") == [], line
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # codex-rev's two probes: the allowed assignment inside a call, and a later call of the stored value
+        "  & ($applied['AGENTTALK_PY'] = $AgenttalkPython) -m agenttalk --version",
+        "  $applied['AGENTTALK_PY'] = $AgenttalkPython\n  & $applied['AGENTTALK_PY'] -m agenttalk --version",
+        # the same, made less obvious
+        "  $applied['AGENTTALK_PY'] = $AgenttalkPython; & $applied['AGENTTALK_PY'] -m agenttalk",
+        "  $x = ($applied['AGENTTALK_PY'] = $AgenttalkPython)",
+        "  $applied['AGENTTALK_PY'] = $AgenttalkPython | Out-Null",
+        "  & $env:AGENTTALK_PY -m agenttalk --version",
+        "  . $applied['AGENTTALK_PY'] -m agenttalk",
+        "  Start-Process -FilePath $applied['AGENTTALK_PY']",
+        "  $applied[\"AGENTTALK_PY\"] = 'x'",
+        # a call whose target can hold the path
+        "  & $anything -m agenttalk --version",
+        "  & ($x) -m agenttalk --version",
+        "  & $x.y -m agenttalk --version",
+        "  & $x[0] -m agenttalk --version",
+        '  & "$x" -m agenttalk --version',
+        "  & { $x } -m agenttalk --version",
+        "  & [scriptblock]::Create($x)",
+        "  . $anything -m agenttalk",
+        # the launch-request argument counts only inside a call of the command shim, as a line of its own
+        "  Write-Output `\n    --launch-agenttalk-python $AgenttalkPython `\n    x",
+        "  $y = & $AgenttalkCmd --prepare `\n    --launch-agenttalk-python $AgenttalkPython | Invoke-Expression",
+        "  & $AgenttalkCmd --launch-agenttalk-python $AgenttalkPython",
+    ],
+)
+def test_python_call_scan_reports_a_value_use_inside_a_call_and_a_call_of_a_stored_value(text) -> None:
+    assert _python_variable_problems(text + "\n"), text
+
+
+def test_python_call_scan_names_the_line_of_a_later_call_of_the_stored_value() -> None:
+    text = "  $applied['AGENTTALK_PY'] = $AgenttalkPython\n  & $applied['AGENTTALK_PY'] -m agenttalk --version\n"
+    assert _python_variable_problems(text) == ["& $applied['AGENTTALK_PY'] -m agenttalk --version"]
+
+
+@pytest.mark.parametrize("function", ["Launch", "Launch-Spec"])
+@pytest.mark.parametrize(
+    "planted",
+    [
+        "$null = & $applied['AGENTTALK_PY'] -m agenttalk --version",
+        "$null = & ($applied['AGENTTALK_PY'] = $AgenttalkPython) -m agenttalk --version",
+        "$null = & $env:AGENTTALK_PY -m agenttalk --version",
+    ],
+)
+def test_a_stored_value_called_inside_a_launch_function_of_the_real_script_is_found(
+    tmp_path: Path, function: str, planted: str
+) -> None:
+    script = _installed_supervisor_script(tmp_path)
+    head = re.search(rf"(?m)^function {re.escape(function)}\(.*\{{\r?\n", script)
+    assert head, function
+    with_call = script[: head.end()] + f"  {planted}\n" + script[head.end() :]
+
+    assert _python_variable_problems(script) == []
+    assert _python_variable_problems(with_call) == [planted]
 
 
 def test_the_generated_installed_script_has_no_unflagged_python_use(tmp_path: Path) -> None:
