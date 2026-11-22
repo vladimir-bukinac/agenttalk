@@ -579,3 +579,70 @@ def test_a_saved_leftover_with_a_damaged_checkout_field_keeps_the_damage_step_th
 
     assert code == 0, capsys.readouterr().err
     assert lanes.load_lanes(store)["lanes"]["d1"]["status"] == lanes.STATUS_ABANDONED
+
+
+# ------------------------------------------- the advice is built on `lane deliver` only when it can finish the lane
+
+
+def broken_evidence(tmp_path, kind):
+    if kind == "null":
+        return None
+    if kind == "no-file":
+        return str(tmp_path / "gone" / "delivery.json")
+    garbage = tmp_path / "garbage.json"
+    garbage.write_text("not a delivery artifact", encoding="utf-8")
+    return str(garbage)
+
+
+@pytest.mark.parametrize("kind", ["null", "no-file", "garbage"])
+def test_status_does_not_tell_the_person_to_remove_the_folder_when_deliver_cannot_finish(
+    tmp_path, monkeypatch, capsys, kind
+):
+    """With the delivery evidence missing or invalid, `lane deliver` exits 2 whatever happens to the folder: the
+    remove-then-deliver step is not shown."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, delivery_artifact=broken_evidence(tmp_path, kind))
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "status"], root) == 0
+    status = capsys.readouterr().out
+
+    line = next(line for line in status.splitlines() if "d1" in line)
+    assert "remove the folder" not in line and "lane deliver --id d1" not in line, line
+    shutil.rmtree(wt)
+    monkeypatch.setenv("AGENTTALK_SELF", "dev")
+    assert deliver(root) == 2  # the step it would have named cannot run
+
+
+@pytest.mark.parametrize("kind", ["null", "no-file", "garbage"])
+def test_abandon_does_not_refuse_a_delivered_leftover_lane_that_deliver_cannot_finish(
+    tmp_path, monkeypatch, capsys, kind
+):
+    """No refusal then: today's way out stays. Plain abandon records the lane as abandoned and keeps the leftover
+    reason; the step status then prints for an abandoned lane runs once the folder is gone."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, delivery_artifact=broken_evidence(tmp_path, kind))
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "abandon", "--id", "d1"], root) == 0
+
+    row = lanes.load_lanes(store)["lanes"]["d1"]
+    assert row["status"] == lanes.STATUS_ABANDONED and row["worktree_cleanup_error"].startswith(PREFIX)
+    capsys.readouterr()
+    assert _run_raw(["lane", "status"], root) == 0
+    printed = re.search(r"`(lane abandon --id d1 --acknowledge-missing-worktree)`", capsys.readouterr().out)
+    assert printed, "status names no acknowledgement step"
+    shutil.rmtree(wt)
+
+    assert _run_raw(shlex.split(printed.group(1)), root) == 0
+    assert lanes.load_lanes(store)["lanes"]["d1"]["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED
+
+
+@pytest.mark.parametrize("kind", ["null", "no-file", "garbage"])
+def test_the_acknowledgement_is_not_refused_either_when_deliver_cannot_finish(tmp_path, monkeypatch, capsys, kind):
+    root, wt, store = leftover_row(tmp_path, monkeypatch, delivery_artifact=broken_evidence(tmp_path, kind))
+    shutil.rmtree(wt)
+    capsys.readouterr()
+
+    code = _run_raw(["lane", "abandon", "--id", "d1", "--acknowledge-missing-worktree"], root)
+
+    assert code == 0, capsys.readouterr().err
+    assert lanes.load_lanes(store)["lanes"]["d1"]["status"] == lanes.STATUS_ABANDONED

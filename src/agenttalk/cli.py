@@ -5626,6 +5626,29 @@ def _lane_saved_leftover(lane: dict) -> str | None:
     return saved if isinstance(saved, str) and saved.startswith(_LANE_LEFTOVER_PREFIX) else None
 
 
+def _lane_delivery_evidence(store, lane_id: str, lane: dict, artifact: Path, head_sha) -> dict:
+    """The check `lane deliver` makes of a delivery's saved evidence before it finishes anything (raises LaneError)."""
+    return lane_mod.validate_delivery_artifact(
+        artifact, lane_id=lane_id, head_sha=str(head_sha), store=store,
+        require_isolation=_release_class_lane(lane),
+        require_live_marker=True,
+    )
+
+
+def _lane_deliver_can_finish(store, lane_id: str, lane: dict) -> bool:
+    """Whether `lane deliver` can finish the cleanup of this delivered lane (its publication complete): the evidence it
+    checks first (`_lane_delivery_evidence`) holds. When it does not, deliver exits 2 whatever the person does to the
+    folder, so no step may be built on it."""
+    raw = lane.get("delivery_artifact")
+    if not isinstance(raw, str):  # the marker deliver reports as missing
+        return False
+    try:
+        _lane_delivery_evidence(store, lane_id, lane, Path(raw), lane.get("delivered_head"))
+    except (lane_mod.LaneError, OSError, ValueError):
+        return False
+    return True
+
+
 def _lane_leftover_still_held(lane: dict) -> str | None:
     """On a retry: the saved leftover reason while the lane's folder is still there (or cannot be looked at, which is
     said), else None (nothing saved, or the folder is gone and the ordinary retry goes on)."""
@@ -7016,11 +7039,7 @@ def _lane_finalize_delivery(store, lane_id: str) -> tuple[Path, bool, str]:
         if not isinstance(artifact_raw, str):
             raise lane_mod.LaneError("completed delivery artifact marker is missing")
         artifact = Path(artifact_raw)
-    committed = lane_mod.validate_delivery_artifact(
-        artifact, lane_id=lane_id, head_sha=str(pending.get("head_sha")), store=store,
-        require_isolation=_release_class_lane(lane_snapshot),
-        require_live_marker=True,
-    )
+    committed = _lane_delivery_evidence(store, lane_id, lane_snapshot, artifact, pending.get("head_sha"))
     delivered_head = str(committed["delivered_head"])
 
     # The advice is about the row as it is SAVED now, after publication (publish_pending False). `lane_snapshot` is
@@ -7931,11 +7950,13 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                     )
                     return 2
                 if (lane_mod.cleanup_recovery_required(lane) and not damaged_path
-                        and _lane_saved_leftover(lane) is not None):
+                        and _lane_saved_leftover(lane) is not None
+                        and _lane_deliver_can_finish(store, lane_id, lane)):
                     # A delivered lane (its publication marker exactly false, so complete) whose cleanup is not
                     # exactly done and stopped at a leftover folder: either form would turn it into an abandoned one,
                     # and `lane deliver` finishes it once the folder is gone. Not for a damaged checkout field (`lane
-                    # deliver` refuses there, and the damage message names the abandon step that works) nor for other
+                    # deliver` refuses there, and the damage message names the abandon step that works), nor when
+                    # `lane deliver` cannot finish the lane (its delivery evidence is missing or invalid), nor for other
                     # pending cleanups, whose existing advice (#771) names plain `lane abandon`.
                     if lane.get("cleanup_pending") is True:
                         first = "If its folder is still there, inspect it and remove it yourself, then"
@@ -8441,10 +8462,11 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 else:
                     step = "run `lane deliver` to retry the cleanup"
                 detail = lane['recovery_detail']
-                # Only where `lane deliver` can run: the publication marker exactly false and the cleanup marker
-                # exactly true. Any other marker keeps the repair advice above.
+                # Only where `lane deliver` can run: the publication marker exactly false, the cleanup marker exactly
+                # true, and the delivery evidence it checks first holds. Anything else keeps the advice above.
                 saved = None
-                if lane.get("publish_pending") is False and lane.get("cleanup_pending") is True and step is not None:
+                if (lane.get("publish_pending") is False and lane.get("cleanup_pending") is True and step is not None
+                        and _lane_deliver_can_finish(store, key, lane)):
                     saved = _lane_saved_leftover(lane)
                 if saved is not None:
                     detail = f"{detail}: {saved}"
