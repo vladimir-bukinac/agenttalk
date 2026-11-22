@@ -691,3 +691,57 @@ def test_status_names_the_way_out_when_deliver_cannot_finish_instead_of_telling_
 
     assert "lane deliver" not in line and "lane abandon --id d1" in line, line
     assert "inspect the folder" in line and "evidence" in line, line
+
+
+# ------------------------------- an abandon through the leftover shortcut keeps a pending cleanup state in the row
+
+
+def damage_evidence(tmp_path, store, kind):
+    """Make the delivery evidence of lane d1 unusable in the way `kind` names."""
+    path = store.dir / "state" / "lanes.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    row = data["lanes"]["d1"]
+    artifact = Path(row["delivery_artifact"])
+    if kind == "null":
+        row["delivery_artifact"] = None
+    elif kind == "no-file":
+        row["delivery_artifact"] = str(tmp_path / "gone" / "delivery.json")
+    elif kind == "invalid-json":
+        artifact.write_text("{not json", encoding="utf-8")
+    elif kind == "bad-integrity":
+        content = json.loads(artifact.read_text(encoding="utf-8"))
+        content["integrity_version"] = []
+        artifact.write_text(json.dumps(content), encoding="utf-8")
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+@pytest.mark.parametrize("label", [MISSING, lanes.STATUS_DELIVERED], ids=["state-missing", "state-delivered"])
+@pytest.mark.parametrize("kind", ["null", "no-file", "invalid-json", "bad-integrity"])
+def test_abandon_through_the_leftover_shortcut_keeps_the_folder_listed_with_its_acknowledge_step(
+    tmp_path, monkeypatch, capsys, kind, label
+):
+    """The shortcut keeps the saved leftover reason and calls nothing; the row must also keep a pending cleanup state,
+    or the abandoned-lane listing (which shows only cleanup pending or failed) hides the folder and the step."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, worktree_state=label)
+    damage_evidence(tmp_path, store, kind)
+    capsys.readouterr()
+    assert _run_raw(["lane", "abandon", "--id", "d1"], root) == 0
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "status"], root) == 0
+    status = capsys.readouterr().out
+
+    row = lanes.load_lanes(store)["lanes"]["d1"]
+    assert row["status"] == lanes.STATUS_ABANDONED and row["worktree_state"] in (
+        lanes.STATUS_CLEANUP_FAILED,
+        lanes.STATUS_CLEANUP_PENDING,
+    )
+    assert "active lanes: none" not in status or "abandoned lanes with the worktree cleanup" in status, status
+    line = next(line for line in status.splitlines() if line.strip().startswith("d1:"))
+    assert PREFIX in line or str(wt) in line, line
+    printed = re.search(r"`(lane abandon --id d1 --acknowledge-missing-worktree)`", line)
+    assert printed, line
+    shutil.rmtree(wt)
+
+    assert _run_raw(shlex.split(printed.group(1)), root) == 0
+    assert lanes.load_lanes(store)["lanes"]["d1"]["worktree_state"] == lanes.STATUS_CLEANUP_ACKNOWLEDGED

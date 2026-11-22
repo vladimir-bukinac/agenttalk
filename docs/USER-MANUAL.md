@@ -961,9 +961,15 @@ and `lane abandon` keep it pending and save that reason, `lane gc --delete` repo
 `worktree_removed: false`, and none of them suggests deleting the branch (the
 command field is left out and `branch_kept_reason` or `reason` says why). `lane
 status` shows the folder. Inspect it, save what you need (including ignored files),
-remove it yourself, then run `lane deliver --id <lane>` (a delivered lane) or
-`lane abandon --id <lane> --acknowledge-missing-worktree` (an abandoned lane). A
-retry while the folder is still there repeats the saved reason and does not call Git.
+and remove it yourself. For an abandoned lane, then run
+`lane abandon --id <lane> --acknowledge-missing-worktree`. For a delivered lane,
+`lane deliver --id <lane>` finishes the cleanup only when the lane's delivery evidence
+is usable (its saved delivery artifact is there and valid), and `lane status` says to
+run it only then. If the evidence is missing or invalid, `lane deliver` exits 2 whatever
+you do to the folder; the fallback is `lane abandon --id <lane>`, which records the lane
+as abandoned instead of delivered and keeps the leftover reason, and then, once the folder
+is removed, `lane abandon --id <lane> --acknowledge-missing-worktree`. A retry while the
+folder is still there repeats the saved reason and does not call Git.
 
 Shared path approval:
 

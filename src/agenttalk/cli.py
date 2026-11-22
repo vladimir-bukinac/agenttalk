@@ -8055,8 +8055,12 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                     in_use = None if held else _lane_worktree_launch_use(store, lane)
                     if held:
                         # A retry of a cleanup that ended with Git's success and the folder still there: the saved
-                        # reason stays as it is, and neither the check of a checkout nor Git is run again.
+                        # reason stays as it is, and neither the check of a checkout nor Git is run again. The row
+                        # keeps a pending cleanup state whatever label it had (a delivered lane's label can be
+                        # "delivered" or missing): the abandoned-lane listing shows only pending or failed cleanups,
+                        # so without it the folder and its acknowledge step would not be listed.
                         branch_delete_block_reason = held
+                        lane["worktree_state"] = lane_mod.STATUS_CLEANUP_FAILED
                     elif in_use is None:
                         try:
                             _verify_lane_worktree(store, lane, lane_id=lane_id, store_owned=True, for_removal=True)
