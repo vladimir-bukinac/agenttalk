@@ -217,8 +217,9 @@ def _first_damaged_lens(record: dict) -> tuple[int, object, int]:
 
 def _damaged_lenses_text(record: dict) -> str:
     index, lens, count = _first_damaged_lens(record)
+    noun = "entry" if count == 1 else "entries"
     return (f"close {pc.shown(record.get('close_id'))} has a damaged review requirement: "
-            f"required_lenses[{index}] is {pc.shown(lens)} ({count} damaged entries). "
+            f"required_lenses[{index}] is {pc.shown(lens)} ({count} damaged {noun}). "
             "Restore this close from a trusted backup first. Only if no backup exists, move its file out of "
             ".agenttalk/closes after keeping a copy. That drops its open findings, remediation items and review "
             "requirements from every later attempt, so first write down what was open. Do not edit the file in "

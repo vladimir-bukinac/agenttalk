@@ -141,8 +141,9 @@ def inherit(store, record, plan, *, capture=False, bundle=None, snapshot=None):
                     from agenttalk import printed_commands as pc
                     A._fail(close._damaged_lenses_text(prior) +
                             f" The new close {pc.shown(record.get('close_id'))} was created but not frozen; "
-                            "it cannot be used. Before the next attempt, move its file out of .agenttalk/closes too. "
-                            "It was never frozen and no other close records its hash, so this drops nothing. "
+                            "it cannot be used. "
+                            f"Move the unfrozen close {pc.shown(record.get('close_id'))} out of .agenttalk/closes; "
+                            "it was never frozen and no other close records its hash, so this drops nothing. "
                             "While it stays, every later acceptance open in this store is refused. A fresh attempt "
                             f"is refused the same way until {pc.shown(prior.get('close_id'))} is restored "
                             "or moved aside.",

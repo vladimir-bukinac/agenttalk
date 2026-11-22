@@ -34,7 +34,7 @@ def assert_guidance(text, entry, index):
     assert pc.shown(entry) in text
     if isinstance(entry, str) and "\n" in entry:
         assert entry not in text
-    assert "1 damaged entries" in text
+    assert "1 damaged entry" in text
     assert text.index("trusted backup") < text.index("move")
     assert "Only if no backup exists" in text
     assert "findings" in text and "remediation items" in text and "requirements" in text
@@ -107,7 +107,10 @@ def test_888_inherit_refuses_before_retaining(case_v3, capsys, entry):
     err = capsys.readouterr().err
     assert_guidance(err, entry, index)
     assert "next" in err and "not frozen" in err and "fresh attempt" in err
-    assert "Before the next attempt, move its file out of .agenttalk/closes too." in err
+    move = err.split("Move the unfrozen close ", 1)[1].split(";", 1)[0]
+    assert pc.shown("next") in move
+    assert pc.shown("attempt") not in move
+    assert "out of .agenttalk/closes" in move
     assert path.read_bytes() == saved
     assert not (blobs / prior_hash).exists()
     assert not (blobs / catalog_hash).exists()
@@ -159,7 +162,7 @@ def test_888_restoration_steps_allow_a_fresh_attempt(case_v3, capsys, move_pendi
             assert command(case_v3, "publish", "--id", "next", "--from", "lead", "--verdict", "hold",
                            "--reason", "test recovery") == 3
         else:
-            assert "Before the next attempt, move its file out of .agenttalk/closes too." in guidance
+            assert f"Move the unfrozen close {pc.shown('next')} out of .agenttalk/closes" in guidance
             close.close_path(case_v3["store"], "next").replace(case_v3["inputs"] / "unfrozen-next.json")
     capsys.readouterr()
     rc = open_attempt(case_v3, "--id", "retry")
@@ -170,6 +173,13 @@ def test_888_restoration_steps_allow_a_fresh_attempt(case_v3, capsys, move_pendi
         assert rc == 3
         assert "cold exposure audit unavailable" in capsys.readouterr().err
     assert "publish" not in guidance.lower()
+
+
+def test_888_two_damaged_entries_counted():
+    record = {"close_id": "attempt", "required_lenses": ["bad", "also bad"]}
+    text = close._damaged_lenses_text(record)
+    assert "required_lenses[0]" in text
+    assert "2 damaged entries" in text
 
 
 def test_888_audit_reads_damaged_record_without_refusing_at_sources(case_v3, capsys):
