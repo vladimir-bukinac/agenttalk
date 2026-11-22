@@ -334,6 +334,8 @@ def _revision_clean_damage(record):
         caps = capabilities(route.get("schema_version") if isinstance(route, dict) else None)
     except ValueError:
         caps = None
+    if caps is not None and caps.cold and not _stored_lenses_valid(record):
+        return text + _damaged_lenses_text(record)
     modern = caps is not None and caps.modern
     cache = caps is not None and caps.preflight
     if modern:

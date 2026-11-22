@@ -1,6 +1,7 @@
 """Damaged stored review requirements must stop acceptance before reuse."""
 
 from copy import deepcopy
+import json
 
 import pytest
 import test_acceptance as fixtures
@@ -83,6 +84,31 @@ def test_888_noncold_successor_keeps_new_attempt_guidance(case_v2, capsys):
     err = capsys.readouterr().err
     assert "or start a new attempt:" in err
     assert "agenttalk close open --id <new-id>" in err
+
+
+def test_888_cold_revision_and_lens_damage_offer_restore(case_v3, capsys):
+    assert open_attempt(case_v3) == 0
+    complete_v3(case_v3)
+    publish_hold(case_v3)
+    path = close.close_path(case_v3["store"], "attempt")
+    record = close.load_close(case_v3["store"], "attempt")
+    record["required_lenses"].append("damaged")
+    record["revision_clean"] = "yes"
+    write_json(path, record)
+    saved = path.read_bytes()
+    capsys.readouterr()
+    assert command(case_v3, "check", "--id", "attempt", "--json") == 3
+    out = capsys.readouterr().out
+    assert "agenttalk close acceptance successor" not in out
+    assert "agenttalk close open --id" not in out
+    holds = json.loads(out)["holds"]
+    detail = next(hold["detail"] for hold in holds if hold["code"] == close.HOLD_REVISION)
+    assert "agenttalk close acceptance successor" not in detail
+    assert "agenttalk close open --id" not in detail
+    assert "required_lenses[" in detail and 'close "attempt"' in detail
+    assert detail.index("trusted backup") < detail.index("move")
+    assert "Only if no backup exists" in detail
+    assert path.read_bytes() == saved
 
 
 @pytest.mark.parametrize("value", [None, "damaged", {"id": "bad"}])
