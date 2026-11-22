@@ -60,13 +60,37 @@ def test_888_successor_refuses_before_writes(case_v3, capsys, entry):
     before_store = store_files(case_v3["store"])
     capsys.readouterr()
     assert successor(case_v3) == 2
-    assert_guidance(capsys.readouterr().err, entry, index)
+    err = capsys.readouterr().err
+    assert_guidance(err, entry, index)
+    assert "or start a new attempt:" not in err
+    assert "agenttalk close open --id <new-id>" not in err
     assert path.read_bytes() == saved
     assert {p.name: p.read_bytes() for p in blobs.iterdir() if p.is_file()} == before
     assert store_files(case_v3["store"]) == before_store
     assert not close.close_path(case_v3["store"], "next").exists()
     path.write_bytes(backup)
     assert successor(case_v3) == 0
+
+
+def test_888_noncold_successor_keeps_new_attempt_guidance(case_v2, capsys):
+    assert open_attempt(case_v2) == 0
+    bundle_v2(case_v2)
+    assert attach(case_v2) == 0
+    publish_hold(case_v2)
+    damage(case_v2, "damaged")
+    capsys.readouterr()
+    assert successor(case_v2) == 2
+    err = capsys.readouterr().err
+    assert "or start a new attempt:" in err
+    assert "agenttalk close open --id <new-id>" in err
+
+
+@pytest.mark.parametrize("value", [None, "damaged", {"id": "bad"}])
+def test_888_non_list_damage_names_field(value):
+    text = close._damaged_lenses_text({"close_id": "attempt", "required_lenses": value})
+    assert "required_lenses is " in text
+    assert "required_lenses[0]" not in text
+    assert pc.shown(value) in text
 
 
 @pytest.mark.parametrize("entry", DAMAGED)
@@ -196,6 +220,11 @@ def test_888_audit_reads_damaged_record_without_refusing_at_sources(case_v3, cap
     route = {**record["acceptance_route"], "obligations_hash": catalog_hash}
     assert obligations.sources(case_v3["store"], route)[0][1] == record
     assert source_hash in obligations.evidence(case_v3["store"], route)
+    current = {**record, "acceptance_route": route}
+    with pytest.raises(acceptance.AcceptanceError) as error:
+        obligations.inherit(case_v3["store"], current, case_v3["plan"], capture=False)
+    assert error.value.code == "malformed_state"
+    assert "required_lenses[" in str(error.value)
     capsys.readouterr()
     assert command(case_v3, "check", "--id", "attempt", "--json") == 3
     assert "malformed_state" in capsys.readouterr().out

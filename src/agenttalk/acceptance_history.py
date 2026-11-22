@@ -110,10 +110,11 @@ def successor(store, *, parent_id, close_id, plan_file, project_repo, revision, 
         route = before.get("acceptance_route") or {}
         caps = A.schema(route.get("schema_version"))
         text = (close._damaged_lenses_text(before) + " No successor can be built from it, and nothing was changed. "
-                "After restoring it, start the successor again, or start a new attempt: "
-                + close._new_acceptance_attempt(before, cache=caps.preflight))
+                "After restoring it, start the successor again")
         if caps.cold:
-            text += " A new attempt inherits from this close and is refused until it is restored or moved aside."
+            text += ". A new attempt inherits from this close and is refused until it is restored or moved aside."
+        else:
+            text += ", or start a new attempt: " + close._new_acceptance_attempt(before, cache=caps.preflight)
         A._fail(text, close.HOLD_MALFORMED)
     # Import and staged hashing must precede the parent's shared writer lock.
     prepared = A.prepare(store, plan_file, project_repo, revision, before["scope"], cache_root=cache_root)
