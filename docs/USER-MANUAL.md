@@ -960,16 +960,26 @@ If Git reports that it removed the lane's checkout but the folder is still there
 and `lane abandon` keep it pending and save that reason, `lane gc --delete` reports
 `worktree_removed: false`, and none of them suggests deleting the branch (the
 command field is left out and `branch_kept_reason` or `reason` says why). `lane
-status` shows the folder. Inspect it, save what you need (including ignored files),
-and remove it yourself. For an abandoned lane, then run
-`lane abandon --id <lane> --acknowledge-missing-worktree`. For a delivered lane,
-`lane deliver --id <lane>` finishes the cleanup only when the lane's delivery evidence
-is usable (its saved delivery artifact is there and valid), and `lane status` says to
-run it only then. If the evidence is missing or invalid, `lane deliver` exits 2 whatever
-you do to the folder; the fallback is `lane abandon --id <lane>`, which records the lane
-as abandoned instead of delivered and keeps the leftover reason, and then, once the folder
-is removed, `lane abandon --id <lane> --acknowledge-missing-worktree`. A retry while the
-folder is still there repeats the saved reason and does not call Git.
+status` shows the folder. Inspect it and save what you need (including ignored files),
+then follow the case that fits the lane:
+
+- **An abandoned lane:** remove the folder, then run
+  `lane abandon --id <lane> --acknowledge-missing-worktree`.
+- **A delivered lane whose delivery evidence is usable** (its saved delivery artifact is
+  there and valid; `lane status` names this step only then): remove the folder, then run
+  `lane deliver --id <lane>`. `lane abandon` (plain or with the acknowledgement) refuses
+  such a lane and names `lane deliver`.
+- **A delivered lane whose delivery evidence is missing or invalid** (`lane deliver` exits 2
+  whatever you do to the folder), in this order: first run `lane abandon --id <lane>` while
+  the folder is still there (it records the lane as abandoned instead of delivered and
+  keeps the leftover reason, so the abandoned-lane list in `lane status` still names the
+  folder); then remove the folder; then run
+  `lane abandon --id <lane> --acknowledge-missing-worktree`. If you remove the folder first
+  and run the plain `lane abandon` second, the saved leftover reason is replaced by a
+  message that the checkout cannot be verified; the acknowledgement still works.
+
+A retry of `lane deliver` or `lane abandon` while the folder is still there repeats the
+saved reason and does not call Git.
 
 Shared path approval:
 
