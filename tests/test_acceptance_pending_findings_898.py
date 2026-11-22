@@ -10,6 +10,49 @@ from test_acceptance import command, complete_v3, open_attempt, publish_hold, su
 case, case_v2, case_v3 = attempts.case, attempts.case_v2, attempts.case_v3
 
 
+def test_live_parent_no_longer_published_blocks(case_v3, monkeypatch):
+    assert open_attempt(case_v3) == 0
+    complete_v3(case_v3)
+    publish_hold(case_v3)
+    with monkeypatch.context() as fault:
+        fault.setattr(pending_tests.acceptance, "freeze", pending_tests.refuse_freeze)
+        assert successor(case_v3) == 2
+    parent = close.load_close(case_v3["store"], "attempt")
+    parent["status"] = close.OPEN
+    write_json(close.close_path(case_v3["store"], "attempt"), parent)
+    assert pending_tests.later_open(case_v3) == 3
+
+
+def test_live_parent_route_changed_blocks(case_v3, monkeypatch):
+    assert open_attempt(case_v3) == 0
+    complete_v3(case_v3)
+    publish_hold(case_v3)
+    with monkeypatch.context() as fault:
+        fault.setattr(pending_tests.acceptance, "freeze", pending_tests.refuse_freeze)
+        assert successor(case_v3) == 2
+    parent = close.load_close(case_v3["store"], "attempt")
+    parent["acceptance_route"] = deepcopy(parent["acceptance_route"])
+    parent["acceptance_route"]["frozen_by"] = "someone-else"
+    write_json(close.close_path(case_v3["store"], "attempt"), parent)
+    assert pending_tests.later_open(case_v3) == 3
+
+
+def test_leftover_matching_a_changed_live_parent_but_not_the_retained_copy_blocks(case_v3, monkeypatch):
+    assert open_attempt(case_v3) == 0
+    complete_v3(case_v3)
+    publish_hold(case_v3)
+    with monkeypatch.context() as fault:
+        fault.setattr(pending_tests.acceptance, "freeze", pending_tests.refuse_freeze)
+        assert successor(case_v3) == 2
+    parent = close.load_close(case_v3["store"], "attempt")
+    parent["counters"]["new"] = {"finding": "new parent finding"}
+    write_json(close.close_path(case_v3["store"], "attempt"), parent)
+    child = close.load_close(case_v3["store"], "next")
+    child["counters"] = deepcopy(parent["counters"])  # the leftover now mirrors the LIVE parent
+    write_json(close.close_path(case_v3["store"], "next"), child)
+    assert pending_tests.later_open(case_v3) == 3
+
+
 @pytest.mark.parametrize("kind", ["plain", "hold", "successor"])
 def test_pending_finding_refuses_later_open(case_v3, monkeypatch, capsys, kind):
     if kind == "successor":
