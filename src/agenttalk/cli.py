@@ -4678,10 +4678,12 @@ def _prepare_worktrees_root(store, configured: str | None) -> Path:
     try:
         root = lane_mod.worktrees_root(store, configured)
         resolved = lane_mod.resolve_creation_folder(root)
-        root_c = lane_mod._canonical_token(resolved)
-        repo_c = lane_mod.canonical_host_path_checked(store.root)
+        # Native tokens: on POSIX a backslash is a character of a name, so these three are compared as places, not as
+        # text with its backslashes rewritten as separators.
+        root_c = lane_mod._canonical_token(resolved, native=True)
+        repo_c = lane_mod.canonical_host_path_checked(store.root, native=True)
         # .git is an exclusion boundary, and can be a file in a linked checkout.
-        git_c = lane_mod.canonical_host_path_checked(store.root / ".git")
+        git_c = lane_mod.canonical_host_path_checked(store.root / ".git", native=True)
     except lane_mod.LaneError:
         raise
     except (OSError, ValueError) as exc:

@@ -9215,7 +9215,7 @@ def test_788_windows_volume_or_unc_follows_resolved_containment(tmp_path, capsys
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX ordinary colon/backslash names")
-@pytest.mark.parametrize("value", ["C:x", "\\x", "lanes:x"])
+@pytest.mark.parametrize("value", ["C:x", "\\x", "lanes:x", "\\.", "\\..", "a\\b"])
 def test_788_posix_ordinary_names_changed_saved_values(tmp_path, capsys, value):
     """[changed T12] Names remain legal; relative saved values become absolute."""
     root, base = _788_repo(tmp_path)

@@ -481,12 +481,22 @@ def lane_ref(lane_id: str) -> str:
     return f"refs/heads/{lane_branch(lane_id)}"
 
 
-def _canonical_token(resolved: str) -> str:
-    """The shared last step of both canonical forms: absolute + Windows normcase + normalized separators."""
-    path = os.path.abspath(resolved)
-    if os.name == "nt":
-        path = os.path.normcase(path)
-    return path.replace("\\", "/")
+def _canonical_token(resolved: str, *, native: bool = False, mod=os.path) -> str:
+    """The shared last step of both canonical forms: absolute + Windows normcase + normalized separators.
+
+    `native` is for comparing two folders as places (the worktrees root against the store). On POSIX a backslash is
+    an ordinary character of a name, not a separator, so it is kept: a folder whose name is a backslash and a dot is
+    one folder, and a name with a backslash inside it is not the pair of folders that a slash would make. The saved
+    canonical forms keep writing `/` for it, so nothing already saved changes. On Windows a backslash is always a
+    separator, and the token is the same either way. `mod` is `os.path`, or `posixpath` / `ntpath` to run the rule
+    for either kind of path on any machine."""
+    path = mod.abspath(resolved)
+    windows = mod is ntpath
+    if windows:
+        path = mod.normcase(path)
+    if windows or not native:
+        path = path.replace("\\", "/")
+    return path
 
 
 def canonical_host_path(value: str | os.PathLike[str]) -> str:
@@ -564,14 +574,14 @@ def _windows_path_is_absolute(raw: str) -> bool:
     return tail.startswith(("\\", "/"))
 
 
-def canonical_host_path_checked(value: str | os.PathLike[str]) -> str:
+def canonical_host_path_checked(value: str | os.PathLike[str], *, native: bool = False) -> str:
     """`canonical_host_path`, but a failure other than a provable absence is raised instead of being absorbed.
 
     `os.path.realpath` without `strict=True` hides access-denied, sharing-violation and some network errors on
     Windows and returns a partial path, which a safety comparison would then read as "a different folder". This
     resolves strictly, once, and builds the token from that result; it never resolves again tolerantly. A path that
     is not there resolves only under the rule in `_resolve_absent`. (`strict=` exists since Python 3.10, the oldest
-    version this project supports.)"""
+    version this project supports.) `native`: see `_canonical_token`."""
     raw = os.fspath(value)
     if os.name == "nt" and not ntpath.splitdrive(raw)[0] and raw.startswith(("\\", "/")):
         raise OSError(errno.EINVAL, "a rooted Windows path without a drive is not compared", raw)
@@ -581,7 +591,7 @@ def canonical_host_path_checked(value: str | os.PathLike[str]) -> str:
         resolved = os.path.realpath(raw, strict=True)
     except FileNotFoundError:
         resolved = _resolve_absent(raw)
-    token = _canonical_token(resolved)
+    token = _canonical_token(resolved, native=native)
     if _EXTENDED_PREFIX.match(resolved) or _EXTENDED_PREFIX.match(token):
         raise OSError(errno.EINVAL, "an extended or device path spelling is not compared", raw)
     return token

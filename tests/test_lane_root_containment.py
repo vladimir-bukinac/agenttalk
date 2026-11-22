@@ -280,12 +280,12 @@ def _assignment_at_a_simulated_root(monkeypatch, tmp_path, *, store_token=HOST_R
     git_token = base + "/.git"
     made = tmp_path / "made"
 
-    def canonical(value):
+    def canonical(value, **kwargs):
         return git_token if str(value).endswith(".git") else store_token
 
     monkeypatch.setattr(lanes, "worktrees_root", lambda store, configured=None: made)
     monkeypatch.setattr(lanes, "resolve_creation_folder", lambda path: str(path))
-    monkeypatch.setattr(lanes, "_canonical_token", lambda resolved: root_token)
+    monkeypatch.setattr(lanes, "_canonical_token", lambda resolved, **kwargs: root_token)
     monkeypatch.setattr(lanes, "canonical_host_path_checked", canonical)
     return cli._prepare_worktrees_root(types.SimpleNamespace(root=tmp_path), None), made
 
