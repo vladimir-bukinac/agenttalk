@@ -978,8 +978,9 @@ then follow the case that fits the lane:
   and run the plain `lane abandon` second, the saved leftover reason is replaced by a
   message that the checkout cannot be verified; the acknowledgement still works.
 
-A retry of `lane deliver` or `lane abandon` while the folder is still there repeats the
-saved reason and does not call Git.
+While the folder is still there, a retry of `lane deliver` or `lane abandon` repeats the
+saved reason and does not call Git, except that plain `lane abandon` on a delivered lane whose
+delivery evidence is usable is refused and names `lane deliver` instead.
 
 Shared path approval:
 
