@@ -969,8 +969,8 @@ then follow the case that fits the lane:
   there and valid; `lane status` names this step only then): remove the folder, then run
   `lane deliver --id <lane>`. `lane abandon` (plain or with the acknowledgement) refuses
   such a lane and names `lane deliver`.
-- **A delivered lane whose delivery evidence is missing or invalid** (`lane deliver` exits 2
-  whatever you do to the folder), in this order: first run `lane abandon --id <lane>` while
+- **A delivered lane whose delivery evidence is missing or invalid** (`lane deliver` cannot
+  finish it, whatever you do to the folder), in this order: first run `lane abandon --id <lane>` while
   the folder is still there (it records the lane as abandoned instead of delivered and
   keeps the leftover reason, so the abandoned-lane list in `lane status` still names the
   folder); then remove the folder; then run
@@ -978,9 +978,10 @@ then follow the case that fits the lane:
   and run the plain `lane abandon` second, the saved leftover reason is replaced by a
   message that the checkout cannot be verified; the acknowledgement still works.
 
-While the folder is still there, a retry of `lane deliver` or `lane abandon` repeats the
-saved reason and does not call Git, except that plain `lane abandon` on a delivered lane whose
-delivery evidence is usable is refused and names `lane deliver` instead.
+While the folder is still there, a retry that can go ahead (`lane deliver` on a lane whose
+delivery evidence is usable, or a `lane abandon` that is allowed) repeats the saved reason
+and does not call Git. Plain `lane abandon` on a delivered lane whose delivery evidence is
+usable is refused and names `lane deliver` instead.
 
 Shared path approval:
 
