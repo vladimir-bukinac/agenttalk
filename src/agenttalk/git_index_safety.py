@@ -39,7 +39,16 @@ class Inspection:
 
 
 def _checkout_root(root, *, env=None):
-    command = ["git", "-C", str(root), "rev-parse", "--show-toplevel"]
+    command = [
+        "git",
+        "-C",
+        str(root),
+        "--no-replace-objects",
+        "-c",
+        "core.useReplaceRefs=false",
+        "rev-parse",
+        "--show-toplevel",
+    ]
     # Fixed read-only Git command, with no shell or user-selected operation.
     result = subprocess.run(command, capture_output=True, timeout=15, env=env)  # noqa: S603  # nosec B603
     if result.returncode != 0 or not isinstance(result.stdout, bytes) or not result.stdout.endswith(b"\n"):
@@ -53,7 +62,19 @@ def _checkout_root(root, *, env=None):
 
 
 def _records(root, option, *, env=None):
-    command = ["git", "-C", str(root), "ls-files", "--cached", option, "-z", "--full-name"]
+    command = [
+        "git",
+        "-C",
+        str(root),
+        "--no-replace-objects",
+        "-c",
+        "core.useReplaceRefs=false",
+        "ls-files",
+        "--cached",
+        option,
+        "-z",
+        "--full-name",
+    ]
     # Fixed read-only Git command, with no shell or user-selected operation.
     result = subprocess.run(  # noqa: S603  # nosec B603
         command,
@@ -200,7 +221,10 @@ def check_close_submodules(root, *, env=None, _root_verified=False) -> Inspectio
                     return Inspection("hidden", SUBMODULE_NOT_CLEAN)
                 # Fixed read-only Git command, with no shell or user-selected operation.
                 result = subprocess.run(  # noqa: S603,S607  # nosec B603 B607
-                    ["git", "-C", str(folder), *STATUS_ARGS], capture_output=True, timeout=15, env=env
+                    ["git", "-C", str(folder), "--no-replace-objects", "-c", "core.useReplaceRefs=false", *STATUS_ARGS],
+                    capture_output=True,
+                    timeout=15,
+                    env=env,
                 )
                 if result.returncode != 0 or not isinstance(result.stdout, bytes):
                     raise ValueError("submodule status failed")

@@ -285,8 +285,14 @@ def _project_git(repo, *args, env=None):
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}
     try:
         result = subprocess.run(  # noqa: S603,S607  # nosec B603 B607
-            ["git", "--no-replace-objects", "-C", str(repo), *args], capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=10, env=env)
+            ["git", "--no-replace-objects", "-C", str(repo), "-c", "core.useReplaceRefs=false", *args],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=10,
+            env=env,
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise AcceptanceError("acceptance_project_unverified", "project Git unavailable") from exc
     if result.returncode:
@@ -297,7 +303,7 @@ def _project_git(repo, *args, env=None):
 def _project_mismatch(repo, message):
     try:
         shallow = _project_git(Path(repo).resolve(), "rev-parse", "--is-shallow-repository")
-    except AcceptanceError:
+    except (AcceptanceError, ValueError):
         shallow = ""
     if shallow == "true":
         message += (" This checkout is a shallow clone; its history starts at the clone boundary, "
