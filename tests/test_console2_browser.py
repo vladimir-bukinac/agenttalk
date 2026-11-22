@@ -14,9 +14,11 @@ ordinary redraw exactly like the stream's needs-you cards and chat thread do, pl
 from __future__ import annotations
 
 import errno
+import functools
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -36,23 +38,36 @@ CHECK = REPO_ROOT / "tests" / "console2_browser_check.mjs"
 LEAD = "claude-agenttalk-lead"
 PROJECT = "proj-browser"
 
-# PR #230 delta review, F2: the subprocess timeout must exceed the check's OWN worst-case elapsed
-# time - the SUM of every phase, each already independent/sequential, never nested (the startup
-# phase is now itself ONE shared 90s budget, not two 90s budgets composed - see
-# console2_browser_check.mjs's STARTUP_BUDGET_MS/makeDeadline):
-#   startup (DevTools up AND a page target found - ONE shared budget) ......... 90.0s
-#   post-navigate settle sleep .................................................. 3.5s
-#   F1 stream redraw wait (waitForTextChange, its own independent 30s budget) . 30.0s
-#   F2 stream redraw wait (waitForTextChange) .................................. 30.0s
-#   board-cards-render wait loop (100 attempts x 150ms) ......................... 15.0s
-#   board meta redraw wait (waitForTextChange) .................................. 30.0s
-#   first-draw wait (thread and watched label, FIRST_DRAW_BUDGET_MS, #315) ..... 20.0s
-#   misc small fixed sleeps and CDP round-trips (keyboard/overlay steps, etc.) ...  5.0s
-#                                                                              ----------
-#   worst case, one full scenario ............................................ 223.5s
-# 240s leaves ~16s of headroom above that computed worst case. (A second attempt after a
-# network-buffer error, see run_browser_check, is a separate subprocess with its own timeout.)
-BROWSER_CHECK_TIMEOUT_S = 240
+# The check owns its phase budgets; this margin covers startup and teardown overhead.
+CHECK_MARGIN_S = 30
+
+
+@functools.cache
+def phase_budgets_ms():
+    script = (f"import * as m from {json.dumps(CHECK.as_uri())}; "
+              "process.stdout.write(JSON.stringify(m.PHASE_BUDGETS_MS))")
+    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True,
+                            encoding="utf-8", timeout=60, cwd=REPO_ROOT, check=True)
+    return json.loads(result.stdout)
+
+
+def browser_check_timeout_s():
+    return sum(phase_budgets_ms().values()) / 1000 + CHECK_MARGIN_S
+
+
+def _run_check(argv, *, run=subprocess.run):
+    # A fake runner keeps the retry tests independent of Node and the browser.
+    limit = browser_check_timeout_s() if run is subprocess.run else None
+    try:
+        return run(argv, capture_output=True, text=True, encoding="utf-8", timeout=limit, cwd=REPO_ROOT)
+    except subprocess.TimeoutExpired as error:
+        stderr = error.stderr or ""
+        if isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", errors="replace")
+        phases = re.findall(r"console2 check: phase ([\w-]+) started", stderr)
+        phase = phases[-1] if phases else "unknown"
+        pytest.fail(f"the browser check was stopped after {error.timeout} s in phase {phase}; "
+                    f"its output so far: {stderr}")
 
 # #315: the one console line a Windows runner prints when it runs out of network buffers after hours of
 # tests. It is the machine, not the page, so it alone earns one more try; any other problem never does.
@@ -85,10 +100,8 @@ def run_browser_check(url: str, profile: Path, flags: list[str], *, browser: str
     out: dict = {}
     for attempt in (1, 2):
         attempt_profile = profile if attempt == 1 else profile.with_name(profile.name + "-retry")
-        result = run(
-            ["node", str(CHECK), browser, url, str(attempt_profile), json.dumps(flags), *extra_args],
-            capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
-        )
+        result = _run_check(["node", str(CHECK), browser, url, str(attempt_profile), json.dumps(flags), *extra_args],
+                            run=run)
         # A browser binary that exists but fails to start is a hard FAILURE, never a skip -
         # result.stderr carries the launched process's own stderr on that path (see the .mjs).
         assert result.returncode == 0, result.stderr
@@ -581,10 +594,7 @@ def test_check_catches_a_redraw_that_breaks_scroll_after_setup(page) -> None:
     """
     url, profile = page
     flags = _browser_launch_flags(platform.system())
-    result = subprocess.run(
-        ["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags), "scroll"],
-        capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
-    )
+    result = _run_check(["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags), "scroll"])
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
     assert out["ageMoved"] is True, "the redraws really happened"
@@ -604,10 +614,7 @@ def test_check_waits_for_a_late_first_draw_instead_of_failing_on_a_missing_label
     The data here arrives 6 s late: the check must wait for the draw (bounded) and then pass."""
     url, profile = slow_first_draw_page
     flags = _browser_launch_flags(platform.system())
-    result = subprocess.run(
-        ["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)],
-        capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
-    )
+    result = _run_check(["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)])
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
     assert out["initial"]["connected"] is True
@@ -711,10 +718,7 @@ def test_check_does_not_hide_a_page_exception_raised_while_it_waits_for_the_firs
     later good query hides it."""
     url, profile = one_shot_query_error_page
     flags = _browser_launch_flags(platform.system())
-    result = subprocess.run(
-        ["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)],
-        capture_output=True, text=True, encoding="utf-8", timeout=BROWSER_CHECK_TIMEOUT_S, cwd=REPO_ROOT,
-    )
+    result = _run_check(["node", str(CHECK), BROWSER, url, str(profile), json.dumps(flags)])
     assert result.returncode != 0, "the injected page exception was swallowed"
     assert "injected query failure" in result.stderr, result.stderr
     assert "watched age label not found" not in result.stderr, result.stderr  # not replaced by the absent-label message

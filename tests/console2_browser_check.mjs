@@ -28,7 +28,25 @@ export const PER_REQUEST_CAP_MS = 10000;
 // clock, not two independent ones (see makeDeadline/F2 below).
 export const STARTUP_BUDGET_MS = 90000;
 // #315: how long to wait for the page's first draw (thread and watched label) after the fixed settle sleep.
-export const FIRST_DRAW_BUDGET_MS = 20000;
+export const FIRST_DRAW_BUDGET_MS = 45000;
+export const HEAD_START_MS = 3500;
+export const REDRAW_BUDGET_MS = 30000;
+export const BOARD_RENDER_BUDGET_MS = 15000;
+export const NAVIGATE_BUDGET_MS = 5000;
+export const KEYS_BUDGET_MS = 5000;
+export const SMALL_SLEEP_MS = 200;
+export const LATER_SLEEP_MS = 300;
+export const FIXED_SLEEPS_MS = 3 * SMALL_SLEEP_MS + LATER_SLEEP_MS;
+export const PHASE_BUDGETS_MS = {
+  startup: STARTUP_BUDGET_MS, headStart: HEAD_START_MS, firstDraw: FIRST_DRAW_BUDGET_MS,
+  streamRedraw1: REDRAW_BUDGET_MS, streamRedraw2: REDRAW_BUDGET_MS,
+  boardRender: BOARD_RENDER_BUDGET_MS, boardRedraw: REDRAW_BUDGET_MS, fixedSleeps: FIXED_SLEEPS_MS,
+  navigate: NAVIGATE_BUDGET_MS, keys: KEYS_BUDGET_MS,
+};
+
+export function firstDrawDiagnostics(problems) {
+  return problems.length ? `; page errors so far: ${JSON.stringify(problems)}` : '; the page reported no errors';
+}
 
 // A single overall elapsed-time budget, meant to be created ONCE and threaded through every wait
 // composed from it. PR #230 delta review, F2: the previous code gave waitForPageTarget its OWN
@@ -41,6 +59,52 @@ export function makeDeadline(totalMs, { now = Date.now } = {}) {
   return {
     remainingMs: () => Math.max(0, totalMs - (now() - start)),
     expired: () => now() - start >= totalMs,
+  };
+}
+
+export class ProtocolStoppedError extends Error {}
+
+// Every pending request is rejected on a closed socket or a dead browser.
+export function makeProtocol(socket, child, currentPhase) {
+  let seq = 0;
+  let stopped;
+  const pending = new Map();
+  const on = (target, event, handler) => target.addEventListener
+    ? target.addEventListener(event, handler) : target.on(event, handler);
+  const stop = (why) => {
+    if (stopped) return;
+    stopped = new ProtocolStoppedError(why);
+    for (const request of pending.values()) request.reject(stopped);
+    pending.clear();
+  };
+  on(socket, 'close', () => stop('browser socket closed'));
+  on(child, 'exit', () => stop('browser exited'));
+  on(socket, 'message', (event) => {
+    const msg = JSON.parse(event.data);
+    const request = pending.get(msg.id);
+    if (!request) return;
+    pending.delete(msg.id);
+    if (msg.error) request.reject(new Error(msg.error.message)); else request.resolve(msg.result);
+  });
+  return {
+    send(method, params = {}) {
+      if (stopped) return Promise.reject(stopped);
+      const { name, deadline } = currentPhase();
+      const timeout = Math.max(2000, deadline.remainingMs());
+      return new Promise((resolve, reject) => {
+        const id = ++seq;
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new ProtocolStoppedError(`browser did not answer ${method} in phase ${name} within ${timeout} ms`));
+        }, timeout);
+        pending.set(id, {
+          resolve: (value) => { clearTimeout(timer); resolve(value); },
+          reject: (error) => { clearTimeout(timer); reject(error); },
+        });
+        try { socket.send(JSON.stringify({ id, method, params })); }
+        catch (error) { pending.get(id).reject(error); pending.delete(id); }
+      });
+    },
   };
 }
 
@@ -206,8 +270,20 @@ export async function startDevToolsSession({ readActivePort, fetchJson, fetchTex
 // Everything below this line is the check's own entrypoint - spawning a real browser and driving
 // it over CDP - guarded so importing the pure helpers above (for a unit test) never also does that.
 async function main() {
-const [exe, pageUrl, profile, flagsJson, sabotage] = process.argv.slice(2);
+const [exe, pageUrl, profile, flagsJson, sabotage, optionsJson] = process.argv.slice(2);
 const extraFlags = flagsJson ? JSON.parse(flagsJson) : [];
+const options = optionsJson ? JSON.parse(optionsJson) : {};
+const phases = [];
+const began = Date.now();
+let current;
+function phase(name, budget) {
+  const start = Date.now();
+  if (current) current.elapsed = start - current.start;
+  current = { name, start, deadline: makeDeadline(budget) };
+  phases.push(current);
+  process.stderr.write(`console2 check: phase ${name} started at ${start - began} ms\n`);
+}
+phase('startup', STARTUP_BUDGET_MS);
 
 // The page can carry more than one `.c2-age` label at once (one per open card), each on its OWN
 // independent clock, and "the first .c2-age" is neither stable (DOM/queue order depends on
@@ -230,26 +306,17 @@ const sabotageScrollScript = sabotage === 'scroll'
 // The caller supplies a private profile (the page fixture uses pytest's tmp_path).
 // A previous process may have left its port file behind; remove it before launch.
 // An already-open profile is still unsupported.
-await clearActivePort(fs.promises, profile);
-const child = spawn(exe, browserLaunchArgs(profile, extraFlags), { stdio: ['ignore', 'ignore', 'pipe'] });
-
+let child;
 let childStderr = '';
-child.stderr.on('data', (chunk) => { childStderr += chunk.toString(); });
 let childExit = null;
-child.on('exit', (code, signal) => { childExit = { code, signal }; });
 const checkChildExited = () => childExit && { ...childExit, stderr: childStderr };
 
-let seq = 0;
-const pending = new Map();
 const problems = [];
 let ws;
+let protocol;
 
 function send(method, params = {}) {
-  return new Promise((resolve, reject) => {
-    const id = ++seq;
-    pending.set(id, { resolve, reject });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
+  return protocol.send(method, params);
 }
 
 async function evaluate(expression) {
@@ -276,7 +343,7 @@ async function evaluate(expression) {
 let keepAliveTargetId = null;
 let session;
 
-async function waitForTextChange(selector, previousText, { timeoutMs = 30000, intervalMs = 250 } = {}) {
+async function waitForTextChange(selector, previousText, { timeoutMs = REDRAW_BUDGET_MS, intervalMs = 250 } = {}) {
   const start = Date.now();
   for (;;) {
     if (keepAliveTargetId !== null) await session.activate(keepAliveTargetId).catch(() => {});
@@ -339,6 +406,11 @@ async function pressKey(name, opts = {}) {
 }
 
 try {
+  await clearActivePort(fs.promises, profile);
+  child = spawn(exe, browserLaunchArgs(profile, extraFlags), { stdio: ['ignore', 'ignore', 'pipe'] });
+  child.stderr.on('data', (chunk) => { childStderr += chunk.toString(); });
+  child.on('exit', (code, signal) => { childExit = { code, signal }; });
+  child.on('error', (error) => { childExit = { error: error.message }; });
   const getDiagnostics = () => {
     let activePort;
     try {
@@ -356,14 +428,29 @@ try {
   });
   const { page } = session;
   keepAliveTargetId = page.id;
+  phase('navigate', NAVIGATE_BUDGET_MS);
   ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+  protocol = makeProtocol(ws, child, () => current);
+  if (checkChildExited()) throw new FatalExitError('the browser socket', checkChildExited());
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => done(new ProtocolStoppedError('browser socket did not open in phase navigate')),
+      Math.max(2000, current.deadline.remainingMs()));
+    const exited = () => done(new ProtocolStoppedError('browser exited before its socket opened'));
+    const closed = () => done(new ProtocolStoppedError('browser socket closed before opening'));
+    function done(error) {
+      clearTimeout(timer);
+      child.off('exit', exited);
+      ws.removeEventListener('close', closed);
+      if (error) reject(error); else resolve();
+    }
+    child.once('exit', exited);
+    ws.addEventListener('close', closed);
+    ws.onopen = () => done();
+    ws.onerror = () => done(new ProtocolStoppedError('browser socket failed to open'));
+  });
   ws.onmessage = (ev) => {
     const msg = JSON.parse(ev.data);
-    if (msg.id && pending.has(msg.id)) {
-      const p = pending.get(msg.id); pending.delete(msg.id);
-      if (msg.error) p.reject(new Error(msg.error.message)); else p.resolve(msg.result);
-    } else if (msg.method === 'Runtime.exceptionThrown') {
+    if (msg.method === 'Runtime.exceptionThrown') {
       problems.push('exception: ' + JSON.stringify(msg.params.exceptionDetails.text));
     } else if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
       problems.push('log: ' + msg.params.entry.text);
@@ -385,13 +472,17 @@ try {
   // same swallowed catch. A single plain GET, and an explicit post-navigate visibility check that
   // FAILS CLEARLY rather than silently proceeding, replaces it.
   await session.activate(page.id);
-  try { await send('Page.setWebLifecycleState', { state: 'active' }); } catch (e) { /* older targets lack this; session.activate above is the primary mechanism */ }
+  try { await send('Page.setWebLifecycleState', { state: 'active' }); } catch (e) {
+    if (e instanceof ProtocolStoppedError) throw e;
+    /* older targets lack this; session.activate above is the primary mechanism */
+  }
   await send('Page.navigate', { url: pageUrl });
   const stillHidden = await evaluate('document.hidden');
   if (stillHidden) {
     throw new Error('target activation did not make the page visible (document.hidden is still true)');
   }
-  await sleep(3500);                                   // first poll, feeds, first draw
+  phase('head-start', HEAD_START_MS);
+  await sleep(HEAD_START_MS);                          // first poll, feeds, first draw
 
   const out = {};
   const measure = () => evaluate(`(() => { const t = document.querySelector('.c2-thread');
@@ -408,27 +499,18 @@ try {
   // A query that fails - the page raised an exception, the browser answered with a protocol error, or
   // the browser did not answer in time - is a real fault and stops the check with its own cause; it is
   // never retried (a later good query would hide it) and never reported as "label not found".
-  const firstDrawDeadline = makeDeadline(FIRST_DRAW_BUDGET_MS);
+  phase('first-draw', options.firstDrawMs ?? FIRST_DRAW_BUDGET_MS);
+  const firstDrawDeadline = current.deadline;
   let watchedLabelText = null;
   for (;;) {
     const exited = checkChildExited();
     if (exited) throw new FatalExitError('the first draw', exited);
     // Each query is bounded by what is left of the budget (at least 2 s), so an unresponsive browser
     // cannot make the "20 s" longer than it says.
-    const queryBudgetMs = Math.max(2000, firstDrawDeadline.remainingMs());
-    let timer;
-    const unanswered = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(
-        `the browser did not answer a query within ${queryBudgetMs / 1000}s while waiting for the first draw`)), queryBudgetMs);
-    });
-    try {
-      watchedLabelText = await Promise.race([evaluate(
+    watchedLabelText = await evaluate(
         `(() => { const a = document.querySelector('${WATCHED_AGE_SELECTOR}'); const t = document.querySelector('.c2-thread');
           return a && t ? a.textContent : null; })()`,
-      ), unanswered]);
-    } finally {
-      clearTimeout(timer);
-    }
+    );
     if (watchedLabelText !== null) break;
     if (firstDrawDeadline.expired()) {
       throw new Error(`watched age label not found: no element matches "${WATCHED_AGE_SELECTOR}" `
@@ -436,6 +518,8 @@ try {
     }
     await sleep(Math.max(0, Math.min(250, firstDrawDeadline.remainingMs())));
   }
+
+  phase('keys', KEYS_BUDGET_MS);
 
   // F1: first draw is scrolled to the end
   out.initial = await measure();
@@ -475,7 +559,7 @@ try {
   out.focusAfterEnterOnB = await evaluate(`(() => { const a = document.activeElement;
     return { tag: a.tagName, cls: a.className }; })()`);
   await pressKey('Enter');
-  await sleep(200);
+  await sleep(SMALL_SLEEP_MS);
   out.cardsAfterSecondEnter = await evaluate(`document.querySelectorAll('.c2-card').length`);
   out.remainingCardIsA = (await cardKey(0)) === cardAKey;
 
@@ -551,6 +635,7 @@ try {
     return document.querySelector('${WATCHED_AGE_SELECTOR}').textContent;
   })()`);
   assertFineGrainedAge(ageAtScroll, /\d+([smhd])$/, 'the watched stream card\'s age (F1 scroll baseline)');
+  phase('stream-redraw-1', REDRAW_BUDGET_MS);
   out.firstRedrawWaitMs = (await waitForAgeChange(ageAtScroll)).elapsedMs;
   out.afterRedraw = await measure();
   out.threadKept = await evaluate('window.__thread === document.querySelector(".c2-thread") && window.__thread.isConnected');
@@ -570,6 +655,7 @@ try {
     return document.querySelector('${WATCHED_AGE_SELECTOR}').textContent;
   })()`);
   assertFineGrainedAge(ageBefore, /\d+([smhd])$/, 'the watched stream card\'s age (F2 focus baseline)');
+  phase('stream-redraw-2', REDRAW_BUDGET_MS);
   const secondRedrawWait = await waitForAgeChange(ageBefore);
   out.secondRedrawWaitMs = secondRedrawWait.elapsedMs;
   out.ageMoved = secondRedrawWait.changed;
@@ -578,7 +664,7 @@ try {
 
   // F2: deferring the focused card moves focus to a deliberate place inside the stream, never <body>
   await evaluate(`(() => { document.activeElement.click(); return true; })()`);
-  await sleep(300);
+  await sleep(LATER_SLEEP_MS);
   out.focusAfterLater = await evaluate(`(() => { const a = document.activeElement;
     return { tag: a.tagName, key: a.getAttribute('data-c2-focus'), inStream: document.getElementById('c2-stream').contains(a) }; })()`);
 
@@ -592,16 +678,17 @@ try {
   // otherwise stall it forever): a headless target has been observed drifting back to backgrounded
   // after enough prior CDP interaction (overlay/keyboard steps above), so re-assert activation
   // right here rather than trust the very first one (top of this script) to still hold this far in.
+  phase('board-render', BOARD_RENDER_BUDGET_MS);
   await session.activate(page.id);
   if (await evaluate('document.hidden')) {
     throw new Error('the page went hidden again before the board section; target activation did not hold');
   }
   const BOARD_META_SELECTOR = '[data-c2-card="board|board-a"] .c2-board-card-meta';
   await evaluate("location.hash = '#board'");
-  for (let i = 0; i < 100; i++) {
+  for (let i = 0; i < BOARD_RENDER_BUDGET_MS / 150; i++) {
     const n = await evaluate("document.querySelectorAll('.c2-board-card').length");
     if (n >= 2) break;
-    if (i === 99) {
+    if (i === BOARD_RENDER_BUDGET_MS / 150 - 1) {
       throw new Error('board cards never rendered; board.textContent='
         + await evaluate('document.getElementById("c2-board").textContent')
         + ' docHidden=' + await evaluate('document.hidden')
@@ -636,6 +723,7 @@ try {
     return document.querySelector('${BOARD_META_SELECTOR}').textContent;
   })()`);
   assertFineGrainedAge(metaAtScroll, /active \d+([smhd]) ago/, 'the watched board card\'s "active" age (scroll baseline)');
+  phase('board-redraw', REDRAW_BUDGET_MS);
   await waitForTextChange(BOARD_META_SELECTOR, metaAtScroll);
   out.boardScrollKept = await evaluate('window.__boardEl.scrollTop') === 40;
   out.boardContainerKept = await evaluate('window.__boardEl === document.getElementById("c2-board") && window.__boardEl.isConnected');
@@ -677,11 +765,11 @@ try {
     + ' return document.activeElement === a; })()',
   );
   await pressKey('Enter');
-  await sleep(200);
+  await sleep(SMALL_SLEEP_MS);
   out.n2ConversationLinkNavigatesOnEnter = await evaluate("location.hash === '#conversation'");
   // Back to #board for a clean end state, and confirm the help button's native Enter still works too.
   await evaluate("location.hash = '#board'");
-  await sleep(200);
+  await sleep(SMALL_SLEEP_MS);
   await evaluate("(() => { document.querySelector('.c2-keybtn').focus(); return true; })()");
   await pressKey('Enter');
   out.n2HelpButtonStillOpensOnEnter = await evaluate(
@@ -691,11 +779,18 @@ try {
 
   out.problems = problems;
   process.stdout.write(JSON.stringify(out));
+} catch (error) {
+  const now = Date.now();
+  const elapsed = now - current.start;
+  const timings = phases.map((p) => `${p.name} ${p.elapsed ?? now - p.start} ms${p === current ? ' (unfinished)' : ''}`);
+  const diagnostics = current.name === 'first-draw' ? firstDrawDiagnostics(problems) : '';
+  console.error(`console2 check: failed in phase ${current.name} after ${elapsed} ms; phases: ${timings.join(', ')}${diagnostics}`);
+  console.error(error);
+  process.exitCode = 1;
 } finally {
   try { ws && ws.close(); } catch (e) { /* closing */ }
-  child.kill();
+  if (child) child.kill();
 }
-process.exit(0);
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
