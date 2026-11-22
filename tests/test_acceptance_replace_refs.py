@@ -17,6 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from agenttalk import acceptance, acceptance_audit
+from git_launches import ignores_replace_refs, protected_project_read, split_launch
 
 
 def run_git(project, *args, env=None, data=None):
@@ -128,28 +129,35 @@ def test_the_working_tree_at_the_stored_commit_still_verifies_with_a_replace_ref
 # ---------------------------------------------------------------------------- every acceptance Git read
 
 
+# Git launches of the sequence below: a non-live and a live verification (5 project reads + 2 index listings), the
+# shallow check, the audit's history check (shallow, 2 ancestry reads), and its change identity (2 commit checks, 1
+# ancestry read, the diff and the patch id); the audit's reads are cached within a command scope but there is none here.
+EXPECTED_LAUNCHES = 20
+
+
 def recorded_git_calls(monkeypatch):
+    """Every `git` launch made through `subprocess.Popen` (which `run`, `check_output` and `call` use), as
+    (argument list, environment). What it cannot see: `os.system`, `os.popen` and the spawn family, a launch that
+    never runs on the paths a test exercises, and an asyncio launch on Windows (its transport has its own Popen)."""
     calls = []
-    real = subprocess.run
+    real = subprocess.Popen
 
-    def observed(args, *a, **kw):
-        if args and args[0] == "git":
-            calls.append((list(args), kw.get("env") or {}))
-        return real(args, *a, **kw)
+    class Watching(real):
+        def __init__(self, args, *a, **kw):
+            if isinstance(args, (list, tuple)) and args and args[0] == "git":
+                calls.append((list(args), kw.get("env") or {}))
+            super().__init__(args, *a, **kw)
 
-    monkeypatch.setattr(subprocess, "run", observed)
+    monkeypatch.setattr(subprocess, "Popen", Watching)
     return calls
-
-
-def ignores_replace_refs(args, env):
-    return "--no-replace-objects" in args[:3] or env.get("GIT_NO_REPLACE_OBJECTS") == "1"
 
 
 @pytest.mark.parametrize("replaced", [False, True])
 def test_every_git_read_acceptance_makes_ignores_replace_refs(history, monkeypatch, replaced):
     """The project facts (toplevel and commit, tree, roots, HEAD, status), the shallow check on a refusal, and the cold
     audit (history completeness, ancestry, the commit check, the diff and its patch id) are all run, and every Git
-    call among them ignores replace refs: by the global option, or by the environment variable the audit sets."""
+    call among them ignores replace refs: by the global option, wherever it sits in the argument list (acceptance's
+    helper writes it before `-C`, the index-safety helper after it), or by the environment variable the audit sets."""
     if replaced:
         substitute(history)
     calls = recorded_git_calls(monkeypatch)
@@ -167,10 +175,35 @@ def test_every_git_read_acceptance_makes_ignores_replace_refs(history, monkeypat
     subcommands = {name for args, _ in calls for name in names if name in args}
     assert {"rev-parse", "rev-list", "status", "merge-base", "diff", "patch-id"} <= subcommands, subcommands
     assert "--is-shallow-repository" in {arg for args, _ in calls for arg in args}
+    assert sum(split_launch(args)[1][0] == "ls-files" for args, _ in calls) == 2  # the live verification's index reads
+    assert len(calls) == EXPECTED_LAUNCHES, [split_launch(args)[1][:2] for args, _ in calls]
     assert all(ignores_replace_refs(args, env) for args, env in calls), [
         args for args, env in calls if not ignores_replace_refs(args, env)
     ]
+    # The project reads (acceptance's helper and the index-safety helper) also carry the configuration pair; only the
+    # audit's reads, which set the environment variable instead, do not.
+    assert all(protected_project_read(args) for args, env in calls if env.get("GIT_NO_REPLACE_OBJECTS") != "1")
     assert related is True and identity["revision"] == history.sha
+
+
+def history_peek_outside_the_acceptance_modules(repo):
+    """A stand-in for a helper that is not in SOURCES and reads history through `Popen`."""
+    process = subprocess.Popen(["git", "-C", str(repo), "rev-list", "HEAD"], stdout=subprocess.PIPE)
+    return process.communicate()[0]
+
+
+def test_the_runtime_guard_sees_a_launch_made_through_popen_outside_the_acceptance_modules(history, monkeypatch):
+    """The runtime guard watches `Popen`, which `run`, `check_output` and `call` use too: a launch made by a helper
+    outside the acceptance modules, in any of those spellings, is recorded and judged like the acceptance reads, so an
+    unguarded history read on an exercised path is found."""
+    calls = recorded_git_calls(monkeypatch)
+
+    assert history_peek_outside_the_acceptance_modules(history.project)
+    subprocess.check_output(["git", "-C", str(history.project), "rev-parse", "HEAD"])
+
+    launched = [args for args, _ in calls]
+    assert [args[3:] for args in launched] == [["rev-list", "HEAD"], ["rev-parse", "HEAD"]], launched
+    assert not any(ignores_replace_refs(args, env) for args, env in calls)  # both would be flagged
 
 
 def test_the_cold_audit_gives_the_same_answers_with_a_replace_ref_present(history):
@@ -273,11 +306,16 @@ def inventory(paths):
 
 
 def test_the_inventory_of_acceptance_git_calls_is_closed_and_each_one_ignores_replace_refs():
-    """The inventory (#887): in the acceptance modules and the modules they call (close, gates, the Git read cache)
-    exactly two uses of a process launcher exist, one in each of two functions, and both are Git readers that ignore
-    replace refs. A third use, in any spelling, fails here, so a new Git call that reads history cannot be added
-    without choosing, in this test, how it ignores them. (This is also why the runtime guard above, which watches
-    `subprocess.run`, is enough: a name imported directly would be found here.)"""
+    """The inventory (#887), and what it does and does not claim. It reads the source of the acceptance modules and the
+    modules they call (close, gates, the Git read cache) and finds every launcher spelled as `subprocess.<launcher>` or
+    `os.<launcher>`, or imported from those modules (with or without an alias): exactly two uses exist, one in each of
+    two functions, and both are Git readers that ignore replace refs. A third use in those modules, in one of those
+    spellings, fails here. It does NOT see a launch spelled another way (`getattr(subprocess, "run")`, the module saved
+    in a variable, asyncio's `create_subprocess_*`), and it does not read the modules that acceptance calls outside this
+    list (the index-safety helper, whose launches the counting tests and the runtime guard watch instead). The runtime
+    guard (`recorded_git_calls`) is the other half: it sees every launch made through `subprocess.Popen` (so `run`,
+    `check_output` and `call` too) on the paths the tests exercise, and nothing that is not exercised, and not
+    `os.system`, `os.popen` or the spawn family."""
     found, problems = inventory(SOURCES)
     assert not problems, problems
     assert found == {("acceptance.py", "_project_git"): 1, ("acceptance_audit.py", "_git"): 1}, found

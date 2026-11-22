@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from agenttalk import acceptance, cli, close, janitor, lanes
+from git_launches import ignores_replace_refs, protected_project_read, split_launch
 from test_git_index_safety import safety as _safety
 from agenttalk.store import Store
 from test_lanes import (
@@ -366,7 +367,11 @@ def test_submodule_status_failure_is_not_clean(tmp_path, monkeypatch):
     calls = []
 
     def fail_child_status(argv, **kwargs):
-        if argv[:3] == ["git", "-C", str(root / "module")] and argv[3:] == _safety().STATUS_ARGS:
+        options, rest = split_launch(argv) if argv[0] == "git" else (None, [])
+        if options and options.path == str(root / "module") and rest == _safety().STATUS_ARGS[4:]:
+            # The submodule status (STATUS_ARGS begins with two `-c` pairs, which are options of the launch).
+            assert set(_safety().STATUS_ARGS[1::2][:2]) <= set(options.config)
+            assert ignores_replace_refs(argv) and protected_project_read(argv)  # and it is protected like the rest
             calls.append(True)
             return subprocess.CompletedProcess(argv, 1, b"", b"")
         return original(argv, **kwargs)

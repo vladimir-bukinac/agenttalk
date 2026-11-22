@@ -7,6 +7,7 @@ import pytest
 import test_acceptance as fixtures
 
 from agenttalk import acceptance
+from git_launches import ignores_replace_refs, protected_project_read, split_launch
 from test_acceptance import command, git, open_attempt
 
 case = fixtures.case
@@ -87,7 +88,7 @@ def test_resolver_reuses_enclosing_cli_command_scope(case, monkeypatch):
     assert resolved
     # One combined fixed-commit metadata read, and one live root read for
     # each of the explicit and resolver calls within the command scope.
-    commands = [args[3:] for args in metadata_reads]
+    commands = [split_launch(args)[1] for args in metadata_reads]
     assert commands.count(["rev-parse", "--show-toplevel", "--verify", "--end-of-options",
                            f"{case['sha']}^{{commit}}"]) == 1
     assert commands.count(["rev-parse", "--show-toplevel"]) == 2
@@ -99,8 +100,8 @@ def test_command_reads_project_metadata_once_but_rechecks_live_state(case, monke
     original = subprocess.run
 
     def counted(args, *a, **kw):
-        if args[:4] == ["git", "--no-replace-objects", "-C", str(case["project"])]:
-            calls.append(args[4:])
+        if args[0] == "git" and split_launch(args)[0].path == str(case["project"]):
+            calls.append(split_launch(args)[1])
         return original(args, *a, **kw)
 
     monkeypatch.setattr(subprocess, "run", counted)
@@ -211,7 +212,7 @@ def test_project_read_scopes_reset_on_nested_calls_and_exceptions(case, monkeypa
                 acceptance.verify_project(case["project"], case["sha"], live=False)
             again = acceptance.verify_project(case["project"], case["sha"], live=False)
             assert again["roots"] == [case["sha"]]
-            commands = [args[3:] for args in calls]
+            commands = [split_launch(args)[1] for args in calls]
             metadata = ["rev-parse", "--show-toplevel", "--verify", "--end-of-options",
                         f"{case['sha']}^{{commit}}"]
             root_read = ["rev-parse", "--show-toplevel"]
@@ -222,7 +223,7 @@ def test_project_read_scopes_reset_on_nested_calls_and_exceptions(case, monkeypa
             assert len(commands) == 5
             raise RuntimeError("abort")
     acceptance.verify_project(case["project"], case["sha"], live=False)
-    commands = [args[3:] for args in calls]
+    commands = [split_launch(args)[1] for args in calls]
     # The scope exited exceptionally, so this call gets fresh metadata and root.
     assert commands.count(metadata) == 3
     assert commands.count(root_read) == 4
@@ -281,8 +282,17 @@ def test_project_git_reads_disable_replace_objects_on_fresh_and_cached_verify(ca
         acceptance.verify_project(case["project"], case["sha"])
         first = len(calls)
         acceptance.verify_project(case["project"], case["sha"])
-    assert first == 4 and len(calls) - first == 2
-    assert all(call[1:3] == ["--no-replace-objects", "-C"] for call in calls)
+    # A fresh live verification: 5 project reads (commit and toplevel, tree and HEAD, roots, the live toplevel, status)
+    # and the 2 index listings of the index-safety helper; a cached one: the 3 live project reads (toplevel, HEAD,
+    # status) and the same 2 listings.
+    fresh, cached = calls[:first], calls[first:]
+    subcommands = lambda group: sorted(split_launch(call)[1][0] for call in group)  # noqa: E731
+    assert subcommands(fresh) == ["ls-files", "ls-files", "rev-list", "rev-parse", "rev-parse", "rev-parse", "status"]
+    assert subcommands(cached) == ["ls-files", "ls-files", "rev-parse", "rev-parse", "status"]
+    assert len(fresh) == 7 and len(cached) == 5
+    # Each launch carries the option wherever it sits, and the configuration pair that also reaches the Git that a
+    # submodule's status starts: the two launchers write them in different places.
+    assert all(ignores_replace_refs(call) and protected_project_read(call) for call in calls)
     assert all("--is-shallow-repository" not in call for call in calls)
 
 
