@@ -11,6 +11,19 @@ import pytest
 import test_console2_browser as browser
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
+@pytest.mark.parametrize("budget, expected", [(500, "within 0.5s"), (45000, "within 45s")])
+def test_750_first_draw_message_uses_actual_budget(budget, expected):
+    module = json.dumps(browser.CHECK.as_uri())
+    script = (
+        f"import {{ firstDrawNotFoundMessage }} from {module}; console.log(firstDrawNotFoundMessage('label', {budget}))"
+    )
+    result = subprocess.run(["node", "--input-type=module", "-e", script], text=True, capture_output=True, timeout=20)
+    assert result.returncode == 0, result.stderr
+    assert expected in result.stdout
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 def test_750_derived_timeout_and_pinned_budgets():
     budgets = browser.phase_budgets_ms()
     assert budgets["startup"] == 90000
@@ -40,6 +53,7 @@ def test_750_timeout_reports_last_phase_and_does_not_retry(tmp_path, stderr):
     assert "phase startup started" in str(failure.value)
 
 
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not available")
 @pytest.mark.parametrize("scenario", ["unanswered", "exit-and-close"])
 def test_750_protocol_standin(scenario):
     result = subprocess.run(
@@ -120,6 +134,7 @@ def test_750_first_draw_expiry_reports_phase_and_page_errors(tmp_path, script_fa
     assert result.returncode != 0
     if "watched age label not found" not in result.stderr:
         pytest.fail(result.stderr)
+    assert "within 0.5s" in result.stderr
     assert "phase first-draw" in result.stderr and "first-draw" in result.stderr.split("phases:")[-1]
     assert "(unfinished)" in result.stderr
     if script_fails:

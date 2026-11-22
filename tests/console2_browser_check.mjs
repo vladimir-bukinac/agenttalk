@@ -48,6 +48,11 @@ export function firstDrawDiagnostics(problems) {
   return problems.length ? `; page errors so far: ${JSON.stringify(problems)}` : '; the page reported no errors';
 }
 
+export function firstDrawNotFoundMessage(selector, budgetMs) {
+  return `watched age label not found: no element matches "${selector}" `
+    + `(or the thread is missing) within ${budgetMs / 1000}s after the page loaded`;
+}
+
 // A single overall elapsed-time budget, meant to be created ONCE and threaded through every wait
 // composed from it. PR #230 delta review, F2: the previous code gave waitForPageTarget its OWN
 // fresh 90s timeout, which internally called json() - ALSO its own fresh 90s timeout - so a
@@ -499,7 +504,8 @@ try {
   // A query that fails - the page raised an exception, the browser answered with a protocol error, or
   // the browser did not answer in time - is a real fault and stops the check with its own cause; it is
   // never retried (a later good query would hide it) and never reported as "label not found".
-  phase('first-draw', options.firstDrawMs ?? FIRST_DRAW_BUDGET_MS);
+  const firstDrawBudgetMs = options.firstDrawMs ?? FIRST_DRAW_BUDGET_MS;
+  phase('first-draw', firstDrawBudgetMs);
   const firstDrawDeadline = current.deadline;
   let watchedLabelText = null;
   for (;;) {
@@ -513,8 +519,7 @@ try {
     );
     if (watchedLabelText !== null) break;
     if (firstDrawDeadline.expired()) {
-      throw new Error(`watched age label not found: no element matches "${WATCHED_AGE_SELECTOR}" `
-        + `(or the thread is missing) within ${FIRST_DRAW_BUDGET_MS / 1000}s after the page loaded`);
+      throw new Error(firstDrawNotFoundMessage(WATCHED_AGE_SELECTOR, firstDrawBudgetMs));
     }
     await sleep(Math.max(0, Math.min(250, firstDrawDeadline.remainingMs())));
   }
