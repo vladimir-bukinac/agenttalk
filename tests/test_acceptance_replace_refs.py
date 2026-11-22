@@ -10,6 +10,7 @@ import inspect
 import os
 import shutil
 import subprocess
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -206,45 +207,168 @@ SOURCES = sorted(
 )
 
 
-def process_call_sites(path):
-    """(file, enclosing function) of every call that starts a process or runs a command in `path`."""
-    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
-    found = set()
+# What starts a process or runs a command, by module. `subprocess` and `os` are the ones these modules could reach.
+LAUNCHERS = {
+    "subprocess": {"run", "Popen", "call", "check_call", "check_output", "getoutput", "getstatusoutput"},
+    "os": {
+        "system", "popen", "startfile", "posix_spawn", "posix_spawnp",
+        "spawnl", "spawnle", "spawnlp", "spawnlpe", "spawnv", "spawnve", "spawnvp", "spawnvpe",
+        "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe",
+    },
+}  # fmt: skip
+
+
+def launch_references(source, filename):
+    """Every use of a launcher in `source`, counted per (file, outermost function), and what cannot be followed.
+
+    A use is the attribute (`subprocess.run`, `sp.run` after `import subprocess as sp`) or the name (`run` after
+    `from subprocess import run`, `co` after `... import check_output as co`), whether it is called or only bound, so
+    `runner = subprocess.run` is found too. Imports anywhere in the file bind names for the whole file. A star import
+    from a launcher module, and dynamic imports (`__import__`, `importlib`), cannot be followed and are reported."""
+    tree = ast.parse(source)
+    modules, names, problems = {}, {}, []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in LAUNCHERS and "." not in alias.name:
+                    modules[alias.asname or alias.name] = alias.name
+                elif alias.name.split(".")[0] == "importlib":
+                    problems.append("importlib is imported")
+        elif isinstance(node, ast.ImportFrom) and not node.level:
+            if node.module == "importlib":
+                problems.append("importlib is imported")
+            for alias in node.names:
+                if node.module in LAUNCHERS:
+                    if alias.name == "*":
+                        problems.append(f"star import from {node.module}")
+                    elif alias.name in LAUNCHERS[node.module]:
+                        names[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+        elif isinstance(node, ast.Name) and node.id == "__import__":
+            problems.append("__import__ is used")
+    found = Counter()
 
     def visit(node, function):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and function == "<module>":
             function = node.name  # the outermost function: a helper defined inside it belongs to it
-        if isinstance(node, ast.Call):
-            target = node.func
-            owner = target.value.id if isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name) else ""
-            name = target.attr if isinstance(target, ast.Attribute) else getattr(target, "id", "")
-            if owner in {"subprocess", "os"} and name in {
-                "run",
-                "Popen",
-                "call",
-                "check_call",
-                "check_output",
-                "system",
-                "popen",
-                "spawnl",
-                "spawnv",
-            }:
-                found.add((path.name, function))
-            if name in {"Popen", "check_output", "check_call"} and not owner:
-                found.add((path.name, function))
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            module = modules.get(node.value.id)
+            if module and node.attr in LAUNCHERS[module]:
+                found[(filename, function)] += 1
+        elif isinstance(node, ast.Name) and node.id in names and isinstance(node.ctx, ast.Load):
+            found[(filename, function)] += 1
         for child in ast.iter_child_nodes(node):
             visit(child, function)
 
     visit(tree, "<module>")
-    return found
+    return found, problems
+
+
+def inventory(paths):
+    found, problems = Counter(), []
+    for path in paths:
+        counted, trouble = launch_references(path.read_text(encoding="utf-8-sig"), path.name)
+        found.update(counted)
+        problems += [f"{path.name}: {text}" for text in trouble]
+    return found, problems
 
 
 def test_the_inventory_of_acceptance_git_calls_is_closed_and_each_one_ignores_replace_refs():
     """The inventory (#887): in the acceptance modules and the modules they call (close, gates, the Git read cache)
-    two functions start a process, and both are Git readers that ignore replace refs. A third one fails here, so a
-    new Git call that reads history cannot be added without choosing, in this test, how it ignores them."""
-    sites = set().union(*(process_call_sites(path) for path in SOURCES))
-    assert sites == {("acceptance.py", "_project_git"), ("acceptance_audit.py", "_git")}, sites
+    exactly two uses of a process launcher exist, one in each of two functions, and both are Git readers that ignore
+    replace refs. A third use, in any spelling, fails here, so a new Git call that reads history cannot be added
+    without choosing, in this test, how it ignores them. (This is also why the runtime guard above, which watches
+    `subprocess.run`, is enough: a name imported directly would be found here.)"""
+    found, problems = inventory(SOURCES)
+    assert not problems, problems
+    assert found == {("acceptance.py", "_project_git"): 1, ("acceptance_audit.py", "_git"): 1}, found
     assert '"--no-replace-objects"' in inspect.getsource(acceptance._project_git)
     audit_source = inspect.getsource(acceptance_audit._git)
     assert 'env["GIT_NO_REPLACE_OBJECTS"] = "1"' in audit_source and "env=env" in audit_source
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        ("from subprocess import run\ndef peek(r):\n    return run(['git', 'rev-list', 'HEAD'])\n", {"peek": 1}),
+        ("import subprocess as sp\ndef peek(r):\n    return sp.check_output(['git', 'log'])\n", {"peek": 1}),
+        ("from subprocess import check_output as co\ndef peek(r):\n    return co(['git', 'log'])\n", {"peek": 1}),
+        (
+            "from subprocess import call, Popen\ndef a():\n    call(['x'])\ndef b():\n    Popen(['x'])\n",
+            {"a": 1, "b": 1},
+        ),
+        ("import os\ndef peek(r):\n    return os.system('git log')\n", {"peek": 1}),
+        ("from os import popen\ndef peek(r):\n    return popen('git log')\n", {"peek": 1}),
+        ("import subprocess\nrunner = subprocess.run\n", {"<module>": 1}),
+        ("def peek(r):\n    import subprocess\n    return subprocess.run(['git'])\n", {"peek": 1}),
+        ("import subprocess\ndef two(r):\n    subprocess.run(['a'])\n    subprocess.run(['b'])\n", {"two": 2}),
+        (
+            "import subprocess\ndef outer():\n    def inner():\n        subprocess.run(['a'])\n    inner()\n",
+            {"outer": 1},
+        ),
+    ],
+    ids=[
+        "from-import-run",
+        "module-alias",
+        "from-import-alias",
+        "from-import-two-functions",
+        "os-system",
+        "from-os-import-popen",
+        "bound-not-called",
+        "import-inside-function",
+        "two-calls-one-function",
+        "nested-function",
+    ],
+)
+def test_the_inventory_finds_every_spelling_of_a_process_launch(source, expected):
+    found, problems = launch_references(source, "extra.py")
+    assert not problems
+    assert found == {("extra.py", function): count for function, count in expected.items()}
+
+
+def test_the_inventory_ignores_what_does_not_start_a_process():
+    source = (
+        "import os\nimport subprocess\n"
+        "def f(x):\n"
+        "    try:\n        return subprocess.PIPE, os.path.join(x, 'a'), os.environ\n"
+        "    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):\n        return None\n"
+    )
+    assert launch_references(source, "extra.py") == (Counter(), [])
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "from subprocess import *\n",
+        "import importlib\n",
+        "from importlib import import_module\n",
+        "def f():\n    return __import__('subprocess')\n",
+    ],
+)
+def test_the_inventory_reports_what_it_cannot_follow(source):
+    assert launch_references(source, "extra.py")[1]
+
+
+def test_a_new_acceptance_module_that_imports_run_directly_fails_the_inventory(tmp_path):
+    """The case the first version missed: an unguarded Git read through a directly imported `run`."""
+    extra = tmp_path / "acceptance_extra.py"
+    extra.write_text(
+        "from subprocess import run\n\n\ndef history(repo):\n    return run(['git', '-C', repo, 'rev-list', 'HEAD'])\n",
+        encoding="utf-8",
+    )
+    found, problems = inventory([*SOURCES, extra])
+    assert not problems
+    assert found != {("acceptance.py", "_project_git"): 1, ("acceptance_audit.py", "_git"): 1}
+    assert found[("acceptance_extra.py", "history")] == 1
+
+
+def test_a_second_launch_in_an_inventoried_function_changes_the_inventory():
+    """The set of function names alone cannot tell one call from two: the count is pinned."""
+    text = Path(acceptance.__file__).read_text(encoding="utf-8-sig")
+    assert launch_references(text, "acceptance.py")[0] == Counter({("acceptance.py", "_project_git"): 1})
+    doubled = text.replace(
+        "        result = subprocess.run(",
+        "        subprocess.run(['git', 'rev-list', 'HEAD'])\n        result = subprocess.run(",
+        1,
+    )
+    assert doubled != text
+    assert launch_references(doubled, "acceptance.py")[0] == Counter({("acceptance.py", "_project_git"): 2})
