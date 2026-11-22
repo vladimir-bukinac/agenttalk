@@ -7930,17 +7930,23 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         "before abandon.\n"
                     )
                     return 2
-                if (lane.get("status") == lane_mod.STATUS_DELIVERED and lane.get("cleanup_pending") is True
-                        and not damaged_path and _lane_saved_leftover(lane) is not None):
-                    # A delivered lane whose cleanup stopped at a leftover folder: either form would turn it into an
-                    # abandoned one, and `lane deliver` finishes it once the folder is gone. Not for a damaged checkout
-                    # field (`lane deliver` refuses there, and the damage message names the abandon step that works)
-                    # nor for other pending cleanups, whose existing advice (#771) names plain `lane abandon`.
+                if (lane_mod.cleanup_recovery_required(lane) and not damaged_path
+                        and _lane_saved_leftover(lane) is not None):
+                    # A delivered lane (its publication marker exactly false, so complete) whose cleanup is not
+                    # exactly done and stopped at a leftover folder: either form would turn it into an abandoned one,
+                    # and `lane deliver` finishes it once the folder is gone. Not for a damaged checkout field (`lane
+                    # deliver` refuses there, and the damage message names the abandon step that works) nor for other
+                    # pending cleanups, whose existing advice (#771) names plain `lane abandon`.
+                    if lane.get("cleanup_pending") is True:
+                        first = "If its folder is still there, inspect it and remove it yourself, then"
+                    else:
+                        first = (f"Its cleanup marker (cleanup_pending in lanes.json lane {lane_id!r}) is not exactly "
+                                 "true or false: set it to `true` if the folder still needs removing, or to `false` "
+                                 "if the cleanup is already done, then")
                     sys.stderr.write(
                         f"agenttalk lane abandon: lane {lane_id!r} is delivered and only its worktree cleanup is "
-                        "pending; abandoning it would relabel a delivered lane. If its folder is still there, "
-                        f"inspect it and remove it yourself, then run `lane deliver --id {lane_id}` to finish the "
-                        "cleanup. Nothing was changed.\n")
+                        f"pending; abandoning it would relabel a delivered lane. {first} run "
+                        f"`lane deliver --id {lane_id}` to finish the cleanup. Nothing was changed.\n")
                     return 2
                 if not acknowledge:
                     running = _lane_worktree_launch_use(store, lane, queued_ok=True)
@@ -8435,7 +8441,11 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 else:
                     step = "run `lane deliver` to retry the cleanup"
                 detail = lane['recovery_detail']
-                saved = _lane_saved_leftover(lane) if lane.get("cleanup_pending") is True and step is not None else None
+                # Only where `lane deliver` can run: the publication marker exactly false and the cleanup marker
+                # exactly true. Any other marker keeps the repair advice above.
+                saved = None
+                if lane.get("publish_pending") is False and lane.get("cleanup_pending") is True and step is not None:
+                    saved = _lane_saved_leftover(lane)
                 if saved is not None:
                     detail = f"{detail}: {saved}"
                     step = (f"Inspect the folder and save anything you need, including ignored files and links. "

@@ -484,3 +484,98 @@ def test_the_release_check_reads_a_delivered_lane_that_holds_a_saved_leftover(tm
 
     assert worktree_release._free_lanes(cfg, wt, lane_occupancy.peek) == ["d1"]
     assert worktree_release._free_lanes(cfg, other, lane_occupancy.peek) == []  # raises Refused if the row held it
+
+
+# ---------------------------------------------------------------- the refusal and the advice are keyed on the markers
+
+MISSING = object()
+
+
+def leftover_row(tmp_path, monkeypatch, **fields):
+    """A delivered lane whose cleanup stopped at a leftover folder, then the saved row changed by `fields` (a value of
+    MISSING removes the field)."""
+    root, wt = delivered_lane(tmp_path)
+    with monkeypatch.context() as patch:
+        git_leaves(patch)
+        deliver(root)
+    store = Store(root)
+    path = store.dir / "state" / "lanes.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    row = data["lanes"]["d1"]
+    assert row["worktree_cleanup_error"].startswith(PREFIX)
+    for key, value in fields.items():
+        if value is MISSING:
+            row.pop(key, None)
+        else:
+            row[key] = value
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return root, wt, store
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+@pytest.mark.parametrize("pending", [None, "pending", MISSING])
+def test_abandon_refuses_a_saved_leftover_when_the_cleanup_marker_is_not_exactly_true(
+    tmp_path, monkeypatch, capsys, acknowledge, pending
+):
+    """`cleanup_recovery_required` (a complete publication, a cleanup marker that is not exactly false) is the rule, not
+    the marker being exactly true: a null, missing or damaged marker is a delivered lane with unfinished cleanup too."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, cleanup_pending=pending)
+    before = lanes.load_lanes(store)["lanes"]["d1"]
+    capsys.readouterr()
+
+    code = _run_raw(
+        ["lane", "abandon", "--id", "d1", *(["--acknowledge-missing-worktree"] if acknowledge else [])], root
+    )
+
+    err = capsys.readouterr().err
+    assert code != 0 and lanes.load_lanes(store)["lanes"]["d1"] == before
+    assert before["status"] == lanes.STATUS_DELIVERED and "lane deliver --id d1" in err, err
+
+
+@pytest.mark.parametrize("acknowledge", [False, True])
+@pytest.mark.parametrize("state", [MISSING, lanes.STATUS_DELIVERED, lanes.STATUS_CLEANUP_PENDING])
+def test_the_abandon_refusal_does_not_depend_on_the_worktree_state(tmp_path, monkeypatch, capsys, acknowledge, state):
+    """The refusal reads the markers and the saved reason; `worktree_state` is only a label."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, worktree_state=state)
+    before = lanes.load_lanes(store)["lanes"]["d1"]
+    capsys.readouterr()
+
+    code = _run_raw(
+        ["lane", "abandon", "--id", "d1", *(["--acknowledge-missing-worktree"] if acknowledge else [])], root
+    )
+
+    err = capsys.readouterr().err
+    assert code != 0 and lanes.load_lanes(store)["lanes"]["d1"] == before
+    assert "lane deliver --id d1" in err, err
+
+
+@pytest.mark.parametrize("publish", [MISSING, None])
+def test_status_offers_the_leftover_step_only_when_the_publication_marker_is_exactly_false(
+    tmp_path, monkeypatch, capsys, publish
+):
+    """With a missing or null publication marker `lane deliver` exits 2, so the status must keep the marker-repair
+    advice and not tell the person to remove the folder and run it. (Exactly false: test 1 shows the leftover step.)"""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, publish_pending=publish)
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "status"], root) == 0
+    status = capsys.readouterr().out
+    assert deliver(root) == 2  # the step the leftover advice would have named cannot run
+    capsys.readouterr()
+
+    line = next(line for line in status.splitlines() if "d1" in line)
+    assert "lane deliver --id d1" not in line and "remove the folder" not in line, line
+    assert "lane recover" in line, line
+
+
+def test_a_saved_leftover_with_a_damaged_checkout_field_keeps_the_damage_step_that_works(tmp_path, monkeypatch, capsys):
+    """The refusal is not for a damaged checkout field: `lane deliver` refuses there, and the acknowledgement named in
+    the damage message (#771) is the step that works. With the folder gone, that step runs as it did before."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, worktree_path="")
+    shutil.rmtree(wt)
+    capsys.readouterr()
+
+    code = _run_raw(["lane", "abandon", "--id", "d1", "--acknowledge-missing-worktree"], root)
+
+    assert code == 0, capsys.readouterr().err
+    assert lanes.load_lanes(store)["lanes"]["d1"]["status"] == lanes.STATUS_ABANDONED
