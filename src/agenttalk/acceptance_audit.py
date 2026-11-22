@@ -198,6 +198,14 @@ def project_attempts(store, record):
             candidate = close.load_close(store, close_id)
             if "acceptance_route" not in candidate:
                 continue
+            pending = candidate["acceptance_route"]
+            events = candidate.get("events")
+            if (isinstance(pending, dict) and pending == {"pending": True} and pending["pending"] is True
+                    and isinstance(events, list) and all(
+                        isinstance(event, dict) and isinstance(event.get("event"), str)
+                        and (not event["event"].startswith("acceptance:")
+                             or event["event"] == "acceptance:successor") for event in events)):
+                continue
             history = list(lineage(store, candidate))
         except (close.CloseError, OSError, ValueError, TypeError, KeyError) as exc:
             A._fail(f"cold exposure audit unavailable for close {close_id!r} at {close.close_path(store, close_id)}: "

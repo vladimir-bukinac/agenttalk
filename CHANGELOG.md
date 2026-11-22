@@ -80,6 +80,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A refused acceptance freeze no longer blocks later acceptance attempts (#898).** A close
+  left exactly pending, with no exposure events, is passed over by the cold exposure audit,
+  including after publication as HOLD. Damaged, unreadable or partly frozen closes still stop
+  the audit with the existing recovery advice.
+
 - **Three first-run messages now say what they did (#829).** `roster set-model-vendor` printed the same
   line for every seat; now it names the seat and the change, for example "roster: worker model vendor
   set to openai (operator-configured, not provider attestation)." or "... cleared ...", so a script
