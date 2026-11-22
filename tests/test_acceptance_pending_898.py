@@ -120,9 +120,9 @@ def test_pending_with_exposure_event_still_refuses(case_v3, event):
     assert_audit_refused(case_v3)
 
 
-def test_pending_allows_link_and_other_non_acceptance_events(case_v3):
+def test_pending_allows_other_non_acceptance_events(case_v3):
     assert open_attempt(case_v3) == 0
-    pending_sibling(case_v3, events=[{"event": "acceptance:successor"}, {"event": "draft"}])
+    pending_sibling(case_v3, events=[{"event": "draft"}])
     assert attempts_for(case_v3) == []
 
 
@@ -188,7 +188,9 @@ def test_same_name_damaged_frozen_close_is_not_skipped(case_v3):
 def test_cold_commit_and_check_ignore_pending_sibling(case_v3, capsys):
     assert open_attempt(case_v3) == 0
     complete_v3(case_v3)
-    pending_sibling(case_v3)
+    sibling = pending_sibling(case_v3)
+    sibling["lens_acks"] = {}
+    write_json(close.close_path(case_v3["store"], "pending"), sibling)
     record = close.load_close(case_v3["store"], "attempt")
     _, plan = acceptance._policy(case_v3["store"], record)
     assert acceptance_audit.check_prior_exposure(case_v3["store"], record, plan, "cold")

@@ -174,6 +174,27 @@ def _change_identity(project, base):
     return {"base": base, "revision": revision, "patch_id": fields[0].decode("ascii")}
 
 
+def _pending_has_no_own_findings(store, candidate, events):
+    if candidate["lens_acks"]:
+        return False
+    links = [event for event in events if event["event"] == "acceptance:successor"]
+    if not links:
+        return not candidate["counters"] and not candidate["remediation_items"]
+    if len(links) != 1:
+        return False
+    # The retained snapshot proves what was inherited; the live parent ensures
+    # its findings will still be visited by this audit.
+    parent = A.decode(A._retained(store, links[0].get("parent_record_hash")))
+    if not close._is_wellformed(parent) or parent["status"] != close.PUBLISHED:
+        return False
+    live = close.load_close(store, parent["close_id"])
+    if (live["close_id"] != parent["close_id"] or live["status"] != close.PUBLISHED
+            or coverage.canonical(live.get("acceptance_route")) != coverage.canonical(parent.get("acceptance_route"))):
+        return False
+    return all(coverage.canonical(candidate[key]) == coverage.canonical(parent[key]) == coverage.canonical(live[key])
+               for key in ("counters", "remediation_items"))
+
+
 def project_attempts(store, record):
     """Read project history once per audit, failing closed on unknown identities."""
     route = record["acceptance_route"]
@@ -204,7 +225,8 @@ def project_attempts(store, record):
                     and isinstance(events, list) and all(
                         isinstance(event, dict) and isinstance(event.get("event"), str)
                         and (not event["event"].startswith("acceptance:")
-                             or event["event"] == "acceptance:successor") for event in events)):
+                             or event["event"] == "acceptance:successor") for event in events)
+                    and _pending_has_no_own_findings(store, candidate, events)):
                 continue
             history = list(lineage(store, candidate))
         except (close.CloseError, OSError, ValueError, TypeError, KeyError) as exc:
