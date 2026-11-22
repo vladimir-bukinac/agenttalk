@@ -5638,13 +5638,15 @@ def _lane_delivery_evidence(store, lane_id: str, lane: dict, artifact: Path, hea
 def _lane_deliver_can_finish(store, lane_id: str, lane: dict) -> bool:
     """Whether `lane deliver` can finish the cleanup of this delivered lane (its publication complete): the evidence it
     checks first (`_lane_delivery_evidence`) holds. When it does not, deliver exits 2 whatever the person does to the
-    folder, so no step may be built on it."""
+    folder, so no step may be built on it. The answer only decides what to advise, so a check that fails in any way (a
+    malformed artifact can make the shared validator raise something other than LaneError, a TypeError for an integrity
+    version that is a list) means the evidence is unusable: never a crash, which would close the recovery paths."""
     raw = lane.get("delivery_artifact")
     if not isinstance(raw, str):  # the marker deliver reports as missing
         return False
     try:
         _lane_delivery_evidence(store, lane_id, lane, Path(raw), lane.get("delivered_head"))
-    except (lane_mod.LaneError, OSError, ValueError):
+    except Exception:  # noqa: BLE001 - unusable evidence, whatever the way it is unusable
         return False
     return True
 
@@ -8448,6 +8450,7 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                 # (null, missing, 0, ""), `lane deliver` reads it as "nothing pending", exits 0 and leaves it as it
                 # is, and no other command changes it: the only step that works is to set the field in the lane's
                 # record, so that is what is printed.
+                can_finish = False
                 if recovery_found.get(key):
                     # `lane deliver` refuses on a damaged row: its damage message carries the step. A committed final
                     # that cannot be completed has no step at all: its recovery detail is the report.
@@ -8460,13 +8463,22 @@ def _cmd_lane(args: argparse.Namespace) -> int:
                         "the checkout still needs removing, or to `false` if the cleanup is already done"
                     )
                 else:
-                    step = "run `lane deliver` to retry the cleanup"
+                    can_finish = _lane_deliver_can_finish(store, key, lane)
+                    if can_finish:
+                        step = "run `lane deliver` to retry the cleanup"
+                    else:
+                        # `lane deliver` exits 2 here whatever happens to the folder: the way out is plain
+                        # `lane abandon`.
+                        step = (
+                            "its delivery evidence is missing or invalid, so the delivery cannot be completed: inspect "
+                            f"the folder and save anything you need, then run `lane abandon --id {key}`"
+                        )
                 detail = lane['recovery_detail']
                 # Only where `lane deliver` can run: the publication marker exactly false, the cleanup marker exactly
                 # true, and the delivery evidence it checks first holds. Anything else keeps the advice above.
                 saved = None
-                if (lane.get("publish_pending") is False and lane.get("cleanup_pending") is True and step is not None
-                        and _lane_deliver_can_finish(store, key, lane)):
+                if (can_finish and lane.get("publish_pending") is False and lane.get("cleanup_pending") is True
+                        and step is not None):
                     saved = _lane_saved_leftover(lane)
                 if saved is not None:
                     detail = f"{detail}: {saved}"

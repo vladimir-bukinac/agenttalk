@@ -646,3 +646,48 @@ def test_the_acknowledgement_is_not_refused_either_when_deliver_cannot_finish(tm
 
     assert code == 0, capsys.readouterr().err
     assert lanes.load_lanes(store)["lanes"]["d1"]["status"] == lanes.STATUS_ABANDONED
+
+
+# ------------------------------------------- malformed delivery evidence never crashes the recovery paths
+
+
+@pytest.mark.parametrize("version", [[], {}, "three", 3.5])
+@pytest.mark.parametrize("command", ["status", "abandon"])
+def test_a_malformed_delivery_artifact_does_not_crash_status_or_abandon(
+    tmp_path, monkeypatch, capsys, command, version
+):
+    """The shared validator can raise something other than LaneError on a malformed artifact (an integrity version that
+    is a list raises TypeError). The check only decides what to advise: whatever goes wrong in it, the evidence is
+    unusable, the recovery stays open and nothing crashes."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch)
+    artifact = Path(lanes.load_lanes(store)["lanes"]["d1"]["delivery_artifact"])
+    content = json.loads(artifact.read_text(encoding="utf-8"))
+    content["integrity_version"] = version
+    artifact.write_text(json.dumps(content), encoding="utf-8")
+    capsys.readouterr()
+
+    code = _run_raw(["lane", "status"] if command == "status" else ["lane", "abandon", "--id", "d1"], root)
+
+    out = capsys.readouterr()
+    assert code == 0, out.err
+    if command == "status":
+        line = next(line for line in out.out.splitlines() if "d1" in line)
+        assert "remove the folder" not in line and "lane deliver" not in line and "lane abandon --id d1" in line, line
+    else:
+        assert lanes.load_lanes(store)["lanes"]["d1"]["status"] == lanes.STATUS_ABANDONED
+
+
+@pytest.mark.parametrize("kind", ["null", "no-file", "garbage"])
+def test_status_names_the_way_out_when_deliver_cannot_finish_instead_of_telling_to_run_it(
+    tmp_path, monkeypatch, capsys, kind
+):
+    """With the evidence missing or invalid `lane deliver` exits 2, so status does not say to run it: it names plain
+    `lane abandon`, which is open there, and what to do first."""
+    root, wt, store = leftover_row(tmp_path, monkeypatch, delivery_artifact=broken_evidence(tmp_path, kind))
+    capsys.readouterr()
+
+    assert _run_raw(["lane", "status"], root) == 0
+    line = next(line for line in capsys.readouterr().out.splitlines() if "d1" in line)
+
+    assert "lane deliver" not in line and "lane abandon --id d1" in line, line
+    assert "inspect the folder" in line and "evidence" in line, line
