@@ -7,7 +7,9 @@ history cannot skip the option unnoticed."""
 
 import ast
 import inspect
+import ntpath
 import os
+import shlex
 import shutil
 import subprocess
 from collections import Counter
@@ -135,17 +137,37 @@ def test_the_working_tree_at_the_stored_commit_still_verifies_with_a_replace_ref
 EXPECTED_LAUNCHES = 20
 
 
+def _git_argv(args):
+    """The argument list of a Git launch, or None: the program may be named `git` or `git.exe`, bare or with a path,
+    and the command may be a list, a tuple or (as Windows allows without a shell) a string."""
+    if isinstance(args, (str, bytes)):
+        text = os.fsdecode(args)
+        argv = shlex.split(text, posix=(os.name != "nt"))
+    elif isinstance(args, (list, tuple)):
+        argv = [os.fsdecode(a) if isinstance(a, (bytes, os.PathLike)) else str(a) for a in args]
+    else:
+        return None
+    if not argv:
+        return None
+    program = ntpath.basename(argv[0].strip("\"")).lower()
+    # Recorded with the program spelled `git`, so the launch parser reads every spelling the same way.
+    return ["git", *argv[1:]] if program in ("git", "git.exe") else None
+
+
 def recorded_git_calls(monkeypatch):
     """Every `git` launch made through `subprocess.Popen` (which `run`, `check_output` and `call` use), as
-    (argument list, environment). What it cannot see: `os.system`, `os.popen` and the spawn family, a launch that
-    never runs on the paths a test exercises, and an asyncio launch on Windows (its transport has its own Popen)."""
+    (argument list, environment). A launch counts as Git when its program is `git` by name or by path (`git`,
+    `git.exe`, or an absolute path to either), given as a list or as a command string. What it cannot see:
+    `os.system`, `os.popen` and the spawn family, a launch that never runs on the paths a test exercises, and an
+    asyncio launch on Windows (its transport has its own Popen)."""
     calls = []
     real = subprocess.Popen
 
     class Watching(real):
         def __init__(self, args, *a, **kw):
-            if isinstance(args, (list, tuple)) and args and args[0] == "git":
-                calls.append((list(args), kw.get("env") or {}))
+            argv = _git_argv(args)
+            if argv is not None:
+                calls.append((argv, kw.get("env") or {}))
             super().__init__(args, *a, **kw)
 
     monkeypatch.setattr(subprocess, "Popen", Watching)
@@ -203,6 +225,21 @@ def test_the_runtime_guard_sees_a_launch_made_through_popen_outside_the_acceptan
 
     launched = [args for args, _ in calls]
     assert [args[3:] for args in launched] == [["rev-list", "HEAD"], ["rev-parse", "HEAD"]], launched
+    assert not any(ignores_replace_refs(args, env) for args, env in calls)  # both would be flagged
+
+
+def test_the_runtime_guard_sees_git_named_by_path_or_in_a_command_string(history, monkeypatch):
+    """A launch of Git by its full path (as `shutil.which` returns it) or as one command string is recorded too, so
+    an unguarded read cannot slip past the guard by naming the program differently."""
+    git = shutil.which("git")
+    assert git and Path(git).is_absolute()
+    calls = recorded_git_calls(monkeypatch)
+    subprocess.run([git, "-C", str(history.project), "rev-parse", "HEAD"], check=True, capture_output=True)
+    if os.name == "nt":  # only Windows runs a command string without a shell
+        subprocess.run(f'"{git}" -C "{history.project}" rev-parse HEAD', check=True, capture_output=True)
+    launched = [args for args, _ in calls]
+    assert len(launched) == (2 if os.name == "nt" else 1), launched
+    assert all(args[-2:] == ["rev-parse", "HEAD"] for args in launched), launched
     assert not any(ignores_replace_refs(args, env) for args, env in calls)  # both would be flagged
 
 
