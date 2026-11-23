@@ -12,6 +12,7 @@ import pytest
 
 from agenttalk import janitor, lane_occupancy, worktree_release
 from agenttalk.store import Store
+from git_launches import read_after_root
 
 
 def git(repo, *args):
@@ -2198,9 +2199,9 @@ def test_walk_every_report_line_kind_through_one_helper(tmp_path, monkeypatch):
         def index_read(argv, **kwargs):
             if "--show-toplevel" in argv:
                 return subprocess.CompletedProcess(argv, 0, os.fsencode(argv[2]) + b"\n", b"")
-            assert argv[3:] in [
-                ["ls-files", "--cached", option, "-z", "--full-name"] for option in ("-v", "--stage")
-            ]
+            rest, protected = read_after_root(argv)
+            assert protected, argv  # the index listing ignores replace refs (#887)
+            assert rest in [["ls-files", "--cached", option, "-z", "--full-name"] for option in ("-v", "--stage")]
             return subprocess.CompletedProcess(argv, 0, b"", b"")
 
         patch.setattr(janitor.subprocess, "run", index_read)

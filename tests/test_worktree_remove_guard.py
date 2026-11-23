@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from agenttalk import cli
+from git_launches import read_after_root
 
 STATUS = [
     "-c",
@@ -33,10 +34,12 @@ def test_removal_requires_a_confirmed_clean_worktree(tmp_path, monkeypatch, stat
 
     def status(cmd, **kwargs):
         assert cmd[:3] == ["git", "-C", str(worktree)]
-        if cmd[3:] == ["rev-parse", "--show-toplevel"]:
+        rest, protected = read_after_root(cmd)
+        if rest == ["rev-parse", "--show-toplevel"]:
             output = str(worktree) if kwargs.get("text") else os.fsencode(worktree) + b"\n"
             return subprocess.CompletedProcess(cmd, 0, output, "")
-        if cmd[3:] in INDEX_READS:
+        if rest in INDEX_READS:
+            assert protected, cmd  # so is the index listing (#887)
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
         assert cmd[3:] == STATUS
         if state == "unavailable":
@@ -82,17 +85,19 @@ def _executor(monkeypatch, worktree, *, root_result=None, status_result=(0, ""),
 
     def read(cmd, **kwargs):
         assert cmd[:2] == ["git", "-C"]
-        reads.append((Path(cmd[2]), cmd[3:]))
-        if cmd[3:] == ["rev-parse", "--show-toplevel"]:
+        rest, protected = read_after_root(cmd)
+        reads.append((Path(cmd[2]), rest))
+        if rest == ["rev-parse", "--show-toplevel"]:
             response = root_result
-        elif cmd[3:] in INDEX_READS:
+        elif rest in INDEX_READS:
+            assert protected, cmd  # so is the index listing (#887)
             return subprocess.CompletedProcess(cmd, 0, b"", b"")
         else:
             assert cmd[3:] == STATUS
             response = status_result
         if response == "unavailable":
             raise FileNotFoundError("Git could not be started")
-        if cmd[3:] == ["rev-parse", "--show-toplevel"] and not kwargs.get("text"):
+        if rest == ["rev-parse", "--show-toplevel"] and not kwargs.get("text"):
             return subprocess.CompletedProcess(cmd, response[0], os.fsencode(response[1]) + b"\n", b"")
         return subprocess.CompletedProcess(cmd, response[0], response[1], "")
 

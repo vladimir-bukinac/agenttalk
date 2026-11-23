@@ -10,6 +10,7 @@ import pytest
 
 from agenttalk import cli, close, janitor
 from agenttalk.store import Store
+from git_launches import read_after_root
 
 
 @pytest.mark.parametrize("result", [(-1, ""), (0, "not a sha"), (128, "")])
@@ -371,8 +372,10 @@ def test_status_mode_normal_for_yes_no_checks(tmp_path, monkeypatch, site):
         if "--show-toplevel" in argv:
             return subprocess.CompletedProcess(argv, 0, os.fsencode(argv[2]) + b"\n", b"")
         if "ls-files" in argv:
-            index_calls.append(argv[3:])
-            assert argv[3:] in [["ls-files", "--cached", opt, "-z", "--full-name"] for opt in ("-v", "--stage")]
+            rest, protected = read_after_root(argv)
+            index_calls.append(rest)
+            assert protected, argv  # the index listing ignores replace refs (#887)
+            assert rest in [["ls-files", "--cached", opt, "-z", "--full-name"] for opt in ("-v", "--stage")]
             return subprocess.CompletedProcess(argv, 0, b"", b"")
         assert "add" in argv or "commit" in argv
         return subprocess.CompletedProcess(argv, 0, "", "")

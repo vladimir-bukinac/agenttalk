@@ -26,6 +26,16 @@ def split_launch(args):
     return SimpleNamespace(no_replace=no_replace, config=config, path=path), list(args[i:])
 
 
+def read_after_root(args):
+    """(the arguments after `git -C <path>` with the replace-ref pair taken off, whether the pair was there). For the
+    reads the index-safety helpers make, which write `git -C <path> --no-replace-objects -c core.useReplaceRefs=false
+    <subcommand> ...`: a test that pins the subcommand must not pin the position of the pair, and a test that wants the
+    protection says so with the second value."""
+    rest = list(args[3:])
+    pair = ["--no-replace-objects", "-c", CONFIG_PAIR]
+    return (rest[3:], True) if rest[:3] == pair else (rest, False)
+
+
 def ignores_replace_refs(args, env=None):
     """The launch ignores replace refs: by the global option wherever it sits, or by the environment variable."""
     options, _ = split_launch(args)
