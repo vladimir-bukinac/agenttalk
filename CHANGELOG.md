@@ -108,8 +108,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Teams whose store is outside a Git checkout will see ordinary closes hold until they record a diff artifact.
 
 - **Acceptance reads original Git objects (#887).** Project verification now ignores
-  replacement refs when reading files and history. Shallow clones still work; a
-  project identity mismatch now says when the checkout is shallow. A plan prepared
+  replacement refs (Git's way of letting one stored object stand in for another) when
+  it reads the commit tree and history, inside submodules too. The shared check for
+  files hidden from Git's index changes the same way, so the hidden-index and submodule
+  checks that `close`, the worktree-clean check and the janitor make ignore them as
+  well; those commands' own top-level `git status` still follows replacement refs (a
+  follow-up). Shallow clones still work; a project identity mismatch now says when the
+  checkout is shallow. A plan prepared
   with replacement refs must be prepared again because its tree or project identity
   can change.
 

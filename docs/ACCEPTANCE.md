@@ -14,7 +14,10 @@ free of the acceptance plan, expected counts, baselines and author claims.
 
 ## Project Git facts
 
-Acceptance reads the commit tree and history roots with Git replacement refs ignored.
+Acceptance reads the commit tree and history roots with Git replacement refs ignored,
+inside submodules too. The shared check for files hidden from Git's index, which
+`close`, the worktree-clean check and the janitor also use, ignores them the same way;
+those commands' own top-level `git status` still follows replacement refs.
 A shallow clone can verify, but its history boundary can give it a different project
 identity from a full clone. Prepare and verify using the same history depth; a
 full-history checkout avoids that difference. Some later ancestry checks require
